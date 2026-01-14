@@ -44,3 +44,18 @@ add_subdirectory(apps)
 add_subdirectory(extern)
 add_subdirectory(src)
 add_subdirectory(tests)
+
+# A custom target to be built by the CI.
+# Mostly to limit compile time and still cover a bit of everything.
+add_custom_target(ci-subset
+        DEPENDS
+        mantlecirculation
+        benchmark_baseline
+        benchmark_operators
+        read_checkpoint
+        visualize_radial_profile
+        visualize_spherical_harmonics
+        visualize_thick_spherical_shell_mesh
+        test_laplace_multigrid
+        test_epsilon_divdiv_stokes
+        test_unsteady_advection_diffusion_supg)
