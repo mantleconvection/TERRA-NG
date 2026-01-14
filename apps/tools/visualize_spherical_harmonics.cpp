@@ -93,7 +93,7 @@ int main( int argc, char** argv )
             sph_data_for_xdmf( local_subdomain_idx, x, y, r ) = sph_data( local_subdomain_idx, x, y );
         } );
 
-    terra::visualization::XDMFOutput xdmf( parameters.output_directory, subdomain_shell_coords, subdomain_radii );
+    terra::io::XDMFOutput xdmf( parameters.output_directory, domain, subdomain_shell_coords, subdomain_radii );
 
     xdmf.add( sph_data_for_xdmf );
 

@@ -254,7 +254,8 @@ BenchmarkData run( const BenchmarkType benchmark, const int level, const int exe
     }
     else if ( benchmark == BenchmarkType::StokesDouble )
     {
-        Stokes< double > A( domain, domain_coarse, coords_shell_double, coords_radii_double, true, false );
+        Stokes< double > A(
+            domain, domain_coarse, coords_shell_double, coords_radii_double, boundary_mask_data, true, false );
         duration = measure_run_time( executions, A, src_stokes_double, dst_stokes_double );
         dofs     = dofs_stokes;
     }

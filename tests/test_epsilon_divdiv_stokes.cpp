@@ -787,10 +787,10 @@ int main( int argc, char** argv )
 
                         table->add_row(
                             { { "level", level }, { "order_vel", order_vel }, { "order_pre", order_pre } } );
-                        
+
                         if (level > 2 && (order_vel <= 3.8 or order_pre <= 2.0))
                             Kokkos::abort("Conv order not reached.");
-                        
+
                     }
                     prev_l2_error_vel = l2_error_vel;
                     prev_l2_error_pre = l2_error_pre;
