@@ -125,9 +125,9 @@ class EpsilonDivDivKerngen
 
     /// @brief allocates memory for the local matrices
     void set_stored_matrix_mode(
-        linalg::OperatorStoredMatrixMode                      operator_stored_matrix_mode,
-        std::optional< int >                                  level_range,
-        std::optional< grid::Grid4DDataScalar< ScalarType > > GCAElements )
+        linalg::OperatorStoredMatrixMode     operator_stored_matrix_mode,
+        int                                  level_range,
+        grid::Grid4DDataScalar< ScalarType > GCAElements )
     {
         operator_stored_matrix_mode_ = operator_stored_matrix_mode;
 
@@ -275,8 +275,7 @@ class EpsilonDivDivKerngen
                             }
                         }
 
-                        if ( has_flag(
-                                 local_subdomain_id, x_cell, y_cell, r_cell + 1, SURFACE ) )
+                        if ( has_flag( local_subdomain_id, x_cell, y_cell, r_cell + 1, SURFACE ) )
                         {
                             // Outer boundary (surface).
                             for ( int i = 0; i < num_nodes_per_wedge; i++ )

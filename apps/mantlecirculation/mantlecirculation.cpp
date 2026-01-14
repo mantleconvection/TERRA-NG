@@ -435,7 +435,7 @@ Result<> run( const Parameters& prm )
         }
         else if ( gca == 1 )
         {
-            A_c.back().set_stored_matrix_mode( linalg::OperatorStoredMatrixMode::Full, std::nullopt, std::nullopt );
+            A_c.back().set_stored_matrix_mode( linalg::OperatorStoredMatrixMode::Full, level, GCAElements.grid_data() );
         }
         P.emplace_back( linalg::OperatorApplyMode::Add );
         R.emplace_back( domains[level] );

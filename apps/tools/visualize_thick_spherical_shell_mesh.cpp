@@ -149,7 +149,7 @@ int main( int argc, char** argv )
             grid_local_subdomain_id( local_subdomain_idx, x, y, r ) = local_subdomain_idx;
         } );
 
-    terra::io::XDMFOutput xdmf( parameters.output_directory, subdomain_shell_coords, subdomain_radii );
+    terra::io::XDMFOutput xdmf( parameters.output_directory, domain, subdomain_shell_coords, subdomain_radii );
 
     xdmf.add( grid_rank );
     xdmf.add( grid_diamond_id );

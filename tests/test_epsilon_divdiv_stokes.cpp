@@ -456,7 +456,8 @@ std::tuple< double, double, int >
             }
             else if ( gca == 1 )
             {
-                A_c.back().set_stored_matrix_mode( linalg::OperatorStoredMatrixMode::Full, std::nullopt, GCAElements.grid_data() );
+                A_c.back().set_stored_matrix_mode(
+                    linalg::OperatorStoredMatrixMode::Full, level, GCAElements.grid_data() );
             }
             //P.emplace_back( coords_shell[level + 1], coords_radii[level + 1], linalg::OperatorApplyMode::Add );
             //R.emplace_back( domains[level], coords_shell[level + 1], coords_radii[level + 1] );
@@ -721,9 +722,8 @@ std::tuple< double, double, int >
           { "l2_error_pre", l2_error_pressure },
           { "inf_res_vel", inf_residual_vel },
           { "inf_res_pre", inf_residual_pre },
-          { "h_vel", (r_max - r_min)/std::pow(2,velocity_level)},
-          { "h_p", (r_max - r_min)/std::pow(2,pressure_level)}
-    } );
+          { "h_vel", ( r_max - r_min ) / std::pow( 2, velocity_level ) },
+          { "h_p", ( r_max - r_min ) / std::pow( 2, pressure_level ) } } );
 
     io::XDMFOutput xdmf(
         "out_eps", domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level] );

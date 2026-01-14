@@ -1,7 +1,6 @@
 
 
 #include <fstream>
-#include <util/arg_parser.hpp>
 #include <vector>
 
 #include "communication/shell/communication.hpp"
@@ -82,30 +81,30 @@ struct Parameters
 
 struct InitialConditionInterpolator
 {
-    Grid3DDataVec< ScalarType, 3 >     grid_;
-    Grid2DDataScalar< ScalarType >     radii_;
-    Grid4DDataScalar< ScalarType >     data_;
-    Grid4DDataScalar< util::MaskType > mask_data_;
-    bool                               only_boundary_;
+    Grid3DDataVec< ScalarType, 3 >                     grid_;
+    Grid2DDataScalar< ScalarType >                     radii_;
+    Grid4DDataScalar< ScalarType >                     data_;
+    Grid4DDataScalar< grid::shell::ShellBoundaryFlag > boundary_mask_data_;
+    bool                                               only_boundary_;
 
     InitialConditionInterpolator(
-        const Grid3DDataVec< ScalarType, 3 >&     grid,
-        const Grid2DDataScalar< ScalarType >&     radii,
-        const Grid4DDataScalar< ScalarType >&     data,
-        const Grid4DDataScalar< util::MaskType >& mask_data,
-        bool                                      only_boundary )
+        const Grid3DDataVec< ScalarType, 3 >&                     grid,
+        const Grid2DDataScalar< ScalarType >&                     radii,
+        const Grid4DDataScalar< ScalarType >&                     data,
+        const Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask_data,
+        bool                                                      only_boundary )
     : grid_( grid )
     , radii_( radii )
     , data_( data )
-    , mask_data_( mask_data )
+    , boundary_mask_data_( boundary_mask_data )
     , only_boundary_( only_boundary )
     {}
 
     KOKKOS_INLINE_FUNCTION
     void operator()( const int local_subdomain_id, const int x, const int y, const int r ) const
     {
-        const auto mask_value  = mask_data_( local_subdomain_id, x, y, r );
-        const auto is_boundary = util::check_bits( mask_value, grid::shell::mask_domain_boundary() );
+        const auto mask_value  = boundary_mask_data_( local_subdomain_id, x, y, r );
+        const auto is_boundary = util::has_flag( mask_value, grid::shell::ShellBoundaryFlag::BOUNDARY );
 
         if ( !only_boundary_ || is_boundary )
         {
@@ -154,21 +153,21 @@ struct RHSVelocityInterpolator
 
 struct NoiseAdder
 {
-    Grid3DDataVec< ScalarType, 3 >     grid_;
-    Grid2DDataScalar< ScalarType >     radii_;
-    Grid4DDataScalar< ScalarType >     data_T_;
-    Grid4DDataScalar< util::MaskType > mask_;
-    Kokkos::Random_XorShift64_Pool<>   rand_pool_;
+    Grid3DDataVec< ScalarType, 3 >              grid_;
+    Grid2DDataScalar< ScalarType >              radii_;
+    Grid4DDataScalar< ScalarType >              data_T_;
+    Grid4DDataScalar< grid::NodeOwnershipFlag > ownership_mask_data_;
+    Kokkos::Random_XorShift64_Pool<>            rand_pool_;
 
     NoiseAdder(
-        const Grid3DDataVec< ScalarType, 3 >&     grid,
-        const Grid2DDataScalar< ScalarType >&     radii,
-        const Grid4DDataScalar< ScalarType >&     data_T,
-        const Grid4DDataScalar< util::MaskType >& mask )
+        const Grid3DDataVec< ScalarType, 3 >&              grid,
+        const Grid2DDataScalar< ScalarType >&              radii,
+        const Grid4DDataScalar< ScalarType >&              data_T,
+        const Grid4DDataScalar< grid::NodeOwnershipFlag >& ownership_mask_data )
     : grid_( grid )
     , radii_( radii )
     , data_T_( data_T )
-    , mask_( mask )
+    , ownership_mask_data_( ownership_mask_data )
     , rand_pool_( 12345 )
     {}
 
@@ -180,7 +179,8 @@ struct NoiseAdder
         const ScalarType eps          = 1e-1;
         const auto       perturbation = eps * ( 2.0 * generator.drand() - 1.0 );
 
-        const auto process_ownes_point = util::check_bits( mask_( local_subdomain_id, x, y, r ), grid::mask_owned() );
+        const auto process_ownes_point =
+            util::has_flag( ownership_mask_data_( local_subdomain_id, x, y, r ), grid::NodeOwnershipFlag::OWNED );
 
         if ( process_ownes_point )
         {
@@ -199,30 +199,33 @@ struct NoiseAdder
 void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 {
     // Check outdir and create if it does not exist.
-    prepare_empty_directory_or_abort( prm.outdir );
+    util::prepare_empty_directory_or_abort( prm.outdir );
 
     const auto xdmf_dir            = prm.outdir + "/xdmf";
     const auto radial_profiles_dir = prm.outdir + "/radial_profiles";
     const auto timer_trees_dir     = prm.outdir + "/timer_trees";
 
-    prepare_empty_directory_or_abort( xdmf_dir );
-    prepare_empty_directory_or_abort( radial_profiles_dir );
-    prepare_empty_directory_or_abort( timer_trees_dir );
+    util::prepare_empty_directory_or_abort( xdmf_dir );
+    util::prepare_empty_directory_or_abort( radial_profiles_dir );
+    util::prepare_empty_directory_or_abort( timer_trees_dir );
 
     // Set up domains for all levels.
-    std::vector< DistributedDomain >                  domains;
-    std::vector< Grid3DDataVec< ScalarType, 3 > >     coords_shell;
-    std::vector< Grid2DDataScalar< ScalarType > >     coords_radii;
-    std::vector< Grid4DDataScalar< util::MaskType > > mask_data;
+    std::vector< DistributedDomain >                                  domains;
+    std::vector< Grid3DDataVec< ScalarType, 3 > >                     coords_shell;
+    std::vector< Grid2DDataScalar< ScalarType > >                     coords_radii;
+    std::vector< Grid4DDataScalar< grid::NodeOwnershipFlag > >        ownership_mask_data;
+    std::vector< Grid4DDataScalar< grid::shell::ShellBoundaryFlag > > boundary_mask_data;
 
     for ( int level = prm.min_level; level <= prm.max_level; level++ )
     {
         const int idx = level - prm.min_level;
 
-        domains.push_back( DistributedDomain::create_uniform_single_subdomain_per_diamond( level, level, prm.r_min, prm.r_max ) );
+        domains.push_back(
+            DistributedDomain::create_uniform_single_subdomain_per_diamond( level, level, prm.r_min, prm.r_max ) );
         coords_shell.push_back( grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domains[idx] ) );
         coords_radii.push_back( grid::shell::subdomain_shell_radii< ScalarType >( domains[idx] ) );
-        mask_data.push_back( linalg::setup_mask_data( domains[idx] ) );
+        ownership_mask_data.push_back( grid::setup_node_ownership_mask_data( domains[idx] ) );
+        boundary_mask_data.push_back( grid::shell::setup_boundary_mask_data( domains[idx] ) );
     }
 
     const auto num_levels     = domains.size();
@@ -249,8 +252,8 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
             name,
             domains[velocity_level],
             domains[pressure_level],
-            mask_data[velocity_level],
-            mask_data[pressure_level] );
+            ownership_mask_data[velocity_level],
+            ownership_mask_data[pressure_level] );
     }
 
     auto& u = stok_vecs["u"];
@@ -264,11 +267,11 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 
     for ( int level = 0; level < num_levels; level++ )
     {
-        tmp_mg.emplace_back( "tmp_mg_" + std::to_string( level ), domains[level], mask_data[level] );
+        tmp_mg.emplace_back( "tmp_mg_" + std::to_string( level ), domains[level], ownership_mask_data[level] );
         if ( level < num_levels - 1 )
         {
-            tmp_mg_r.emplace_back( "tmp_mg_r_" + std::to_string( level ), domains[level], mask_data[level] );
-            tmp_mg_e.emplace_back( "tmp_mg_e_" + std::to_string( level ), domains[level], mask_data[level] );
+            tmp_mg_r.emplace_back( "tmp_mg_r_" + std::to_string( level ), domains[level], ownership_mask_data[level] );
+            tmp_mg_e.emplace_back( "tmp_mg_e_" + std::to_string( level ), domains[level], ownership_mask_data[level] );
         }
     }
 
@@ -285,7 +288,8 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 
     for ( const auto& name : temp_vec_names )
     {
-        temp_vecs[name] = VectorQ1Scalar< ScalarType >( name, domains[velocity_level], mask_data[velocity_level] );
+        temp_vecs[name] =
+            VectorQ1Scalar< ScalarType >( name, domains[velocity_level], ownership_mask_data[velocity_level] );
     }
 
     auto& T = temp_vecs["T"];
@@ -294,10 +298,10 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
     // Counting DoFs.
 
     const auto num_dofs_temperature =
-        kernels::common::count_masked< long >( mask_data[num_levels - 1], grid::mask_owned() );
+        kernels::common::count_masked< long >( ownership_mask_data[num_levels - 1], grid::NodeOwnershipFlag::OWNED );
     const auto num_dofs_velocity = 3 * num_dofs_temperature;
     const auto num_dofs_pressure =
-        kernels::common::count_masked< long >( mask_data[num_levels - 2], grid::mask_owned() );
+        kernels::common::count_masked< long >( ownership_mask_data[num_levels - 2], grid::NodeOwnershipFlag::OWNED );
 
     // Set up operators.
 
@@ -313,6 +317,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
         domains[pressure_level],
         coords_shell[velocity_level],
         coords_radii[velocity_level],
+        boundary_mask_data[velocity_level],
         true,
         false );
 
@@ -329,13 +334,14 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 
     for ( int level = 0; level < num_levels; level++ )
     {
-        A_diag.emplace_back( domains[level], coords_shell[level], coords_radii[level], true, true );
+        A_diag.emplace_back(
+            domains[level], coords_shell[level], coords_radii[level], boundary_mask_data[level], true, true );
 
         inverse_diagonals.emplace_back(
-            "inverse_diagonal_" + std::to_string( level ), domains[level], mask_data[level] );
+            "inverse_diagonal_" + std::to_string( level ), domains[level], ownership_mask_data[level] );
 
         VectorQ1Vec< ScalarType > tmp(
-            "inverse_diagonal_tmp" + std::to_string( level ), domains[level], mask_data[level] );
+            "inverse_diagonal_tmp" + std::to_string( level ), domains[level], ownership_mask_data[level] );
 
         linalg::assign( tmp, 1.0 );
         linalg::apply( A_diag[level], tmp, inverse_diagonals.back() );
@@ -343,7 +349,8 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 
         if ( level < num_levels - 1 )
         {
-            A_c.emplace_back( domains[level], coords_shell[level], coords_radii[level], true, false );
+            A_c.emplace_back(
+                domains[level], coords_shell[level], coords_radii[level], boundary_mask_data[level], true, false );
             P.emplace_back( linalg::OperatorApplyMode::Add );
             R.emplace_back( domains[level] );
         }
@@ -367,7 +374,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
     std::vector< VectorQ1Vec< ScalarType > > coarse_grid_tmps;
     for ( int i = 0; i < 4; i++ )
     {
-        coarse_grid_tmps.emplace_back( "tmp_coarse_grid", domains[0], mask_data[0] );
+        coarse_grid_tmps.emplace_back( "tmp_coarse_grid", domains[0], ownership_mask_data[0] );
     }
 
     CoarseGridSolver coarse_grid_solver(
@@ -410,6 +417,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
         domains[velocity_level],
         coords_shell[velocity_level],
         coords_radii[velocity_level],
+        boundary_mask_data[velocity_level],
         u.block_1(),
         prm.diffusivity,
         0.0,
@@ -421,6 +429,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
         domains[velocity_level],
         coords_shell[velocity_level],
         coords_radii[velocity_level],
+        boundary_mask_data[velocity_level],
         u.block_1(),
         prm.diffusivity,
         0.0,
@@ -432,6 +441,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
         domains[velocity_level],
         coords_shell[velocity_level],
         coords_radii[velocity_level],
+        boundary_mask_data[velocity_level],
         u.block_1(),
         prm.diffusivity,
         0.0,
@@ -452,7 +462,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
             coords_shell[velocity_level],
             coords_radii[velocity_level],
             T.grid_data(),
-            mask_data[velocity_level],
+            boundary_mask_data[velocity_level],
             false ) );
 
     Kokkos::fence();
@@ -461,17 +471,20 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
         "adding noise to temp",
         local_domain_md_range_policy_nodes( domains[velocity_level] ),
         NoiseAdder(
-            coords_shell[velocity_level], coords_radii[velocity_level], T.grid_data(), mask_data[velocity_level] ) );
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            T.grid_data(),
+            ownership_mask_data[velocity_level] ) );
 
     communication::shell::send_recv(
-        domains[velocity_level], T.grid_data(), communication::shell::CommunicationReduction::SUM );
+        domains[velocity_level], T.grid_data(), communication::CommunicationReduction::SUM );
 
     const auto                                  num_temp_tmps_energy = 14;
     std::vector< VectorQ1Scalar< ScalarType > > tmp_gmres( num_temp_tmps_energy );
     for ( int i = 0; i < num_temp_tmps_energy; i++ )
     {
-        tmp_gmres[i] =
-            VectorQ1Scalar< ScalarType >( "tmp_energy_gmres", domains[velocity_level], mask_data[velocity_level] );
+        tmp_gmres[i] = VectorQ1Scalar< ScalarType >(
+            "tmp_energy_gmres", domains[velocity_level], ownership_mask_data[velocity_level] );
     }
 
     linalg::solvers::FGMRES< AD > energy_solver(
@@ -494,7 +507,8 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
     table->print_pretty();
     table->clear();
 
-    io::XDMFOutput xdmf_output( xdmf_dir, coords_shell[velocity_level], coords_radii[velocity_level] );
+    io::XDMFOutput xdmf_output(
+        xdmf_dir, domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level] );
 
     xdmf_output.add( T.grid_data() );
     xdmf_output.add( u.block_1().grid_data() );
@@ -503,8 +517,10 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 
     xdmf_output.write();
 
-    auto profiles = shell::radial_profiles_to_table< ScalarType >(
-        shell::radial_profiles( T ), domains[velocity_level].domain_info().radii() );
+    auto shell_idx         = terra::grid::shell::subdomain_shell_idx( domains[velocity_level] );
+    auto num_global_shells = static_cast< int >( domains[velocity_level].domain_info().radii().size() );
+    auto profiles          = shell::radial_profiles_to_table< ScalarType >(
+        shell::radial_profiles( T, shell_idx, num_global_shells ), domains[velocity_level].domain_info().radii() );
     std::ofstream out( radial_profiles_dir + "/radial_profiles_" + std::to_string( 0 ) + ".csv" );
     profiles.print_csv( out );
 
@@ -543,7 +559,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
         linalg::apply( M, stok_vecs["tmp_1"].block_1(), stok_vecs["f"].block_1() );
 
         fe::strong_algebraic_homogeneous_velocity_dirichlet_enforcement_stokes_like(
-            stok_vecs["f"], mask_data[velocity_level], grid::shell::mask_domain_boundary() );
+            stok_vecs["f"], boundary_mask_data[velocity_level], grid::shell::ShellBoundaryFlag::BOUNDARY );
 
         if ( mpi::rank() == 0 )
         {
@@ -558,7 +574,8 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 
         // "Normalize" pressure.
         const ScalarType avg_pressure_approximation =
-            kernels::common::masked_sum( u.block_2().grid_data(), u.block_2().mask_data(), grid::mask_owned() ) /
+            kernels::common::masked_sum(
+                u.block_2().grid_data(), u.block_2().mask_data(), grid::NodeOwnershipFlag::OWNED ) /
             static_cast< ScalarType >( num_dofs_pressure );
         linalg::lincomb( u.block_2(), { 1.0 }, { u.block_2() }, -avg_pressure_approximation );
 
@@ -607,7 +624,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
                     coords_shell[velocity_level],
                     coords_radii[velocity_level],
                     temp_vecs["tmp_0"].grid_data(),
-                    mask_data[velocity_level],
+                    boundary_mask_data[velocity_level],
                     true ) );
 
             Kokkos::fence();
@@ -618,8 +635,8 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
                 temp_vecs["tmp_0"],
                 temp_vecs["tmp_1"],
                 q,
-                mask_data[velocity_level],
-                grid::shell::mask_domain_boundary() );
+                boundary_mask_data[velocity_level],
+                grid::shell::ShellBoundaryFlag::BOUNDARY );
 
             if ( mpi::rank() == 0 )
             {
@@ -646,8 +663,9 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
             }
 
             xdmf_output.write();
-            auto profiles = shell::radial_profiles_to_table(
-                shell::radial_profiles( T ), domains[velocity_level].domain_info().radii() );
+            profiles = shell::radial_profiles_to_table(
+                shell::radial_profiles( T, shell_idx, num_global_shells ),
+                domains[velocity_level].domain_info().radii() );
             std::ofstream out( radial_profiles_dir + "/radial_profiles_" + std::to_string( timestep ) + ".csv" );
             profiles.print_csv( out );
         }
