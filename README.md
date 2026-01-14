@@ -1,7 +1,7 @@
 # TerraNeo
 
-[![CI](https://github.com/mantleconvection/terraneo/actions/workflows/ci.yml/badge.svg)](https://github.com/mantleconvection/terraneo/actions/workflows/ci.yml)
-[![Doxygen Docs](https://github.com/mantleconvection/terraneo/actions/workflows/doxygen.yml/badge.svg)](https://github.com/mantleconvection/terraneo/actions/workflows/doxygen.yml)
+[![CI](https://github.com/mantleconvection/terraneo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mantleconvection/terraneo/actions/workflows/ci.yml)
+[![Doxygen Docs](https://github.com/mantleconvection/terraneo/actions/workflows/doxygen.yml/badge.svg?branch=main)](https://github.com/mantleconvection/terraneo/actions/workflows/doxygen.yml)
 
 Extreme-scale mantle convection code for CPU and GPU systems. Originating from the [TerraNeo project](https://terraneo.fau.de).
 
