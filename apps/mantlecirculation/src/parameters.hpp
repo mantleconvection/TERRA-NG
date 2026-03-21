@@ -90,6 +90,11 @@ struct IOParameters
 
     std::string checkpoint_dir;
     int         checkpoint_step = -1;
+
+    int output_frequency = 1;
+
+    bool no_xdmf = false;
+    bool no_radial_profiles = false;
 };
 
 struct Parameters
@@ -287,6 +292,18 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
 
     add_option_with_default( app, "--checkpoint-dir", parameters.io_parameters.checkpoint_dir )->group( "I/O" );
     add_option_with_default( app, "--checkpoint-step", parameters.io_parameters.checkpoint_step )->group( "I/O" );
+
+    add_option_with_default( app, "--output-frequency", parameters.io_parameters.output_frequency )
+        ->group( "I/O" )
+        ->description( "Write XDMF and radial profile output every N timesteps. Default: 1 (every timestep)." );
+
+    add_flag_with_default( app, "--no-xdmf", parameters.io_parameters.no_xdmf )
+        ->group( "I/O" )
+        ->description( "Disable XDMF output." );
+
+    add_flag_with_default( app, "--no-radial-profiles", parameters.io_parameters.no_radial_profiles )
+        ->group( "I/O" )
+        ->description( "Disable radial profile output." );
 
     try
     {

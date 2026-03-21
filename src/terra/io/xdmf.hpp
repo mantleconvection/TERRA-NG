@@ -309,16 +309,16 @@ class XDMFOutput
         const int nodes_y        = coords_shell_device_.extent( 2 );
         const int nodes_r        = coords_radii_device_.extent( 1 );
 
-        const auto number_of_nodes_local    = num_subdomains * nodes_x * nodes_y * nodes_r;
-        const auto number_of_elements_local = num_subdomains * ( nodes_x - 1 ) * ( nodes_y - 1 ) * ( nodes_r - 1 ) * 2;
+        const int64_t number_of_nodes_local    = static_cast< int64_t >( num_subdomains ) * nodes_x * nodes_y * nodes_r;
+        const int64_t number_of_elements_local = static_cast< int64_t >( num_subdomains ) * ( nodes_x - 1 ) * ( nodes_y - 1 ) * ( nodes_r - 1 ) * 2;
 
         if ( !first_write_happened_ )
         {
             // Number of global nodes and elements.
 
-            int num_nodes_elements_subdomains_global[3] = {
-                number_of_nodes_local, number_of_elements_local, num_subdomains };
-            MPI_Allreduce( MPI_IN_PLACE, &num_nodes_elements_subdomains_global, 3, MPI_INT, MPI_SUM, MPI_COMM_WORLD );
+            int64_t num_nodes_elements_subdomains_global[3] = {
+                number_of_nodes_local, number_of_elements_local, static_cast< int64_t >( num_subdomains ) };
+            MPI_Allreduce( MPI_IN_PLACE, &num_nodes_elements_subdomains_global, 3, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD );
             number_of_nodes_global_      = num_nodes_elements_subdomains_global[0];
             number_of_elements_global_   = num_nodes_elements_subdomains_global[1];
             number_of_subdomains_global_ = num_nodes_elements_subdomains_global[2];
@@ -329,12 +329,12 @@ class XDMFOutput
             // First entry: number of nodes of processes before this
             // Second entry: number of elements of processes before this
             // Third entry: number of subdomains of processes before this
-            int offsets[3];
+            int64_t offsets[3];
 
-            int local_values[3] = { number_of_nodes_local, number_of_elements_local, num_subdomains };
+            int64_t local_values[3] = { number_of_nodes_local, number_of_elements_local, static_cast< int64_t >( num_subdomains ) };
 
             // Compute the prefix sum (inclusive)
-            MPI_Scan( &local_values, &offsets, 3, MPI_INT, MPI_SUM, MPI_COMM_WORLD );
+            MPI_Scan( &local_values, &offsets, 3, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD );
 
             // Subtract the local value to get the sum of all values from processes with ranks < current rank
             number_of_nodes_offset_      = offsets[0] - local_values[0];
@@ -385,7 +385,7 @@ class XDMFOutput
                     MPI_COMM_WORLD, geometry_file_path.c_str(), MPI_MODE_CREATE | MPI_MODE_RDWR, MPI_INFO_NULL, &fh );
 
                 // Define the file view: each process writes its local data sequentially
-                MPI_Offset disp = number_of_nodes_offset_ * 3 * static_cast< int >( output_type_points_ );
+                MPI_Offset disp = number_of_nodes_offset_ * 3 * static_cast< int64_t >( output_type_points_ );
                 MPI_File_set_view( fh, disp, MPI_CHAR, MPI_CHAR, "native", MPI_INFO_NULL );
 
                 std::string geom_str = geometry_stream.str();
@@ -418,7 +418,7 @@ class XDMFOutput
                     MPI_COMM_WORLD, topology_file_path.c_str(), MPI_MODE_CREATE | MPI_MODE_RDWR, MPI_INFO_NULL, &fh );
 
                 // Define the file view: each process writes its local data sequentially
-                MPI_Offset disp = 6 * number_of_elements_offset_ * static_cast< int >( output_type_connectivity_ );
+                MPI_Offset disp = static_cast< int64_t >( 6 ) * number_of_elements_offset_ * static_cast< int64_t >( output_type_connectivity_ );
                 MPI_File_set_view( fh, disp, MPI_CHAR, MPI_CHAR, "native", MPI_INFO_NULL );
 
                 std::string topo_str = topology_stream.str();
@@ -607,16 +607,17 @@ class XDMFOutput
     }
 
     template < std::integral IntegerOutputType >
-    void write_topology_binary_data( std::stringstream& out, IntegerOutputType number_of_nodes_offset )
+    void write_topology_binary_data( std::stringstream& out, int64_t number_of_nodes_offset )
     {
         const int num_subdomains = coords_shell_device_.extent( 0 );
         const int nodes_x        = coords_shell_device_.extent( 1 );
         const int nodes_y        = coords_shell_device_.extent( 2 );
         const int nodes_r        = coords_radii_device_.extent( 1 );
 
-        const int stride_0 = nodes_x * nodes_y * nodes_r;
-        const int stride_1 = nodes_x * nodes_y;
-        const int stride_2 = nodes_x;
+        const IntegerOutputType stride_0 = static_cast< IntegerOutputType >( nodes_x ) * nodes_y * nodes_r;
+        const IntegerOutputType stride_1 = static_cast< IntegerOutputType >( nodes_x ) * nodes_y;
+        const IntegerOutputType stride_2 = nodes_x;
+        const IntegerOutputType offset   = static_cast< IntegerOutputType >( number_of_nodes_offset );
 
         for ( int local_subdomain_id = 0; local_subdomain_id < num_subdomains; local_subdomain_id++ )
         {
@@ -629,12 +630,12 @@ class XDMFOutput
                         // Hex nodes
                         IntegerOutputType v[8];
 
-                        v[0] = number_of_nodes_offset + local_subdomain_id * stride_0 + r * stride_1 + y * stride_2 + x;
+                        v[0] = offset + local_subdomain_id * stride_0 + r * stride_1 + y * stride_2 + x;
                         v[1] = v[0] + 1;
                         v[2] = v[0] + nodes_x;
                         v[3] = v[0] + nodes_x + 1;
 
-                        v[4] = number_of_nodes_offset + local_subdomain_id * stride_0 + ( r + 1 ) * stride_1 +
+                        v[4] = offset + local_subdomain_id * stride_0 + ( r + 1 ) * stride_1 +
                                y * stride_2 + x;
                         v[5] = v[4] + 1;
                         v[6] = v[4] + nodes_x;
@@ -740,7 +741,7 @@ class XDMFOutput
                 MPI_COMM_WORLD, attribute_file_path.c_str(), MPI_MODE_CREATE | MPI_MODE_RDWR, MPI_INFO_NULL, &fh );
 
             // Define the file view: each process writes its local data sequentially
-            MPI_Offset disp = number_of_nodes_offset_ * static_cast< int >( output_type_points_ );
+            MPI_Offset disp = number_of_nodes_offset_ * static_cast< int64_t >( output_type_points_ );
             MPI_File_set_view( fh, disp, MPI_CHAR, MPI_CHAR, "native", MPI_INFO_NULL );
 
             std::string attr_str = attribute_stream.str();
@@ -865,7 +866,7 @@ class XDMFOutput
                 MPI_COMM_WORLD, attribute_file_path.c_str(), MPI_MODE_CREATE | MPI_MODE_RDWR, MPI_INFO_NULL, &fh );
 
             // Define the file view: each process writes its local data sequentially
-            MPI_Offset disp = VecDim * number_of_nodes_offset_ * static_cast< int >( output_type_points_ );
+            MPI_Offset disp = static_cast< int64_t >( VecDim ) * number_of_nodes_offset_ * static_cast< int64_t >( output_type_points_ );
             MPI_File_set_view( fh, disp, MPI_CHAR, MPI_CHAR, "native", MPI_INFO_NULL );
 
             std::string attr_str = attribute_stream.str();
@@ -1093,13 +1094,13 @@ class XDMFOutput
     int  write_counter_        = 0;
     bool first_write_happened_ = false;
 
-    int number_of_nodes_offset_      = -1;
-    int number_of_elements_offset_   = -1;
-    int number_of_subdomains_offset_ = -1;
+    int64_t number_of_nodes_offset_      = -1;
+    int64_t number_of_elements_offset_   = -1;
+    int64_t number_of_subdomains_offset_ = -1;
 
-    int number_of_nodes_global_      = -1;
-    int number_of_elements_global_   = -1;
-    int number_of_subdomains_global_ = -1;
+    int64_t number_of_nodes_global_      = -1;
+    int64_t number_of_elements_global_   = -1;
+    int64_t number_of_subdomains_global_ = -1;
 };
 
 /// Captures the format of the checkpoint metadata.

@@ -334,7 +334,7 @@ Result<> run( const Parameters& prm )
     // Setting up the (adaptive) Galerkin coarse grid approximation (AGCA / GCA)
     // Determine AGCA elements.
     VectorQ1Scalar< ScalarType > GCAElements( "GCAElements", domains[0], ownership_mask_data[0] );
-    int                          gca = 1;
+    int                          gca = 0;
     if ( gca == 2 )
     {
         linalg::assign( GCAElements, 0 );
@@ -830,16 +830,20 @@ Result<> run( const Parameters& prm )
         xdmf_output.set_write_counter( timestep_initial );
     }
 
-    logroot << "Writing initial XDMF ..." << std::endl;
+    if ( !prm.io_parameters.no_xdmf )
+    {
+        logroot << "Writing initial XDMF ..." << std::endl;
+        xdmf_output.write();
+    }
 
-    xdmf_output.write();
-
-    logroot << "Writing initial radial profiles ..." << std::endl;
-
-    compute_and_write_radial_profiles(
-        T, subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep_initial );
-    compute_and_write_radial_profiles(
-        eta[velocity_level], subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep_initial );
+    if ( !prm.io_parameters.no_radial_profiles )
+    {
+        logroot << "Writing initial radial profiles ..." << std::endl;
+        compute_and_write_radial_profiles(
+            T, subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep_initial );
+        compute_and_write_radial_profiles(
+            eta[velocity_level], subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep_initial );
+    }
 
     ScalarType simulated_time = 0.0;
 
@@ -993,14 +997,22 @@ Result<> run( const Parameters& prm )
 
         table->add_row( {} );
 
-        logroot << "Writing XDMF output and radial profiles ..." << std::endl;
+        const bool write_output = ( timestep % prm.io_parameters.output_frequency == 0 );
 
-        xdmf_output.write();
+        if ( write_output && !prm.io_parameters.no_xdmf )
+        {
+            logroot << "Writing XDMF output ..." << std::endl;
+            xdmf_output.write();
+        }
 
-        compute_and_write_radial_profiles(
-            T, subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep );
-        compute_and_write_radial_profiles(
-            eta[velocity_level], subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep );
+        if ( write_output && !prm.io_parameters.no_radial_profiles )
+        {
+            logroot << "Writing radial profiles ..." << std::endl;
+            compute_and_write_radial_profiles(
+                T, subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep );
+            compute_and_write_radial_profiles(
+                eta[velocity_level], subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep );
+        }
 
         simulated_time += prm.time_stepping_parameters.energy_substeps * dt;
 

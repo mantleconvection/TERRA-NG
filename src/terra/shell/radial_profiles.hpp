@@ -117,37 +117,29 @@ RadialProfiles< ScalarType > radial_profiles(
 
     Kokkos::fence();
 
-    MPI_Allreduce(
-        MPI_IN_PLACE,
-        radial_profiles.radial_min_.data(),
-        radial_profiles.radial_min_.size(),
-        mpi::mpi_datatype< ScalarType >(),
-        MPI_MIN,
-        MPI_COMM_WORLD );
+    // Perform MPI_Allreduce on host to avoid GPU-aware MPI issues with MPI_IN_PLACE
+    // at large rank counts. The buffers are small (num_global_shells doubles), so the
+    // device-to-host copy overhead is negligible.
+    {
+        auto host_min = Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace(), radial_profiles.radial_min_ );
+        auto host_max = Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace(), radial_profiles.radial_max_ );
+        auto host_sum = Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace(), radial_profiles.radial_sum_ );
+        auto host_cnt = Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace(), radial_profiles.radial_cnt_ );
 
-    MPI_Allreduce(
-        MPI_IN_PLACE,
-        radial_profiles.radial_max_.data(),
-        radial_profiles.radial_max_.size(),
-        mpi::mpi_datatype< ScalarType >(),
-        MPI_MAX,
-        MPI_COMM_WORLD );
+        MPI_Allreduce(
+            MPI_IN_PLACE, host_min.data(), host_min.size(), mpi::mpi_datatype< ScalarType >(), MPI_MIN, MPI_COMM_WORLD );
+        MPI_Allreduce(
+            MPI_IN_PLACE, host_max.data(), host_max.size(), mpi::mpi_datatype< ScalarType >(), MPI_MAX, MPI_COMM_WORLD );
+        MPI_Allreduce(
+            MPI_IN_PLACE, host_sum.data(), host_sum.size(), mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+        MPI_Allreduce(
+            MPI_IN_PLACE, host_cnt.data(), host_cnt.size(), mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
 
-    MPI_Allreduce(
-        MPI_IN_PLACE,
-        radial_profiles.radial_sum_.data(),
-        radial_profiles.radial_sum_.size(),
-        mpi::mpi_datatype< ScalarType >(),
-        MPI_SUM,
-        MPI_COMM_WORLD );
-
-    MPI_Allreduce(
-        MPI_IN_PLACE,
-        radial_profiles.radial_cnt_.data(),
-        radial_profiles.radial_cnt_.size(),
-        mpi::mpi_datatype< ScalarType >(),
-        MPI_SUM,
-        MPI_COMM_WORLD );
+        Kokkos::deep_copy( radial_profiles.radial_min_, host_min );
+        Kokkos::deep_copy( radial_profiles.radial_max_, host_max );
+        Kokkos::deep_copy( radial_profiles.radial_sum_, host_sum );
+        Kokkos::deep_copy( radial_profiles.radial_cnt_, host_cnt );
+    }
 
     Kokkos::parallel_for(
         "radial profiles avg", num_global_shells, KOKKOS_LAMBDA( int r ) {
