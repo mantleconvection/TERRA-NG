@@ -43,6 +43,7 @@ VERSION_NAMES = {
     "EpsilonDivDiv":        "v00b fused",
     "V01Initial":       "v01 initial",
     "V02SplitDimij":    "v02 split dimij",
+    "V02bSingleQuadpoint": "v02b 1 quadpt",
     "V03TeamsPrecomp":  "v03 teams+precomp",
     "V04ShmemCoords":   "v04 shmem coords",
     "V05ShmemSrcK":     "v05 shmem src+k",
