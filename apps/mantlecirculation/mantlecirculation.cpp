@@ -1,3 +1,4 @@
+#include <cmath>
 #include <fstream>
 #include <vector>
 
@@ -30,6 +31,7 @@
 #include "linalg/solvers/chebyshev.hpp"
 #include "linalg/solvers/diagonal_solver.hpp"
 #include "linalg/solvers/fgmres.hpp"
+#include "mpi/mpi.hpp"
 #include "linalg/solvers/gca/gca.hpp"
 #include "linalg/solvers/jacobi.hpp"
 #include "linalg/solvers/multigrid.hpp"
@@ -289,6 +291,137 @@ struct ViscosityFromTemperature
         }
     }
 };
+
+/// @brief Compute the Nusselt number at the top (surface) or bottom (CMB) boundary.
+///
+/// Nu = ∫_Γ ∇T · n̂ dΓ  /  ∫_Γ ∇T_ref · n̂ dΓ
+///
+/// where T_ref is the conductive profile: T_ref = (r_min * r_max / r - r_min) / (r_max - r_min).
+/// The denominator is analytical: ∂T_ref/∂r = -r_min * r_max / (r² * (r_max - r_min)).
+/// At the surface: ∫_surface ∂T_ref/∂r dA = -r_min * r_max / (r_max² * (r_max - r_min)) * 4π r_max²
+///                                         = -4π r_min r_max / (r_max - r_min).
+/// At the CMB:     ∫_cmb ∂T_ref/∂r dA     = -4π r_min r_max / (r_max - r_min).
+/// (Same value at both boundaries for the conductive profile on a sphere.)
+///
+/// @param at_surface  If true, compute Nu at the outer surface; if false, at the CMB.
+ScalarType compute_nusselt(
+    const grid::shell::DistributedDomain&       domain,
+    const linalg::VectorQ1Scalar< ScalarType >& T,
+    const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
+    const grid::Grid2DDataScalar< ScalarType >&  coords_radii,
+    const ScalarType                             r_min,
+    const ScalarType                             r_max,
+    const bool                                   at_surface )
+{
+    using namespace fe::wedge;
+
+    const auto T_grid = T.grid_data();
+    const int  num_subdomains = domain.subdomains().size();
+    const int  nx = domain.domain_info().subdomain_num_nodes_per_side_laterally();
+    const int  nr = domain.domain_info().subdomain_num_nodes_radially();
+
+    // The radial cell index for the boundary layer.
+    // Surface: last radial cell (r_cell = nr - 1), uses radii [nr-1, nr] and Q1 nodes at r = nr-1, nr.
+    // CMB: first radial cell (r_cell = 0), uses radii [0, 1] and Q1 nodes at r = 0, 1.
+    const int r_cell = at_surface ? ( nr - 1 ) : 0;
+
+    // The reference element face is at zeta = +1 (surface, top of cell) or zeta = -1 (CMB, bottom of cell).
+    const ScalarType zeta_boundary = at_surface ? ScalarType( 1 ) : ScalarType( -1 );
+
+    // Outward normal direction: +r̂ at surface, -r̂ at CMB.
+    // We compute ∇T · r̂ and flip sign for CMB.
+    const ScalarType normal_sign = at_surface ? ScalarType( 1 ) : ScalarType( -1 );
+
+    ScalarType local_integral = 0;
+
+    Kokkos::parallel_reduce(
+        "nusselt_surface_integral",
+        Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 0, 0 }, { num_subdomains, nx, nx } ),
+        KOKKOS_LAMBDA( const int sd, const int x_cell, const int y_cell, ScalarType& sum ) {
+            constexpr int nqp = quadrature::quad_felippa_3x2_num_quad_points;
+            dense::Vec< ScalarType, 3 > quad_points[nqp];
+            ScalarType                  quad_weights[nqp];
+            quadrature::quad_felippa_3x2_quad_points( quad_points );
+            quadrature::quad_felippa_3x2_quad_weights( quad_weights );
+
+            // Wedge surface physical coordinates.
+            dense::Vec< ScalarType, 3 > wedge_phy_surf[num_wedges_per_hex_cell][num_nodes_per_wedge_surface] = {};
+            wedge_surface_physical_coords( wedge_phy_surf, coords_shell, sd, x_cell, y_cell );
+
+            const ScalarType r_1 = coords_radii( sd, r_cell );
+            const ScalarType r_2 = coords_radii( sd, r_cell + 1 );
+
+            // Extract Q1 temperature nodal values for this hex cell.
+            dense::Vec< ScalarType, 6 > local_T[num_wedges_per_hex_cell] = {};
+            extract_local_wedge_scalar_coefficients( local_T, sd, x_cell, y_cell, r_cell, T_grid );
+
+            for ( int wedge = 0; wedge < num_wedges_per_hex_cell; ++wedge )
+            {
+                for ( int q = 0; q < nqp; ++q )
+                {
+                    // Evaluate at the boundary face: replace zeta with the boundary value.
+                    dense::Vec< ScalarType, 3 > qp = quad_points[q];
+                    qp( 2 ) = zeta_boundary;
+
+                    const auto J       = jac( wedge_phy_surf[wedge], r_1, r_2, qp );
+                    const auto det     = J.det();
+                    const auto abs_det = Kokkos::abs( det );
+                    const auto J_inv_T = J.inv().transposed();
+
+                    // Compute ∇T in physical coordinates at this quadrature point.
+                    dense::Vec< ScalarType, 3 > grad_T_phys{ 0, 0, 0 };
+                    for ( int i = 0; i < num_nodes_per_wedge; ++i )
+                    {
+                        const auto grad_phi_ref = grad_shape< ScalarType >( i, qp );
+                        grad_T_phys = grad_T_phys + ( J_inv_T * grad_phi_ref ) * local_T[wedge]( i );
+                    }
+
+                    // Physical position at quad point → unit radial direction.
+                    const auto x_phys = forward_map(
+                        wedge_phy_surf[wedge][0],
+                        wedge_phy_surf[wedge][1],
+                        wedge_phy_surf[wedge][2],
+                        r_1, r_2,
+                        qp( 0 ), qp( 1 ), qp( 2 ) );
+                    const auto r_hat = x_phys.normalized();
+
+                    // ∇T · n̂ (outward normal = ±r̂)
+                    const ScalarType grad_T_dot_n = normal_sign * grad_T_phys.dot( r_hat );
+
+                    // Surface integral weight: |det(J)| * w * (the 2D surface Jacobian factor).
+                    // On the zeta = const face, the 3D quadrature weight times |det(J)| gives the
+                    // volume element. We need the surface element, which is |det(J)| / |∂x/∂zeta|.
+                    // But since the radial shape functions are linear, the surface element at zeta=±1
+                    // is simply the 2D integral over (xi, eta) of the lateral Jacobian * r².
+                    // Using the 3D quadrature at fixed zeta with the 3D |det(J)| and dividing by
+                    // the radial scale factor (r_2 - r_1)/2 gives the correct surface measure.
+                    const ScalarType radial_scale = ( r_2 - r_1 ) / ScalarType( 2 );
+                    const ScalarType dA = abs_det * quad_weights[q] / radial_scale;
+
+                    sum += grad_T_dot_n * dA;
+                }
+            }
+        },
+        Kokkos::Sum< ScalarType >( local_integral ) );
+
+    Kokkos::fence();
+
+    ScalarType global_integral = 0;
+    MPI_Allreduce( &local_integral, &global_integral, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+
+    // Analytical denominator: ∫_Γ ∇T_ref · n̂ dΓ = -4π r_min r_max / (r_max - r_min)
+    // (same at both boundaries for the conductive profile).
+    // The outward normal at surface is +r̂, so ∇T_ref · r̂ = ∂T_ref/∂r < 0, giving a negative integral.
+    // At CMB the outward normal is -r̂, so ∇T_ref · (-r̂) = -∂T_ref/∂r > 0, also giving a negative integral
+    // when dotted with the inward-pointing normal from the perspective of the shell.
+    // Actually for the CMB, the outward normal of the shell domain points inward (-r̂), so:
+    //   ∇T_ref · (-r̂) = +r_min r_max / (r_min² (r_max - r_min)) > 0
+    // But we use normal_sign to flip, so the denominator should use the same convention.
+    const ScalarType denom = -ScalarType( 4 ) * M_PI * r_min * r_max / ( r_max - r_min );
+    const ScalarType Nu = global_integral / denom;
+
+    return Nu;
+}
 
 Result<> run( const Parameters& prm )
 {
@@ -1161,6 +1294,20 @@ Result<> run( const Parameters& prm )
                 T, subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep );
             compute_and_write_radial_profiles(
                 eta[velocity_level], subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep );
+        }
+
+        // Compute Nusselt number at the surface.
+        if ( write_output )
+        {
+            const auto Nu_top = compute_nusselt(
+                domains[velocity_level],
+                T,
+                coords_shell[velocity_level],
+                coords_radii[velocity_level],
+                prm.mesh_parameters.radius_min,
+                prm.mesh_parameters.radius_max,
+                /*at_surface=*/true );
+            logroot << "Nu_top = " << Nu_top << std::endl;
         }
 
         simulated_time += prm.time_stepping_parameters.energy_substeps * dt;
