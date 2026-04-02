@@ -17,6 +17,7 @@
 #include <mpi.h>
 
 #include "../src/terra/communication/shell/communication.hpp"
+#include "fe/strong_algebraic_dirichlet_enforcement.hpp"
 #include "fe/wedge/operators/shell/mass.hpp"
 #include "fe/wedge/operators/shell/unsteady_advection_diffusion_supg.hpp"
 #include "linalg/solvers/fgmres.hpp"
@@ -152,7 +153,7 @@ void test( const int level )
     fgmres.set_tag( "supg_fgmres" );
 
     // XDMF output.
-    constexpr int vtk_interval = 100;
+    constexpr int vtk_interval = 10;
     io::XDMFOutput xdmf( "test_supg_rotation_out", domain, coords_shell, coords_radii );
     xdmf.add( T.grid_data() );
     xdmf.write(); // initial condition
@@ -165,6 +166,10 @@ void test( const int level )
     {
         // f = M * T^n
         linalg::apply( M, T, f );
+        // Zero out f at boundary dofs (homogeneous Dirichlet BCs).
+        // A has identity rows at boundary nodes; without this, T^{n+1}[boundary] = f[boundary] = (M*T^n)[boundary] ≠ 0.
+        fe::strong_algebraic_homogeneous_dirichlet_enforcement_poisson_like(
+            f, boundary_mask_data, grid::shell::ShellBoundaryFlag::BOUNDARY );
         // Solve (M + dt * A_advdiff) * T^{n+1} = f
         linalg::solvers::solve( fgmres, A, T, f );
 
@@ -182,6 +187,6 @@ void test( const int level )
 int main( int argc, char** argv )
 {
     util::terra_initialize( &argc, &argv );
-    test( 5 );
+    test( 4 );
     return 0;
 }

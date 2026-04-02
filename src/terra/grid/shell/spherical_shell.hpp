@@ -938,6 +938,26 @@ class DomainInfo
         return subdomains;
     }
 
+    /// @brief Number of global subdomains.
+    [[nodiscard]] int num_global_subdomains() const
+    {
+        return 10 * num_subdomains_per_diamond_side() * num_subdomains_per_diamond_side() *
+               num_subdomains_in_radial_direction();
+    }
+
+    /// @brief Number of hex cells on the finest level, per subdomain.
+    [[nodiscard]] long long num_micro_hex_cells_per_subdomain() const
+    {
+        return static_cast< long long >( subdomain_num_nodes_per_side_laterally() - 1 ) *
+               ( subdomain_num_nodes_per_side_laterally() - 1 ) * ( subdomain_num_nodes_radially() - 1 );
+    }
+
+    /// @brief Number of hex cells on the finest level, globally.
+    [[nodiscard]] long long num_global_micro_hex_cells() const
+    {
+        return num_global_subdomains() * num_micro_hex_cells_per_subdomain();
+    }
+
   private:
     /// Number of times each diamond is refined laterally in each direction.
     int diamond_lateral_refinement_level_{};
@@ -1043,19 +1063,13 @@ class SubdomainNeighborhood
         const DomainInfo&                          domain_info,
         const SubdomainInfo&                       subdomain_info,
         const SubdomainToRankDistributionFunction& subdomain_to_rank )
-    {
-        setup_neighborhood( domain_info, subdomain_info, subdomain_to_rank );
-    }
+    { setup_neighborhood( domain_info, subdomain_info, subdomain_to_rank ); }
 
     const std::map< BoundaryVertex, std::vector< NeighborSubdomainTupleVertex > >& neighborhood_vertex() const
-    {
-        return neighborhood_vertex_;
-    }
+    { return neighborhood_vertex_; }
 
     const std::map< BoundaryEdge, std::vector< NeighborSubdomainTupleEdge > >& neighborhood_edge() const
-    {
-        return neighborhood_edge_;
-    }
+    { return neighborhood_edge_; }
 
     const std::map< BoundaryFace, NeighborSubdomainTupleFace >& neighborhood_face() const { return neighborhood_face_; }
 

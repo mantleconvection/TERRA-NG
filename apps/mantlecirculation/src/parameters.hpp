@@ -29,6 +29,9 @@ struct BoundaryConditionsParameters
 
     VelocityBC velocity_bc_cmb     = VelocityBC::NO_SLIP;
     VelocityBC velocity_bc_surface = VelocityBC::NO_SLIP;
+
+    double temperature_cmb     = 1.0;
+    double temperature_surface = 0.0;
 };
 
 struct ViscosityParameters
@@ -46,6 +49,9 @@ struct PhysicsParameters
     double rayleigh_number = 1e5;
 
     ViscosityParameters viscosity_parameters{};
+
+    bool   constant_internal_heating       = false;
+    double constant_internal_heating_value = 1.0;
 };
 
 struct StokesSolverParameters
@@ -178,6 +184,14 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->default_val( "noslip" )
         ->group( "Boundary Conditions" );
 
+    add_option_with_default(
+        app, "--temperature-bc-value-cmb", parameters.boundary_conditions_parameters.temperature_cmb )
+        ->group( "Boundary Conditions" );
+
+    add_option_with_default(
+        app, "--temperature-bc-value-surface", parameters.boundary_conditions_parameters.temperature_surface )
+        ->group( "Boundary Conditions" );
+
     //////////////////////////////
     /// Geophysical parameters ///
     //////////////////////////////
@@ -218,11 +232,21 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->needs( radial_profile_enabled )
         ->group( "Viscosity" );
 
+    add_flag_with_default(
+        app, "--constant-internal-heating-enabled", parameters.physics_parameters.constant_internal_heating );
+    add_option_with_default(
+        app, "--constant-internal-heating-value", parameters.physics_parameters.constant_internal_heating_value );
+
     ///////////////////////////
     /// Time discretization ///
     ///////////////////////////
 
     add_option_with_default( app, "--pseudo-cfl", parameters.time_stepping_parameters.pseudo_cfl )
+        ->description(
+            "A robust (stable) dt is computed the the actual face-normal velocity fluxes and cell volumes via a "
+            "parallel reduce over all cells. However, a smaller value might still be desired due to accuracy "
+            "considerations. You can scale the computed dt using this value (e.g. set to 0.5 to half the estimated dt, "
+            "set to 1.0 to just use the estimated dt)." )
         ->group( "Time Discretization" );
     add_option_with_default( app, "--t-end", parameters.time_stepping_parameters.t_end )
         ->group( "Time Discretization" );
@@ -318,6 +342,11 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         }
         return { "CLI parse error" };
     }
+
+    util::logroot << "=========================================\n";
+    util::logroot << "     Starting mantle circulation app     \n";
+    util::logroot << "     Run with -h or --help for help      \n";
+    util::logroot << "=========================================\n";
 
     util::print_general_info( argc, argv, util::logroot );
     util::print_cli_summary( app, util::logroot );

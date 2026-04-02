@@ -204,9 +204,20 @@ struct GeometryHelper
                     {
                         for ( int q_b = 0; q_b < num_quad_points_line; ++q_b )
                         {
-                            const auto s = quad_points_line[q_a];
+                            // map_face maps (s, t) as:
+                            //   s → lateral reference coordinate (xi or eta) ∈ [0,1]
+                            //   t → zeta (radial direction)                  ∈ [-1,1]
+                            //
+                            // The lateral coordinate lives on the standard triangle, so its
+                            // valid range is [0,1], not [-1,1].  Remap the Gauss point from
+                            // [-1,1] to [0,1] and include the Jacobian factor 1/2.
+                            //
+                            // t maps to zeta in all four QUAD cases (directions 0,1,2,3) —
+                            // confirmed in map_face above.  The radial reference coordinate
+                            // already spans [-1,1], so t needs no remapping.
+                            const auto s = ScalarT( 0.5 ) * ( quad_points_line[q_a] + ScalarT( 1 ) );
                             const auto t = quad_points_line[q_b];
-                            const auto w = quad_weights_line[q_a] * quad_weights_line[q_b];
+                            const auto w = ScalarT( 0.5 ) * quad_weights_line[q_a] * quad_weights_line[q_b];
 
                             ScalarT xi = 0, eta = 0, zeta = 0;
                             CrossProductType cpt;

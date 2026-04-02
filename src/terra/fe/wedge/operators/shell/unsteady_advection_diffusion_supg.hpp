@@ -10,6 +10,7 @@
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
 #include "linalg/vector_q1.hpp"
+#include "util/timer.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
