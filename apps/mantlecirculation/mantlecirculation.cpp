@@ -233,6 +233,32 @@ struct FVNoiseAdder
     }
 };
 
+/// Computes viscosity from temperature according to the selected viscosity law.
+struct ViscosityFromTemperature
+{
+    ViscosityLaw                   law_;
+    ScalarType                     rmu_;
+    Grid4DDataScalar< ScalarType > eta_;
+    Grid4DDataScalar< ScalarType > T_;
+
+    KOKKOS_INLINE_FUNCTION
+    void operator()( const int id, const int x, const int y, const int r ) const
+    {
+        const ScalarType T_val = T_( id, x, y, r );
+
+        switch ( law_ )
+        {
+        case ViscosityLaw::FRANK_KAMENETSKII:
+            eta_( id, x, y, r ) = Kokkos::pow( ScalarType( 10 ), rmu_ * ( ScalarType( 0.5 ) - T_val ) );
+            break;
+        case ViscosityLaw::CONSTANT:
+        default:
+            // eta is already set, nothing to do.
+            break;
+        }
+    }
+};
+
 Result<> run( const Parameters& prm )
 {
     auto table = std::make_shared< util::Table >();
@@ -323,7 +349,8 @@ Result<> run( const Parameters& prm )
     // For simplicity, we do not optimize for the isoviscous case, but always use the full Stokes operator.
     // That means in the isoviscous case we choose a constant radial viscosity profile.
     //
-    // Temp dep. visc. not yet implemented.
+    // If a temperature-dependent viscosity law is selected, the initial viscosity is set from the
+    // radial/constant profile and then overwritten after the initial temperature field is set up.
 
     std::vector< Grid2DDataScalar< ScalarType > > radial_viscosity_profile;
 
@@ -774,6 +801,20 @@ Result<> run( const Parameters& prm )
     fv::hex::l2_project_fv_to_fe(
         T, T_fct, domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level], l2_proj_tmps );
 
+    // If temperature-dependent viscosity is enabled, compute the initial viscosity from the initial T.
+    if ( prm.physics_parameters.viscosity_parameters.law != ViscosityLaw::CONSTANT )
+    {
+        logroot << "Computing initial temperature-dependent viscosity ..." << std::endl;
+        Kokkos::parallel_for(
+            "viscosity_from_temperature_init",
+            local_domain_md_range_policy_nodes( domains[velocity_level] ),
+            ViscosityFromTemperature{ prm.physics_parameters.viscosity_parameters.law,
+                                     prm.physics_parameters.viscosity_parameters.rmu,
+                                     eta[velocity_level].grid_data(),
+                                     T.grid_data() } );
+        Kokkos::fence();
+    }
+
     table->add_row( {
         { "tag", "setup" },
         { "dofs_velocity", num_dofs_velocity },
@@ -1016,6 +1057,21 @@ Result<> run( const Parameters& prm )
         }
 
         timer_energy.stop();
+
+        // Update viscosity from the new temperature field.
+        if ( prm.physics_parameters.viscosity_parameters.law != ViscosityLaw::CONSTANT )
+        {
+            util::Timer timer_visc_update( "viscosity_update" );
+            Kokkos::parallel_for(
+                "viscosity_from_temperature",
+                local_domain_md_range_policy_nodes( domains[velocity_level] ),
+                ViscosityFromTemperature{ prm.physics_parameters.viscosity_parameters.law,
+                                         prm.physics_parameters.viscosity_parameters.rmu,
+                                         eta[velocity_level].grid_data(),
+                                         T.grid_data() } );
+            Kokkos::fence();
+            timer_visc_update.stop();
+        }
 
         // Output stuff, logging etc.
 

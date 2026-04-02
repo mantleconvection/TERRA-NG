@@ -180,9 +180,9 @@ class UnsteadyAdvectionDiffusion
             // Diffusion (two-point flux, cell-to-cell vector from precomputed centers).
             if ( diffusivity_ != ScalarT( 0 ) )
             {
-                const int  nx = x_cell + GH::cell_offset_x[n];
-                const int  ny = y_cell + GH::cell_offset_y[n];
-                const int  nr = r_cell + GH::cell_offset_r[n];
+                const int  nx = x_cell + GH::cell_offset_x( n );
+                const int  ny = y_cell + GH::cell_offset_y( n );
+                const int  nr = r_cell + GH::cell_offset_r( n );
                 const Vec3 neighbor_center{
                     cell_centers_( local_subdomain_id, nx, ny, nr, 0 ),
                     cell_centers_( local_subdomain_id, nx, ny, nr, 1 ),
@@ -210,9 +210,9 @@ class UnsteadyAdvectionDiffusion
         {
             result += dt_ * AD_ij[n] * src_(
                 local_subdomain_id,
-                x_cell + GH::cell_offset_x[n],
-                y_cell + GH::cell_offset_y[n],
-                r_cell + GH::cell_offset_r[n] );
+                x_cell + GH::cell_offset_x( n ),
+                y_cell + GH::cell_offset_y( n ),
+                r_cell + GH::cell_offset_r( n ) );
         }
         dst_( local_subdomain_id, x_cell, y_cell, r_cell ) = result;
     }

@@ -139,9 +139,9 @@ struct ComputeDtStableKernel
 
             if ( diffusivity_ > ScalarT( 0 ) )
             {
-                const int   nx = x + GH::cell_offset_x[n];
-                const int   ny = y + GH::cell_offset_y[n];
-                const int   nr = r + GH::cell_offset_r[n];
+                const int   nx = x + GH::cell_offset_x( n );
+                const int   ny = y + GH::cell_offset_y( n );
+                const int   nr = r + GH::cell_offset_r( n );
                 const Vec3  dx{
                     cell_centers_( id, nx, ny, nr, 0 ) - cell_centers_( id, x, y, r, 0 ),
                     cell_centers_( id, nx, ny, nr, 1 ) - cell_centers_( id, x, y, r, 1 ),
@@ -311,9 +311,9 @@ struct FCTPredictorKernel
 
         for ( int n = 0; n < num_neighbors; ++n )
         {
-            const int     nx  = x + GH::cell_offset_x[n];
-            const int     ny  = y + GH::cell_offset_y[n];
-            const int     nr  = r + GH::cell_offset_r[n];
+            const int     nx  = x + GH::cell_offset_x( n );
+            const int     ny  = y + GH::cell_offset_y( n );
+            const int     nr  = r + GH::cell_offset_r( n );
             const ScalarT T_j = T_old_( id, nx, ny, nr );
 
             // Upwind advection.
@@ -500,9 +500,9 @@ struct FCTLimiterKernel
 
             const ScalarT T_L_j = T_L_(
                 id,
-                x + GH::cell_offset_x[n],
-                y + GH::cell_offset_y[n],
-                r + GH::cell_offset_r[n] );
+                x + GH::cell_offset_x( n ),
+                y + GH::cell_offset_y( n ),
+                r + GH::cell_offset_r( n ) );
             T_max = Kokkos::max( T_max, T_L_j );
             T_min = Kokkos::min( T_min, T_L_j );
         }
@@ -611,9 +611,9 @@ struct FCTCorrectionKernel
 
         for ( int n = 0; n < num_neighbors; ++n )
         {
-            const int jx = x + GH::cell_offset_x[n];
-            const int jy = y + GH::cell_offset_y[n];
-            const int jr = r + GH::cell_offset_r[n];
+            const int jx = x + GH::cell_offset_x( n );
+            const int jy = y + GH::cell_offset_y( n );
+            const int jr = r + GH::cell_offset_r( n );
 
             const ScalarT f_ij       = antidiff_( id, x, y, r, n );
             const ScalarT R_plus_j   = R_plus_( id, jx, jy, jr );
@@ -822,9 +822,9 @@ struct FCTAntidiffKernel
         {
             const ScalarT T_j = T_old_(
                 id,
-                x + GH::cell_offset_x[n],
-                y + GH::cell_offset_y[n],
-                r + GH::cell_offset_r[n] );
+                x + GH::cell_offset_x( n ),
+                y + GH::cell_offset_y( n ),
+                r + GH::cell_offset_r( n ) );
             const ScalarT abs_beta          = Kokkos::abs( beta[n] );
             antidiff_( id, x, y, r, n ) = ( dt_ / M_ii ) * ( abs_beta / ScalarT( 2 ) ) * ( T_i - T_j );
         }

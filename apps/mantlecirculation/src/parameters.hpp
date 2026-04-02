@@ -34,8 +34,17 @@ struct BoundaryConditionsParameters
     double temperature_surface = 0.0;
 };
 
+enum class ViscosityLaw
+{
+    CONSTANT,
+    FRANK_KAMENETSKII,
+};
+
 struct ViscosityParameters
 {
+    ViscosityLaw law = ViscosityLaw::CONSTANT;
+    double       rmu = 1.0;
+
     bool        radial_profile_enabled       = false;
     std::string radial_profile_csv_filename  = "radial_viscosity_profile.csv";
     std::string radial_profile_radii_key     = "radii";
@@ -198,6 +207,23 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
 
     add_option_with_default( app, "--diffusivity", parameters.physics_parameters.diffusivity );
     add_option_with_default( app, "--rayleigh-number", parameters.physics_parameters.rayleigh_number );
+
+    std::map< std::string, ViscosityLaw > viscosity_law_map{
+        { "constant", ViscosityLaw::CONSTANT },
+        { "frank-kamenetskii", ViscosityLaw::FRANK_KAMENETSKII },
+    };
+
+    add_option_with_default( app, "--viscosity-law", parameters.physics_parameters.viscosity_parameters.law )
+        ->transform( CLI::CheckedTransformer( viscosity_law_map, CLI::ignore_case ) )
+        ->default_val( "constant" )
+        ->group( "Viscosity" )
+        ->description(
+            "Viscosity law to use. 'constant' uses a constant or radial profile. "
+            "'frank-kamenetskii' computes eta = 10^(rmu * (0.5 - T))." );
+
+    add_option_with_default( app, "--viscosity-rmu", parameters.physics_parameters.viscosity_parameters.rmu )
+        ->group( "Viscosity" )
+        ->description( "Exponent for Frank-Kamenetskii viscosity law: eta = 10^(rmu * (0.5 - T))." );
 
     const auto radial_profile_enabled =
         add_flag_with_default(
