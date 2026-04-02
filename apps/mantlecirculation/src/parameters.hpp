@@ -52,12 +52,27 @@ struct ViscosityParameters
     double      reference_viscosity          = 1.0;
 };
 
+enum class InitialTemperatureProfile
+{
+    POWER_LAW,
+    CONDUCTIVE,
+};
+
+struct InitialTemperatureParameters
+{
+    InitialTemperatureProfile profile = InitialTemperatureProfile::POWER_LAW;
+    int                       sph_degree_l = 0;
+    int                       sph_order_m  = 0;
+    double                    sph_epsilon  = 0.0;
+};
+
 struct PhysicsParameters
 {
     double diffusivity     = 1.0;
     double rayleigh_number = 1e5;
 
-    ViscosityParameters viscosity_parameters{};
+    ViscosityParameters          viscosity_parameters{};
+    InitialTemperatureParameters initial_temperature{};
 
     bool   constant_internal_heating       = false;
     double constant_internal_heating_value = 1.0;
@@ -262,6 +277,39 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         app, "--constant-internal-heating-enabled", parameters.physics_parameters.constant_internal_heating );
     add_option_with_default(
         app, "--constant-internal-heating-value", parameters.physics_parameters.constant_internal_heating_value );
+
+    ///////////////////////////////
+    /// Initial temperature      ///
+    ///////////////////////////////
+
+    std::map< std::string, InitialTemperatureProfile > init_temp_profile_map{
+        { "power-law", InitialTemperatureProfile::POWER_LAW },
+        { "conductive", InitialTemperatureProfile::CONDUCTIVE },
+    };
+
+    add_option_with_default(
+        app, "--initial-temperature-profile", parameters.physics_parameters.initial_temperature.profile )
+        ->transform( CLI::CheckedTransformer( init_temp_profile_map, CLI::ignore_case ) )
+        ->default_val( "power-law" )
+        ->group( "Initial Temperature" )
+        ->description(
+            "'power-law': T = ((r_max-r)/(r_max-r_min))^5 + random noise (default). "
+            "'conductive': T_ref = (r_min*r_max/r - r_min)/(r_max - r_min), with optional spherical harmonic perturbation." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-degree", parameters.physics_parameters.initial_temperature.sph_degree_l )
+        ->group( "Initial Temperature" )
+        ->description( "Spherical harmonic degree l for initial temperature perturbation (0 = none)." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-order", parameters.physics_parameters.initial_temperature.sph_order_m )
+        ->group( "Initial Temperature" )
+        ->description( "Spherical harmonic order m for initial temperature perturbation." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-epsilon", parameters.physics_parameters.initial_temperature.sph_epsilon )
+        ->group( "Initial Temperature" )
+        ->description( "Perturbation amplitude epsilon: T = T_ref + eps * Y_l^m." );
 
     ///////////////////////////
     /// Time discretization ///

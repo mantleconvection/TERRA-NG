@@ -17,7 +17,9 @@
 #include "fv/hex/conversion.hpp"
 #include "fv/hex/helpers.hpp"
 #include "fv/hex/operators/fct_advection_diffusion.hpp"
+#include "fv/hex/conversion.hpp"
 #include "geophysics/viscosity/viscosity_interpolation.hpp"
+#include "shell/spherical_harmonics.hpp"
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "io/xdmf.hpp"
@@ -111,6 +113,35 @@ struct InitialConditionInterpolator
             const auto frac                      = ( r_max_ - coords.norm() ) / ( r_max_ - r_min_ );
             data_( local_subdomain_id, x, y, r ) = Kokkos::pow( frac, 5 );
         }
+    }
+};
+
+/// Initial condition for Q1 temperature (conductive profile + spherical harmonic perturbation):
+/// T = T_ref(r) + eps * Y_l^m(theta, phi)
+/// where T_ref = (r_min * r_max / r - r_min) / (r_max - r_min).
+struct ConductiveProfileInterpolator
+{
+    ScalarType                          r_min_, r_max_, eps_;
+    Grid3DDataVec< ScalarType, 3 >      grid_;
+    Grid2DDataScalar< ScalarType >      radii_;
+    Grid4DDataScalar< ScalarType >      data_;
+    Grid3DDataScalar< ScalarType >      sph_coeffs_;
+    bool                                has_sph_;
+
+    KOKKOS_INLINE_FUNCTION
+    void operator()( const int sd, const int x, const int y, const int r ) const
+    {
+        const dense::Vec< ScalarType, 3 > coords = grid::shell::coords( sd, x, y, r, grid_, radii_ );
+        const ScalarType radius = coords.norm();
+        const ScalarType T_ref  = ( r_min_ * r_max_ / radius - r_min_ ) / ( r_max_ - r_min_ );
+
+        ScalarType T_val = T_ref;
+        if ( has_sph_ )
+        {
+            T_val += eps_ * sph_coeffs_( sd, x, y );
+        }
+
+        data_( sd, x, y, r ) = T_val;
     }
 };
 
@@ -762,30 +793,7 @@ Result<> run( const Parameters& prm )
 
     // Set up the initial temperature.
 
-    // --- FCT: initialise T_fct on FV cell centres ---
-    Kokkos::parallel_for(
-        "initial temp interpolation (FCT)",
-        grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domains[velocity_level] ),
-        FVInitialConditionInterpolator{
-            domains[velocity_level].domain_info().radii().front(),
-            domains[velocity_level].domain_info().radii().back(),
-            fv_cell_centers.grid_data(),
-            T_fct.grid_data() } );
-
-    Kokkos::fence();
-
-    Kokkos::parallel_for(
-        "adding noise to temp (FCT)",
-        grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domains[velocity_level] ),
-        FVNoiseAdder{ T_fct.grid_data(), Kokkos::Random_XorShift64_Pool<>( 12345 ) } );
-
-    Kokkos::fence();
-
-    // Enforce Dirichlet BCs on the initial FV field.  This must happen before
-    // update_fv_ghost_layers so that the radial ghost cells at the physical
-    // boundaries (CMB r=0, surface r=N) are set to the correct BC values.
-    // update_fv_ghost_layers does not touch those ghost cells (no subdomain
-    // neighbour exists beyond a physical boundary).
+    // --- Initialise temperature ---
 
     const fv::hex::DirichletBCs< ScalarType > fct_bcs{
         .T_cmb         = static_cast< ScalarType >( prm.boundary_conditions_parameters.temperature_cmb ),
@@ -793,8 +801,69 @@ Result<> run( const Parameters& prm )
         .apply_cmb     = true,
         .apply_surface = true };
 
-    fv::hex::apply_dirichlet_bcs( T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
+    const auto& init_temp = prm.physics_parameters.initial_temperature;
 
+    if ( init_temp.profile == InitialTemperatureProfile::CONDUCTIVE )
+    {
+        logroot << "Initial temperature: conductive profile";
+        if ( init_temp.sph_degree_l > 0 && init_temp.sph_epsilon != 0.0 )
+        {
+            logroot << " + Y_" << init_temp.sph_degree_l << "^" << init_temp.sph_order_m
+                    << " perturbation (eps=" << init_temp.sph_epsilon << ")";
+        }
+        logroot << std::endl;
+
+        // Compute spherical harmonic coefficients on unit sphere Q1 nodes.
+        Grid3DDataScalar< ScalarType > sph_coeffs;
+        const bool has_sph = ( init_temp.sph_degree_l > 0 && init_temp.sph_epsilon != 0.0 );
+        if ( has_sph )
+        {
+            sph_coeffs = shell::spherical_harmonics_coefficients_grid< ScalarType, ScalarType >(
+                init_temp.sph_degree_l, init_temp.sph_order_m, coords_shell[velocity_level] );
+        }
+
+        // Fill Q1 T with conductive profile + spherical harmonic perturbation.
+        Kokkos::parallel_for(
+            "initial temp (conductive + sph. harm.)",
+            local_domain_md_range_policy_nodes( domains[velocity_level] ),
+            ConductiveProfileInterpolator{
+                domains[velocity_level].domain_info().radii().front(),
+                domains[velocity_level].domain_info().radii().back(),
+                init_temp.sph_epsilon,
+                coords_shell[velocity_level],
+                coords_radii[velocity_level],
+                T.grid_data(),
+                sph_coeffs,
+                has_sph } );
+        Kokkos::fence();
+
+        // Project Q1 T → FV T_fct.
+        fv::hex::l2_project_fe_to_fv(
+            T_fct, T, domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level] );
+    }
+    else
+    {
+        logroot << "Initial temperature: power-law + noise" << std::endl;
+
+        Kokkos::parallel_for(
+            "initial temp interpolation (FCT)",
+            grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domains[velocity_level] ),
+            FVInitialConditionInterpolator{
+                domains[velocity_level].domain_info().radii().front(),
+                domains[velocity_level].domain_info().radii().back(),
+                fv_cell_centers.grid_data(),
+                T_fct.grid_data() } );
+        Kokkos::fence();
+
+        Kokkos::parallel_for(
+            "adding noise to temp (FCT)",
+            grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domains[velocity_level] ),
+            FVNoiseAdder{ T_fct.grid_data(), Kokkos::Random_XorShift64_Pool<>( 12345 ) } );
+        Kokkos::fence();
+    }
+
+    // Enforce Dirichlet BCs on the FV field and exchange ghost layers.
+    fv::hex::apply_dirichlet_bcs( T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
     communication::shell::update_fv_ghost_layers( domains[velocity_level], T_fct.grid_data() );
 
     // Project T_fct to Q1 T via L2 projection for use as Stokes RHS and output.
