@@ -6,6 +6,7 @@
 #include "fe/wedge/operators/shell/epsilon_divdiv_kerngen.hpp"
 #include "fe/wedge/operators/shell/performance_history/epsilon_divdiv_kerngen_v01_initial.hpp"
 #include "fe/wedge/operators/shell/performance_history/epsilon_divdiv_kerngen_v02_split_dimij.hpp"
+#include "fe/wedge/operators/shell/performance_history/epsilon_divdiv_kerngen_v02b_single_quadpoint.hpp"
 #include "fe/wedge/operators/shell/performance_history/epsilon_divdiv_kerngen_v03_teams_precomp.hpp"
 #include "fe/wedge/operators/shell/performance_history/epsilon_divdiv_kerngen_v04_shmem_coords.hpp"
 #include "fe/wedge/operators/shell/performance_history/epsilon_divdiv_kerngen_v05_shmem_src_k.hpp"
@@ -38,6 +39,7 @@ using fe::wedge::operators::shell::EpsilonDivDivSimple;
 using fe::wedge::operators::shell::EpsilonDivDivKerngen;
 using fe::wedge::operators::shell::epsdivdiv_history::EpsilonDivDivKerngenV01Initial;
 using fe::wedge::operators::shell::epsdivdiv_history::EpsilonDivDivKerngenV02SplitDimij;
+using fe::wedge::operators::shell::epsdivdiv_history::EpsilonDivDivKerngenV02bSingleQuadpoint;
 using fe::wedge::operators::shell::epsdivdiv_history::EpsilonDivDivKerngenV03TeamsPrecomp;
 using fe::wedge::operators::shell::epsdivdiv_history::EpsilonDivDivKerngenV04ShmemCoords;
 using fe::wedge::operators::shell::epsdivdiv_history::EpsilonDivDivKerngenV05ShmemSrcK;
@@ -80,6 +82,7 @@ enum class BenchmarkType : int
     EpsDivDivKerngenDouble,
     EpsDivDivKerngenV01Initial,
     EpsDivDivKerngenV02SplitDimij,
+    EpsDivDivKerngenV02bSingleQuadpoint,
     EpsDivDivKerngenV03TeamsPrecomp,
     EpsDivDivKerngenV04ShmemCoords,
     EpsDivDivKerngenV05ShmemSrcK,
@@ -93,11 +96,13 @@ enum class BenchmarkType : int
 };
 
 constexpr auto all_benchmark_types = {
+    BenchmarkType::EpsDivDivSimpleDouble,
+    BenchmarkType::EpsDivDivDouble,
+    BenchmarkType::EpsDivDivKerngenV01Initial,
+    BenchmarkType::EpsDivDivKerngenV02SplitDimij,
+    BenchmarkType::EpsDivDivKerngenV02bSingleQuadpoint,
     BenchmarkType::EpsDivDivKerngenV07SplitPaths,
-    BenchmarkType::EpsDivDivKerngenV08ScalarCoalesced,
     BenchmarkType::EpsDivDivKerngenV09SeparateScatter,
-    BenchmarkType::EpsDivDivKerngenV10SeqRpasses,
-    BenchmarkType::EpsDivDivKerngenDouble,
 };
 
 const std::map< BenchmarkType, std::string > benchmark_description = {
@@ -113,6 +118,7 @@ const std::map< BenchmarkType, std::string > benchmark_description = {
     { BenchmarkType::EpsDivDivKerngenDouble, "EpsDivDivKerngen (double)" },
     { BenchmarkType::EpsDivDivKerngenV01Initial, "v01 initial (1t/cell, 6qp, 3x3 dimij)" },
     { BenchmarkType::EpsDivDivKerngenV02SplitDimij, "v02 split dimij (2x3 complexity)" },
+    { BenchmarkType::EpsDivDivKerngenV02bSingleQuadpoint, "v02b single quadpoint (1qp)" },
     { BenchmarkType::EpsDivDivKerngenV03TeamsPrecomp, "v03 teams + precomputation" },
     { BenchmarkType::EpsDivDivKerngenV04ShmemCoords, "v04 shmem coords, collapsed qp" },
     { BenchmarkType::EpsDivDivKerngenV05ShmemSrcK, "v05 shmem src + k dofs" },
@@ -344,6 +350,14 @@ BenchmarkData
     else if ( benchmark == BenchmarkType::EpsDivDivKerngenV02SplitDimij )
     {
         EpsilonDivDivKerngenV02SplitDimij< double > A(
+            domain, coords_shell_double, coords_radii_double, boundary_mask_data,
+            coeff_double.grid_data(), bcs, false );
+        duration = measure_run_time( executions, A, src_vec_double, dst_vec_double );
+        dofs     = dofs_vec;
+    }
+    else if ( benchmark == BenchmarkType::EpsDivDivKerngenV02bSingleQuadpoint )
+    {
+        EpsilonDivDivKerngenV02bSingleQuadpoint< double > A(
             domain, coords_shell_double, coords_radii_double, boundary_mask_data,
             coeff_double.grid_data(), bcs, false );
         duration = measure_run_time( executions, A, src_vec_double, dst_vec_double );
