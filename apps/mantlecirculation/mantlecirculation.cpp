@@ -135,7 +135,15 @@ struct ConductiveProfileInterpolator
     {
         const dense::Vec< ScalarType, 3 > coords = grid::shell::coords( sd, x, y, r, grid_, radii_ );
         const ScalarType radius = coords.norm();
-        const ScalarType T_ref  = ( r_min_ * r_max_ / radius - r_min_ ) / ( r_max_ - r_min_ );
+
+        // Guard against zero radius (non-owned ghost nodes may have zero coordinates).
+        if ( radius < ScalarType( 1e-15 ) )
+        {
+            data_( sd, x, y, r ) = ScalarType( 0 );
+            return;
+        }
+
+        const ScalarType T_ref = ( r_min_ * r_max_ / radius - r_min_ ) / ( r_max_ - r_min_ );
 
         ScalarType T_val = T_ref;
         if ( has_sph_ )
@@ -282,7 +290,7 @@ struct ViscosityFromTemperature
         switch ( law_ )
         {
         case ViscosityLaw::FRANK_KAMENETSKII:
-            eta_( id, x, y, r ) = Kokkos::pow( ScalarType( 10 ), rmu_ * ( ScalarType( 0.5 ) - T_val ) );
+            eta_( id, x, y, r ) = Kokkos::pow( rmu_, ScalarType( 0.5 ) - T_val );
             break;
         case ViscosityLaw::CONSTANT:
         default:
@@ -366,6 +374,11 @@ ScalarType compute_nusselt(
                     const auto J       = jac( wedge_phy_surf[wedge], r_1, r_2, qp );
                     const auto det     = J.det();
                     const auto abs_det = Kokkos::abs( det );
+
+                    // Skip degenerate elements (collapsed wedges at pentagon vertices).
+                    if ( abs_det < ScalarType( 1e-20 ) )
+                        continue;
+
                     const auto J_inv_T = J.inv().transposed();
 
                     // Compute ∇T in physical coordinates at this quadrature point.
@@ -417,8 +430,11 @@ ScalarType compute_nusselt(
     // Actually for the CMB, the outward normal of the shell domain points inward (-r̂), so:
     //   ∇T_ref · (-r̂) = +r_min r_max / (r_min² (r_max - r_min)) > 0
     // But we use normal_sign to flip, so the denominator should use the same convention.
-    const ScalarType denom = -ScalarType( 4 ) * M_PI * r_min * r_max / ( r_max - r_min );
-    const ScalarType Nu = global_integral / denom;
+    // The denominator is the surface integral of ∂T_ref/∂r over the boundary.
+    // For the conductive profile, this is the same (negative) constant at both surfaces.
+    // We take the absolute value so that Nu is always positive.
+    const ScalarType denom = ScalarType( 4 ) * M_PI * r_min * r_max / ( r_max - r_min );
+    const ScalarType Nu = Kokkos::abs( global_integral ) / denom;
 
     return Nu;
 }
@@ -970,6 +986,8 @@ Result<> run( const Parameters& prm )
                 has_sph } );
         Kokkos::fence();
 
+        communication::shell::send_recv( domains[velocity_level], T.grid_data() );
+
         // Project Q1 T → FV T_fct.
         fv::hex::l2_project_fe_to_fv(
             T_fct, T, domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level] );
@@ -1124,7 +1142,7 @@ Result<> run( const Parameters& prm )
 
         logroot << "Setting up Stokes rhs ..." << std::endl;
 
-        Kokkos::parallel_for(
+Kokkos::parallel_for(
             "Stokes rhs interpolation",
             local_domain_md_range_policy_nodes( domains[velocity_level] ),
             RHSVelocityInterpolator(
@@ -1134,14 +1152,14 @@ Result<> run( const Parameters& prm )
                 T.grid_data(),
                 prm.physics_parameters.rayleigh_number ) );
 
-        linalg::apply( M, stok_vecs["tmp"].block_1(), stok_vecs["f"].block_1() );
+linalg::apply( M, stok_vecs["tmp"].block_1(), stok_vecs["f"].block_1() );
 
-        fe::strong_algebraic_homogeneous_velocity_dirichlet_enforcement_stokes_like(
+fe::strong_algebraic_homogeneous_velocity_dirichlet_enforcement_stokes_like(
             stok_vecs["f"],
             boundary_mask_data[velocity_level],
             grid::shell::get_shell_boundary_flag( bcs, DIRICHLET ) );
 
-        fe::strong_algebraic_freeslip_enforcement_in_place(
+fe::strong_algebraic_freeslip_enforcement_in_place(
             stok_vecs["f"],
             coords_shell[velocity_level],
             boundary_mask_data[velocity_level],
