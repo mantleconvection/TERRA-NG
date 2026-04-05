@@ -99,6 +99,12 @@ struct EnergySolverParameters
     double krylov_absolute_tolerance = 1e-12;
 };
 
+enum class EnergySolverType
+{
+    FCT,
+    SUPG,
+};
+
 struct TimeSteppingParameters
 {
     double pseudo_cfl = 0.5;
@@ -106,7 +112,10 @@ struct TimeSteppingParameters
 
     int max_timesteps = 10;
 
-    int energy_substeps = 1;
+    int energy_substeps    = 1;
+    int picard_iterations  = 1;
+
+    EnergySolverType energy_solver = EnergySolverType::FCT;
 };
 
 struct IOParameters
@@ -332,6 +341,25 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
             "This means the number of time steps executed might be smaller than what is passed in here." );
     add_option_with_default( app, "--energy-substeps", parameters.time_stepping_parameters.energy_substeps )
         ->group( "Time Discretization" );
+    add_option_with_default( app, "--picard-iterations", parameters.time_stepping_parameters.picard_iterations )
+        ->group( "Time Discretization" )
+        ->description(
+            "Number of Picard (fixed-point) iterations per timestep. "
+            "Each iteration re-solves Stokes and energy from the same starting temperature. "
+            "Default: 1 (no iteration, current behavior)." );
+
+    std::map< std::string, EnergySolverType > energy_solver_map{
+        { "fct", EnergySolverType::FCT },
+        { "supg", EnergySolverType::SUPG },
+    };
+
+    add_option_with_default( app, "--energy-solver", parameters.time_stepping_parameters.energy_solver )
+        ->transform( CLI::CheckedTransformer( energy_solver_map, CLI::ignore_case ) )
+        ->default_val( "fct" )
+        ->group( "Time Discretization" )
+        ->description(
+            "'fct': Explicit FCT advection-diffusion (default). "
+            "'supg': Implicit SUPG advection-diffusion with FGMRES solver." );
 
     /////////////////////
     /// Stokes solver ///
