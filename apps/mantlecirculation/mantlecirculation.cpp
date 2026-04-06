@@ -400,6 +400,8 @@ ScalarType compute_boundary_heat_flux_integral(
     const grid::Grid4DDataScalar< ScalarType >&          T_grid,
     const grid::Grid3DDataVec< ScalarType, 3 >&          coords_shell,
     const grid::Grid2DDataScalar< ScalarType >&          coords_radii,
+    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
+    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& ownership_mask,
     const bool                                           at_surface )
 {
     using namespace fe::wedge;
@@ -409,6 +411,8 @@ ScalarType compute_boundary_heat_flux_integral(
     const int nr = domain.domain_info().subdomain_num_nodes_radially();
 
     const int r_cell = at_surface ? ( nr - 2 ) : 0;
+    const int r_boundary_node = at_surface ? ( nr - 1 ) : 0;
+    const auto expected_flag = at_surface ? grid::shell::ShellBoundaryFlag::SURFACE : grid::shell::ShellBoundaryFlag::CMB;
     const ScalarType zeta_boundary = at_surface ? ScalarType( 1 ) : ScalarType( -1 );
     const ScalarType normal_sign = at_surface ? ScalarType( 1 ) : ScalarType( -1 );
 
@@ -418,6 +422,12 @@ ScalarType compute_boundary_heat_flux_integral(
         "nusselt_surface_integral",
         Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 0, 0 }, { num_subdomains, nx - 1, nx - 1 } ),
         KOKKOS_LAMBDA( const int sd, const int x_cell, const int y_cell, ScalarType& sum ) {
+            // Skip subdomains that are not at the actual boundary (radial subdomain decomposition).
+            if ( boundary_mask( sd, x_cell, y_cell, r_boundary_node ) != expected_flag )
+                return;
+            // Skip cells whose anchor node is not owned to avoid double-counting at lateral subdomain boundaries.
+            if ( ownership_mask( sd, x_cell, y_cell, r_cell ) != grid::NodeOwnershipFlag::OWNED )
+                return;
             constexpr int nqp = quadrature::quad_felippa_3x2_num_quad_points;
             dense::Vec< ScalarType, 3 > quad_points[nqp];
             ScalarType                  quad_weights[nqp];
@@ -499,10 +509,12 @@ ScalarType compute_nusselt(
     const linalg::VectorQ1Scalar< ScalarType >& T_ref,
     const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
     const grid::Grid2DDataScalar< ScalarType >&  coords_radii,
+    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
+    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& ownership_mask,
     const bool                                   at_surface )
 {
-    const ScalarType numerator   = compute_boundary_heat_flux_integral( domain, T.grid_data(), coords_shell, coords_radii, at_surface );
-    const ScalarType denominator = compute_boundary_heat_flux_integral( domain, T_ref.grid_data(), coords_shell, coords_radii, at_surface );
+    const ScalarType numerator   = compute_boundary_heat_flux_integral( domain, T.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, at_surface );
+    const ScalarType denominator = compute_boundary_heat_flux_integral( domain, T_ref.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, at_surface );
 
     // Also compute ∫ dΓ for diagnostics (should be 4π*r² ≈ 61.89 at surface).
     // And compute a simple volume-averaged surface gradient for cross-check.
@@ -512,6 +524,8 @@ ScalarType compute_nusselt(
         const int nx = domain.domain_info().subdomain_num_nodes_per_side_laterally();
         const int nr = domain.domain_info().subdomain_num_nodes_radially();
         const int r_cell = at_surface ? ( nr - 2 ) : 0;
+        const int r_boundary_node = at_surface ? ( nr - 1 ) : 0;
+        const auto expected_flag = at_surface ? grid::shell::ShellBoundaryFlag::SURFACE : grid::shell::ShellBoundaryFlag::CMB;
         const ScalarType zeta_boundary = at_surface ? ScalarType( 1 ) : ScalarType( -1 );
 
         ScalarType local_area = 0;
@@ -519,6 +533,12 @@ ScalarType compute_nusselt(
             "nusselt_surface_area",
             Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 0, 0 }, { num_subdomains, nx - 1, nx - 1 } ),
             KOKKOS_LAMBDA( const int sd, const int x_cell, const int y_cell, ScalarType& sum ) {
+                // Skip subdomains that are not at the actual boundary.
+                if ( boundary_mask( sd, x_cell, y_cell, r_boundary_node ) != expected_flag )
+                    return;
+                // Skip cells whose anchor node is not owned to avoid double-counting at lateral subdomain boundaries.
+                if ( ownership_mask( sd, x_cell, y_cell, r_cell ) != grid::NodeOwnershipFlag::OWNED )
+                    return;
                 constexpr int nqp = quadrature::quad_felippa_3x2_num_quad_points;
                 dense::Vec< ScalarType, 3 > quad_points[nqp];
                 ScalarType                  quad_weights[nqp];
@@ -1363,7 +1383,7 @@ Result<> run( const Parameters& prm )
     // Compute Nusselt at timestep 0 (before any FCT steps) for diagnostics.
     {
         const auto Nu_top_0 = compute_nusselt(
-            domains[velocity_level], T, T_ref, coords_shell[velocity_level], coords_radii[velocity_level], true );
+            domains[velocity_level], T, T_ref, coords_shell[velocity_level], coords_radii[velocity_level], boundary_mask_data[velocity_level], ownership_mask_data[velocity_level], true );
         const auto Nu_top_fv_0 = compute_nusselt_fv(
             domains[velocity_level], T_fct,
             prm.boundary_conditions_parameters.temperature_surface,
@@ -1673,6 +1693,8 @@ Result<> run( const Parameters& prm )
                 T_ref,
                 coords_shell[velocity_level],
                 coords_radii[velocity_level],
+                boundary_mask_data[velocity_level],
+                ownership_mask_data[velocity_level],
                 /*at_surface=*/true );
             const auto Nu_top_fv = compute_nusselt_fv(
                 domains[velocity_level],
