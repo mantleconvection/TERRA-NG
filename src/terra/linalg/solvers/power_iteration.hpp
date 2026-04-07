@@ -2,6 +2,8 @@
 
 #include "terra/linalg/operator.hpp"
 
+#include <limits>
+
 namespace terra::linalg::solvers {
 
 /// @brief Power iteration to estimate the largest eigenvalue of a
@@ -25,6 +27,10 @@ double power_iteration(
 
     // normalize
     auto norm = linalg::norm_2( tmpIt );
+    if ( norm < std::numeric_limits< double >::min() )
+    {
+        return 1.0; // safe fallback
+    }
     lincomb( tmpIt, { 1.0 / norm }, { tmpIt }, 0.0 );
 
     // apply operator
@@ -35,6 +41,10 @@ double power_iteration(
     {
         // normalize
         norm = linalg::norm_2( tmpAux );
+        if ( norm < std::numeric_limits< double >::min() )
+        {
+            return radius > 0.0 ? radius : 1.0;
+        }
         lincomb( tmpIt, { 1.0 / norm }, { tmpAux }, 0.0 );
 
         // apply operator

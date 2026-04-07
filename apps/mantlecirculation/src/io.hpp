@@ -80,6 +80,54 @@ inline Result<> compute_and_write_radial_profiles(
     return { Ok{} };
 }
 
+/// Decompose a Q1 velocity field into its radial (signed) and tangential (magnitude)
+/// components and write radial profiles for both, reusing
+/// `compute_and_write_radial_profiles`. Output files are named
+/// `radial_profiles_u_r_<step>.csv` and `radial_profiles_u_t_<step>.csv`.
+inline Result<> compute_and_write_velocity_radial_profiles(
+    const linalg::VectorQ1Vec< ScalarType, 3 >&              velocity,
+    const grid::Grid3DDataVec< ScalarType, 3 >&              coords_shell,
+    const grid::Grid2DDataScalar< int >&                     subdomain_shell_idx,
+    const DistributedDomain&                                 domain,
+    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask,
+    const IOParameters&                                      io_parameters,
+    const int                                                timestep )
+{
+    VectorQ1Scalar< ScalarType > u_r( "u_r", domain, mask );
+    VectorQ1Scalar< ScalarType > u_t( "u_t", domain, mask );
+
+    const auto u_grid   = velocity.grid_data();
+    auto       u_r_grid = u_r.grid_data();
+    auto       u_t_grid = u_t.grid_data();
+
+    Kokkos::parallel_for(
+        "decompose velocity into radial and tangential",
+        Kokkos::MDRangePolicy(
+            { 0, 0, 0, 0 },
+            { u_grid.extent( 0 ), u_grid.extent( 1 ), u_grid.extent( 2 ), u_grid.extent( 3 ) } ),
+        KOKKOS_LAMBDA( int sd, int x, int y, int r ) {
+            const ScalarType ux      = u_grid( sd, x, y, r, 0 );
+            const ScalarType uy      = u_grid( sd, x, y, r, 1 );
+            const ScalarType uz      = u_grid( sd, x, y, r, 2 );
+            const ScalarType rx      = coords_shell( sd, x, y, 0 );
+            const ScalarType ry      = coords_shell( sd, x, y, 1 );
+            const ScalarType rz      = coords_shell( sd, x, y, 2 );
+            const ScalarType ur_node = ux * rx + uy * ry + uz * rz;
+            const ScalarType umag2   = ux * ux + uy * uy + uz * uz;
+            const ScalarType ut2     = umag2 - ur_node * ur_node;
+            u_r_grid( sd, x, y, r )  = ur_node;
+            u_t_grid( sd, x, y, r )  = ( ut2 > ScalarType( 0 ) ) ? Kokkos::sqrt( ut2 ) : ScalarType( 0 );
+        } );
+    Kokkos::fence();
+
+    auto res1 = compute_and_write_radial_profiles( u_r, subdomain_shell_idx, domain, io_parameters, timestep );
+    if ( res1.is_err() )
+    {
+        return res1;
+    }
+    return compute_and_write_radial_profiles( u_t, subdomain_shell_idx, domain, io_parameters, timestep );
+}
+
 inline Result<> write_timer_tree( const IOParameters& io_parameters, const int timestep )
 {
     util::TimerTree::instance().aggregate_mpi();

@@ -294,7 +294,9 @@ struct ViscosityFromTemperature
         switch ( law_ )
         {
         case ViscosityLaw::FRANK_KAMENETSKII:
-            eta_( id, x, y, r ) = Kokkos::pow( ScalarType( 10 ), rmu_ * ( ScalarType( 0.5 ) - T_val ) );
+            // Zhong et al. (2008) form: mu = rmu^(0.5 - T).
+            // Total viscosity contrast (cold/hot) = rmu.
+            eta_( id, x, y, r ) = Kokkos::pow( rmu_, ScalarType( 0.5 ) - T_val );
             break;
         case ViscosityLaw::CONSTANT:
         default:
@@ -1114,11 +1116,19 @@ Result<> run( const Parameters& prm )
 
     if ( init_temp.profile == InitialTemperatureProfile::CONDUCTIVE )
     {
+        const bool has_sph_2 =
+            ( init_temp.sph_degree_l_2 > 0 && init_temp.sph_factor_2 != 0.0 && init_temp.sph_epsilon != 0.0 );
+
         logroot << "Initial temperature: conductive profile";
         if ( init_temp.sph_degree_l > 0 && init_temp.sph_epsilon != 0.0 )
         {
-            logroot << " + Y_" << init_temp.sph_degree_l << "^" << init_temp.sph_order_m
-                    << " perturbation (eps=" << init_temp.sph_epsilon << ")";
+            logroot << " + eps * (Y_" << init_temp.sph_degree_l << "^" << init_temp.sph_order_m;
+            if ( has_sph_2 )
+            {
+                logroot << " + " << init_temp.sph_factor_2 << " * Y_" << init_temp.sph_degree_l_2 << "^"
+                        << init_temp.sph_order_m_2;
+            }
+            logroot << ") (eps=" << init_temp.sph_epsilon << ")";
         }
         logroot << std::endl;
 
@@ -1129,6 +1139,25 @@ Result<> run( const Parameters& prm )
         {
             sph_coeffs = shell::spherical_harmonics_coefficients_grid< ScalarType, ScalarType >(
                 init_temp.sph_degree_l, init_temp.sph_order_m, coords_shell[velocity_level] );
+
+            if ( has_sph_2 )
+            {
+                // Add factor_2 * Y_l2^m2 to the first harmonic in-place.
+                auto sph_coeffs_2 = shell::spherical_harmonics_coefficients_grid< ScalarType, ScalarType >(
+                    init_temp.sph_degree_l_2, init_temp.sph_order_m_2, coords_shell[velocity_level] );
+                const ScalarType factor_2 = static_cast< ScalarType >( init_temp.sph_factor_2 );
+                Kokkos::parallel_for(
+                    "combine spherical harmonics",
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >(
+                        { 0, 0, 0 },
+                        { static_cast< int >( sph_coeffs.extent( 0 ) ),
+                          static_cast< int >( sph_coeffs.extent( 1 ) ),
+                          static_cast< int >( sph_coeffs.extent( 2 ) ) } ),
+                    KOKKOS_LAMBDA( int sd, int x, int y ) {
+                        sph_coeffs( sd, x, y ) += factor_2 * sph_coeffs_2( sd, x, y );
+                    } );
+                Kokkos::fence();
+            }
         }
 
         // Fill Q1 T with conductive profile + spherical harmonic perturbation.
@@ -1225,16 +1254,22 @@ Result<> run( const Parameters& prm )
 
     if ( loading_checkpoint )
     {
-        // Starting the time stepping from the next step after the loaded step.
-        timestep_initial = prm.io_parameters.checkpoint_step;
+        const int checkpoint_file_step = prm.io_parameters.checkpoint_step;
 
-        logroot << "Loading checkpoint from " << prm.io_parameters.checkpoint_dir << " at step " << timestep_initial
+        // If a checkpoint-timestep is provided, use it as the actual simulation timestep.
+        // Otherwise fall back to the checkpoint output step number.
+        timestep_initial = ( prm.io_parameters.checkpoint_timestep >= 0 )
+                             ? prm.io_parameters.checkpoint_timestep
+                             : checkpoint_file_step;
+
+        logroot << "Loading checkpoint from " << prm.io_parameters.checkpoint_dir
+                << " (file step " << checkpoint_file_step << ", simulation timestep " << timestep_initial << ")"
                 << std::endl;
 
         auto success_vel = io::read_xdmf_checkpoint_grid(
             prm.io_parameters.checkpoint_dir,
             label_stokes + "_u",
-            timestep_initial,
+            checkpoint_file_step,
             domains[velocity_level],
             u.block_1().grid_data() );
 
@@ -1246,7 +1281,7 @@ Result<> run( const Parameters& prm )
         auto success_temp = io::read_xdmf_checkpoint_grid(
             prm.io_parameters.checkpoint_dir,
             label_temperature,
-            timestep_initial,
+            checkpoint_file_step,
             domains[velocity_level],
             T.grid_data() );
 
@@ -1255,10 +1290,8 @@ Result<> run( const Parameters& prm )
             Kokkos::abort( success_temp.error().c_str() );
         }
 
-        // Setting XDMF to the same step as we have loaded.
-        // Thus, we will now re-write the loaded data.
-        // Maybe a good sanity check.
-        xdmf_output.set_write_counter( timestep_initial );
+        // Setting XDMF write counter to continue from the checkpoint file step.
+        xdmf_output.set_write_counter( checkpoint_file_step );
 
         // T_fct is not stored in checkpoints (only Q1 T is).  Recover the FV cell-average
         // field from the restored Q1 T via an L2 projection.  Ghost layers are populated
@@ -1280,6 +1313,14 @@ Result<> run( const Parameters& prm )
             T, subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep_initial );
         compute_and_write_radial_profiles(
             eta[velocity_level], subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep_initial );
+        compute_and_write_velocity_radial_profiles(
+            u.block_1(),
+            coords_shell[velocity_level],
+            subdomain_shell_idx,
+            domains[velocity_level],
+            ownership_mask_data[velocity_level],
+            prm.io_parameters,
+            timestep_initial );
     }
 
     // Reference conductive temperature profile for Nusselt number computation.
@@ -1300,7 +1341,7 @@ Result<> run( const Parameters& prm )
     Kokkos::fence();
     communication::shell::send_recv( domains[velocity_level], T_ref.grid_data() );
 
-    ScalarType simulated_time = 0.0;
+    ScalarType simulated_time = prm.time_stepping_parameters.t_start;
 
     // We need some global h. Let's, for simplicity (does not need to be too accurate) just choose the smallest h in
     // radial direction.
@@ -1682,6 +1723,14 @@ Result<> run( const Parameters& prm )
                 T, subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep );
             compute_and_write_radial_profiles(
                 eta[velocity_level], subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep );
+            compute_and_write_velocity_radial_profiles(
+                u.block_1(),
+                coords_shell[velocity_level],
+                subdomain_shell_idx,
+                domains[velocity_level],
+                ownership_mask_data[velocity_level],
+                prm.io_parameters,
+                timestep );
         }
 
         // Compute Nusselt number at the surface.

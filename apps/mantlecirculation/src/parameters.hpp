@@ -64,6 +64,13 @@ struct InitialTemperatureParameters
     int                       sph_degree_l = 0;
     int                       sph_order_m  = 0;
     double                    sph_epsilon  = 0.0;
+
+    // Optional second spherical harmonic for combined modes (e.g. cubic symmetry
+    // T_perturb = Y_4^0 + (5/7) * Y_4^4). Set sph_degree_l_2 > 0 to enable.
+    // The total perturbation is eps * envelope(r) * (Y_l1^m1 + factor_2 * Y_l2^m2).
+    int                       sph_degree_l_2 = 0;
+    int                       sph_order_m_2  = 0;
+    double                    sph_factor_2   = 0.0;
 };
 
 struct PhysicsParameters
@@ -108,6 +115,7 @@ enum class EnergySolverType
 struct TimeSteppingParameters
 {
     double pseudo_cfl = 0.5;
+    double t_start    = 0.0;
     double t_end      = 1.0;
 
     int max_timesteps = 10;
@@ -128,7 +136,8 @@ struct IOParameters
     std::string timer_trees_dir         = "timer_trees";
 
     std::string checkpoint_dir;
-    int         checkpoint_step = -1;
+    int         checkpoint_step     = -1;
+    int         checkpoint_timestep = -1;
 
     int output_frequency = 1;
 
@@ -320,6 +329,21 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Initial Temperature" )
         ->description( "Perturbation amplitude epsilon: T = T_ref + eps * Y_l^m." );
 
+    add_option_with_default(
+        app, "--initial-temperature-sph-degree-2", parameters.physics_parameters.initial_temperature.sph_degree_l_2 )
+        ->group( "Initial Temperature" )
+        ->description( "Optional second spherical harmonic degree l2 (0 = none). For combined modes." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-order-2", parameters.physics_parameters.initial_temperature.sph_order_m_2 )
+        ->group( "Initial Temperature" )
+        ->description( "Optional second spherical harmonic order m2." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-factor-2", parameters.physics_parameters.initial_temperature.sph_factor_2 )
+        ->group( "Initial Temperature" )
+        ->description( "Weight factor for second spherical harmonic: T += eps * envelope * (Y_l1^m1 + factor_2 * Y_l2^m2)." );
+
     ///////////////////////////
     /// Time discretization ///
     ///////////////////////////
@@ -330,6 +354,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
             "parallel reduce over all cells. However, a smaller value might still be desired due to accuracy "
             "considerations. You can scale the computed dt using this value (e.g. set to 0.5 to half the estimated dt, "
             "set to 1.0 to just use the estimated dt)." )
+        ->group( "Time Discretization" );
+    add_option_with_default( app, "--t-start", parameters.time_stepping_parameters.t_start )
         ->group( "Time Discretization" );
     add_option_with_default( app, "--t-end", parameters.time_stepping_parameters.t_end )
         ->group( "Time Discretization" );
@@ -418,6 +444,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
 
     add_option_with_default( app, "--checkpoint-dir", parameters.io_parameters.checkpoint_dir )->group( "I/O" );
     add_option_with_default( app, "--checkpoint-step", parameters.io_parameters.checkpoint_step )->group( "I/O" );
+    add_option_with_default( app, "--checkpoint-timestep", parameters.io_parameters.checkpoint_timestep )->group( "I/O" );
 
     add_option_with_default( app, "--output-frequency", parameters.io_parameters.output_frequency )
         ->group( "I/O" )

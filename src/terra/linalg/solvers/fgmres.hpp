@@ -279,6 +279,21 @@ class FGMRES
                           { "absolute_residual", abs_res } } );
                 }
 
+                // SAFE BREAK 3: NaN detected in residual estimate.
+                // Discard this iteration and return the current best solution.
+                if ( !std::isfinite( abs_res ) )
+                {
+                    util::logroot
+                        << "FGMRES: NaN or Inf detected in residual estimate. "
+                           "Returning current solution without this iteration's update.\n"
+                           "        (Details: total_iters = "
+                        << total_iters << ", j = " << j << ")" << std::endl;
+
+                    inner_its = j; // exclude the corrupted iteration from the back-solve
+                    ++total_iters;
+                    break;
+                }
+
                 inner_its = j + 1;
 
                 // Check for convergence
@@ -314,7 +329,14 @@ class FGMRES
             lincomb( r, { 1.0, -1.0 }, { b, r } );
             beta0 = std::sqrt( dot( r, r ) );
 
-            // Check for final convergence
+            // Check for final convergence or abort on NaN
+            if ( !std::isfinite( beta0 ) )
+            {
+                util::logroot << "FGMRES: Residual is NaN/Inf after restart. Aborting solve.\n"
+                                 "        (Details: beta0 = "
+                              << beta0 << ", total_iters = " << total_iters << ")" << std::endl;
+                return;
+            }
             if ( beta0 <= options_.absolute_residual_tolerance ||
                  beta0 / initial_residual <= options_.relative_residual_tolerance )
             {
