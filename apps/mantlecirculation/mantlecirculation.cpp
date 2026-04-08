@@ -119,9 +119,9 @@ struct InitialConditionInterpolator
 };
 
 /// Initial condition for Q1 temperature (conductive profile + spherical harmonic perturbation):
-/// T = T_ref(r) + eps * Y_l^m(theta, phi) * sin(pi * (r - r_min) / (r_max - r_min))
+/// T = T_ref(r) + eps * Y_l^m(theta, phi)
 /// where T_ref is the steady-state spherical conduction solution:
-///   T_ref(r) = [ r_min * r_max / r  -  r_min ] / (r_max - r_min)
+///   T_ref(r) = r_min * r_max / r  -  r_min
 struct ConductiveProfileInterpolator
 {
     ScalarType                          r_min_, r_max_, eps_;
@@ -144,15 +144,12 @@ struct ConductiveProfileInterpolator
             return;
         }
 
-        const ScalarType T_ref =
-            ( r_min_ * r_max_ / radius - r_min_ ) / ( r_max_ - r_min_ );
+        const ScalarType T_ref = r_min_ * r_max_ / radius - r_min_;
 
         ScalarType T_val = T_ref;
         if ( has_sph_ )
         {
-            const ScalarType radial_envelope =
-                Kokkos::sin( M_PI * ( radius - r_min_ ) / ( r_max_ - r_min_ ) );
-            T_val += eps_ * sph_coeffs_( sd, x, y ) * radial_envelope;
+            T_val += eps_ * sph_coeffs_( sd, x, y );
         }
 
         data_( sd, x, y, r ) = T_val;
@@ -1174,8 +1171,10 @@ Result<> run( const Parameters& prm )
                 sph_coeffs,
                 has_sph } );
         Kokkos::fence();
-
-        communication::shell::send_recv( domains[velocity_level], T.grid_data() );
+        // NOTE: do NOT call send_recv here. The kernel writes the same value to every
+        // subdomain copy of each shared node already; send_recv (SUM reduction) would
+        // accumulate them and produce N*value at shared nodes (visible in the XDMF dump).
+        // The downstream FE->FV->FE projection re-establishes consistency.
 
         // Project Q1 T → FV T_fct.
         fv::hex::l2_project_fe_to_fv(
@@ -1247,6 +1246,28 @@ Result<> run( const Parameters& prm )
     xdmf_output.add( T.grid_data() );
     xdmf_output.add( u.block_1().grid_data() );
     xdmf_output.add( eta[velocity_level].grid_data() );
+
+    // Reference conductive temperature profile (also used for the Nusselt number).
+    // T_ref = r_min * r_max / r - r_min : spherical steady-state conduction solution.
+    VectorQ1Scalar< ScalarType > T_ref( "T_ref", domains[velocity_level], ownership_mask_data[velocity_level] );
+    Kokkos::parallel_for(
+        "conductive profile T_ref",
+        local_domain_md_range_policy_nodes( domains[velocity_level] ),
+        ConductiveProfileInterpolator{
+            domains[velocity_level].domain_info().radii().front(),
+            domains[velocity_level].domain_info().radii().back(),
+            ScalarType( 0 ),
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            T_ref.grid_data(),
+            {},
+            false } );
+    Kokkos::fence();
+    // NOTE: do NOT call send_recv here. The kernel writes the correct value to every
+    // subdomain copy of each shared node already; calling send_recv would accumulate
+    // them and produce N*value at shared nodes (where N is the sharing count).
+
+    xdmf_output.add( T_ref.grid_data() );
 
     int timestep_initial = 0;
 
@@ -1322,24 +1343,6 @@ Result<> run( const Parameters& prm )
             prm.io_parameters,
             timestep_initial );
     }
-
-    // Reference conductive temperature profile for Nusselt number computation.
-    // T_ref = (r_min * r_max / r - r_min) / (r_max - r_min): spherical steady-state conduction solution.
-    VectorQ1Scalar< ScalarType > T_ref( "T_ref", domains[velocity_level], ownership_mask_data[velocity_level] );
-    Kokkos::parallel_for(
-        "conductive profile T_ref",
-        local_domain_md_range_policy_nodes( domains[velocity_level] ),
-        ConductiveProfileInterpolator{
-            domains[velocity_level].domain_info().radii().front(),
-            domains[velocity_level].domain_info().radii().back(),
-            ScalarType( 0 ),
-            coords_shell[velocity_level],
-            coords_radii[velocity_level],
-            T_ref.grid_data(),
-            {},
-            false } );
-    Kokkos::fence();
-    communication::shell::send_recv( domains[velocity_level], T_ref.grid_data() );
 
     ScalarType simulated_time = prm.time_stepping_parameters.t_start;
 

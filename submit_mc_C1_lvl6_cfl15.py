@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""C1 benchmark, level 6, pseudo-cfl=1.5. Outputs go to $WORK_pn29po."""
+"""C1 benchmark, level 6, pseudo-cfl=1.5. JUWELS Booster. Outputs go to $SCRATCH_walberlamovinggeo."""
 import os
 import subprocess
 from pathlib import Path
 
 # -----------------------
-# Resolve $WORK_pn29po
+# Resolve $SCRATCH_walberlamovinggeo
 # -----------------------
-work_root = os.environ.get("WORK_pn29po")
+work_root = os.environ.get("SCRATCH_walberlamovinggeo")
 if not work_root:
-    raise SystemExit("ERROR: $WORK_pn29po is not set in the submitting shell.")
+    raise SystemExit("ERROR: $SCRATCH_walberlamovinggeo is not set in the submitting shell.")
+user = os.environ.get("USER")
+if not user:
+    raise SystemExit("ERROR: $USER is not set in the submitting shell.")
 
-work_base = Path(work_root) / "mantlecirculation"
+work_base = Path(work_root) / user / "mantlecirculation"
 work_base.mkdir(parents=True, exist_ok=True)
 
 # -----------------------
@@ -19,10 +22,10 @@ work_base.mkdir(parents=True, exist_ok=True)
 # -----------------------
 job_name      = "mc_C1_lvl6_cfl15"
 nodes         = 2
-gpus_per_node = 5
+gpus_per_node = 4
 time_limit    = "24:00:00"
-partition     = "general"
-account       = "pn29po"
+partition     = "booster"
+account       = "walberlamovinggeo"
 
 binary = "./mantlecirculation"
 config = "./config_C1_lvl6_cfl15.toml"
@@ -38,38 +41,24 @@ job_dir = Path("job_scripts")
 job_dir.mkdir(exist_ok=True)
 script_path = job_dir / f"{job_name}.sh"
 
-script_content = f"""#!/bin/bash -l
+script_content = f"""#!/bin/bash -x
 #SBATCH --job-name={job_name}
 #SBATCH --output={log_o}
 #SBATCH --error={log_e}
 #SBATCH --partition={partition}
-#SBATCH --nodes={nodes}
-#SBATCH --ntasks-per-node={gpus_per_node}
-#SBATCH --time={time_limit}
 #SBATCH --account={account}
+#SBATCH --nodes={nodes}
+#SBATCH --ntasks={nodes * gpus_per_node}
+#SBATCH --ntasks-per-node={gpus_per_node}
+#SBATCH --gpus-per-node={gpus_per_node}
+#SBATCH --gpu-bind=closest
+#SBATCH --time={time_limit}
 
-module load slurm_setup
-
-module sw stack/24.5.0
-module load cmake gcc/14.2.0
-module load intel-toolkit/2025.2.0
-
-module list
+source ~/.bashrc
 
 cd ${{SLURM_SUBMIT_DIR}}
 
-export I_MPI_OFFLOAD=1
-export I_MPI_OFFLOAD_RDMA=1
-export I_MPI_OFFLOAD_FAST_MEMCPY_COLL=1
-export PSM3_RDMA=1
-export PSM3_GPUDIRECT=0
-
-export OMP_PROC_BIND=spread
-export OMP_PLACES=threads
-export OMP_NUM_THREADS=8
-
-export ZE_FLAT_DEVICE_HIERARCHY=FLAT
-export ONEAPI_DEVICE_SELECTOR=level_zero:gpu
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 srun {binary} --config {config} --outdir {outdir} --outdir-overwrite
 """

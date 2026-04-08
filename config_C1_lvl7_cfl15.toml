@@ -17,14 +17,11 @@ velocity-bc-surface="freeslip"
 temperature-bc-value-cmb=1.0
 temperature-bc-value-surface=0.0
 
-## Initial temperature - cubic symmetry: T_perturb = Y_4^0 + (5/7) * Y_4^4
+## Initial temperature - tetrahedral symmetry: T_perturb = Y_3^2
 initial-temperature-profile="conductive"
-initial-temperature-sph-degree=4
-initial-temperature-sph-order=0
+initial-temperature-sph-degree=3
+initial-temperature-sph-order=2
 initial-temperature-sph-epsilon=0.01
-initial-temperature-sph-degree-2=4
-initial-temperature-sph-order-2=4
-initial-temperature-sph-factor-2=0.7142857142857143
 
 ## Time discretization
 pseudo-cfl=1.5
