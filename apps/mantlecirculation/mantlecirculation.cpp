@@ -1508,27 +1508,59 @@ Result<> run( const Parameters& prm )
         }
         else if ( use_centered_rk2 )
         {
-            // Explicit Q1 Galerkin centred RK2: stability is set by the diffusion term
-            // (centred advection alone is L2-unstable; the linear bound is dt < h^2 / (c*kappa)
-            // with c ~ 6 for Q1 wedge elements in 3D — calibrate against the diffusion-only test).
-            // When kappa = 0 we fall back to an advective h/|u|_max — pure-advection runs are
-            // fragile in this scheme and should normally only be used with non-zero diffusivity.
+            // Explicit Q1 Galerkin centred RK2 has TWO independent stability constraints:
+            //
+            //   1. Diffusive: the centred Laplacian has eigenvalues in [-c_diff κ/h^2, 0],
+            //      and explicit midpoint is stable on the negative real axis up to ~ -2,
+            //      giving dt ≤ h^2 / (c_diff κ) with c_diff ~ 6 for Q1 wedge elements in 3D.
+            //
+            //   2. Advective: centred Galerkin advection has a purely imaginary spectrum
+            //      (range ~ ± i u_max / h), and explicit midpoint has |R(iy)|² = 1 + y^4/4 > 1
+            //      for any y ≠ 0 — i.e. it is *unconditionally unstable* on the imaginary axis.
+            //      Stability is then only achieved if the diffusion term drags the worst-mode
+            //      eigenvalues into the bounded stable region. The combined von-Neumann
+            //      condition for the worst Fourier mode gives, to leading order,
+            //          dt ≤ 2 κ / u_max^2
+            //      once the cell Péclet number Pe = u_max h / κ exceeds ~1.  In the
+            //      diffusion-dominated regime (Pe ≪ 1) the diffusive constraint dominates;
+            //      in the advection-dominated regime (Pe ≫ 1) the advective constraint
+            //      becomes binding and shrinks as 1/u_max^2.
+            //
+            // We take the minimum of the two so that the scheme refuses to take a dt that
+            // sits in the unstable region.  When κ = 0 the centred scheme is unconditionally
+            // unstable and there is no usable bound; we fall back to an advective h/|u|_max
+            // estimate and emit a warning.  Pure-advection runs should not normally be used
+            // with this solver — choose SUPG or FCT instead.
             const auto max_vel = kernels::common::max_vector_magnitude( u.block_1().grid_data() );
             const auto kappa   = prm.physics_parameters.diffusivity;
             ScalarType dt_stable;
+            ScalarType dt_diff = ScalarType( 0 );
+            ScalarType dt_adv  = ScalarType( 0 );
             if ( kappa > ScalarType( 1e-30 ) )
             {
-                dt_stable = ( h * h ) / ( ScalarType( 6.0 ) * kappa );
+                dt_diff = ( h * h ) / ( ScalarType( 6.0 ) * kappa );
+                dt_adv  = ( max_vel > ScalarType( 1e-12 ) )
+                              ? ( ScalarType( 2.0 ) * kappa / ( max_vel * max_vel ) )
+                              : ScalarType( 1e30 );
+                dt_stable = Kokkos::min( dt_diff, dt_adv );
             }
             else
             {
                 dt_stable = ( max_vel > 1e-12 ) ? ( h / max_vel ) : ScalarType( 1e-3 );
             }
             dt = prm.time_stepping_parameters.pseudo_cfl * dt_stable;
+            const ScalarType peclet =
+                ( kappa > ScalarType( 1e-30 ) ) ? ( max_vel * h / kappa ) : ScalarType( -1 );
             logroot << "Computing dt (centred-RK2 explicit stability) ..." << std::endl;
             logroot << "    max_vel:                       " << max_vel << std::endl;
             logroot << "    h:                             " << h << std::endl;
             logroot << "    kappa:                         " << kappa << std::endl;
+            if ( kappa > ScalarType( 1e-30 ) )
+            {
+                logroot << "    cell Peclet (u h / kappa):     " << peclet << std::endl;
+                logroot << "    dt_diff (h^2 / (6 kappa)):     " << dt_diff << std::endl;
+                logroot << "    dt_adv  (2 kappa / u_max^2):   " << dt_adv  << std::endl;
+            }
             logroot << "    dt_stable:                     " << dt_stable << std::endl;
             logroot << "=>  dt (= dt_stable * pseudo_cfl): " << dt << std::endl;
         }
@@ -1781,9 +1813,15 @@ Result<> run( const Parameters& prm )
                     finalize_rate( rk2_dhdt2 );
                     timer_rk2.stop();
 
-                    // T^{n+1} = T + dt * (dhdt2 - 0.5 * dhdt1)
-                    // (TERRA's exact update form, convct.F:243; algebraically the midpoint RK2.)
-                    linalg::lincomb( T, { 1.0, dt, -0.5 * dt }, { T, rk2_dhdt2, rk2_dhdt1 } );
+                    // T^{n+1} = T^n + dt * k2  (explicit midpoint RK2).
+                    //
+                    // NOTE: TERRA's convct.F:243 update reads `T = T + dt*(tdot2 - 0.5*tdot1)`
+                    // because TERRA performs the half-step `T = T + 0.5*dt*tdot1` IN PLACE
+                    // before the second rate evaluation, so by the time of the second update
+                    // T already equals T_mid and the algebra collapses to T_n + dt*tdot2.
+                    // Here T_mid lives in the separate buffer `rk2_T_mid` and T is unchanged
+                    // between stages, so we use the direct midpoint form.
+                    linalg::lincomb( T, { 1.0, dt }, { T, rk2_dhdt2 } );
                     enforce_dirichlet_T( T );
                 }
 
