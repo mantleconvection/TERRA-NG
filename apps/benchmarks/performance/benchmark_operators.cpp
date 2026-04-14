@@ -96,13 +96,7 @@ enum class BenchmarkType : int
 };
 
 constexpr auto all_benchmark_types = {
-    BenchmarkType::EpsDivDivSimpleDouble,
-    BenchmarkType::EpsDivDivDouble,
-    BenchmarkType::EpsDivDivKerngenV01Initial,
-    BenchmarkType::EpsDivDivKerngenV02SplitDimij,
-    BenchmarkType::EpsDivDivKerngenV02bSingleQuadpoint,
-    BenchmarkType::EpsDivDivKerngenV07SplitPaths,
-    BenchmarkType::EpsDivDivKerngenV09SeparateScatter,
+    BenchmarkType::EpsDivDivKerngenDouble,
 };
 
 const std::map< BenchmarkType, std::string > benchmark_description = {
