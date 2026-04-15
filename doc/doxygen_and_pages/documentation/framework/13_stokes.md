@@ -372,7 +372,7 @@ and implemented in `terra::fe::wedge::linearforms::shell::InvRhoGradRhoDotU`.
 ### Projected density approximation (PDA)
 
 > **Following [Gassmöller et al. (2020)](https://doi.org/10.1093/gji/ggaa078). Consult the paper for details and
-derivations.**
+> derivations.**
 
 Therein, compressible flow is approximated by adding another term to the right-hand side of the mass conservation
 equation:

@@ -189,11 +189,11 @@ It then remains to pass the system:
 \f[
 A_{\mathrm{elim}} x = b_{\mathrm{elim}}
 \f]
-so a linear solver.
+to a linear solver.
 
 \f$ x \f$ is the solution of the original problem. No further boundary corrections are necessary.
 
-#### Matrix-free implementation of \f$A_{\mathrm{elim}}\f$
+#### Matrix-free implementation
 
 The elimination procedure above is implemented in the framework by zeroing out the off-diagonal entries in the local
 element matrices. Let, for instance, \f$W\f$ be a wedge element with 6 nodes. Of those 6 nodes, 3 are interior

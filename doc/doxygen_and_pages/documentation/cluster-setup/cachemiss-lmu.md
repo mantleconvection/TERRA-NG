@@ -12,7 +12,7 @@ terraneo-build/
 
 $ cd terraneo-build
 
-$ cmake ../terraneo/ -Kokkos_ENABLE_CUDA=ON
+$ cmake ../terraneo/ -DKokkos_ENABLE_CUDA=ON
 
 # Build tests
 $ cd tests
