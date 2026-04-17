@@ -489,6 +489,29 @@ Result<> run( const Parameters& prm )
             prm.stokes_solver_parameters.viscous_pc_num_power_iterations );
     }
 
+    // --- Diagnostic: estimate and log the Chebyshev spectrum (max eigenvalue of D^{-1} A_viscous) per level. ---
+    // This mirrors Chebyshev's internal estimate_max_eigenvalues; Chebyshev still does its own
+    // estimation lazily on first solve, so this just reports what it will compute.
+    for ( int level = 0; level < num_levels; level++ )
+    {
+        VectorQ1Vec< ScalarType > tmp_pi_it(
+            "cheby_est_tmpIt", domains[level], ownership_mask_data[level] );
+        VectorQ1Vec< ScalarType > tmp_pi_aux(
+            "cheby_est_tmpAux", domains[level], ownership_mask_data[level] );
+        const auto log_level = prm.mesh_parameters.refinement_level_mesh_min + level;
+        auto&      A_lvl     = ( level == num_levels - 1 ) ? K.block_11() : A_c[level];
+        linalg::DiagonallyScaledOperator< Viscous > inv_diag_A( A_lvl, inverse_diagonals[level] );
+        const double lmax_est = linalg::solvers::power_iteration(
+            inv_diag_A,
+            tmp_pi_it,
+            tmp_pi_aux,
+            prm.stokes_solver_parameters.viscous_pc_num_power_iterations );
+        logroot << "[Cheby estimate] level " << log_level
+                << ": lambda_max(D^-1 A_viscous) ~ " << lmax_est
+                << "  => lambda_max_cheby = " << 1.5 * lmax_est
+                << ", lambda_min_cheby = " << 0.1 * lmax_est << std::endl;
+    }
+
     logroot << "Setting up multigrid coarse grid solver ..." << std::endl;
 
     using CoarseGridSolver = linalg::solvers::PCG< Viscous >;
@@ -502,6 +525,7 @@ Result<> run( const Parameters& prm )
 
     CoarseGridSolver coarse_grid_solver(
         linalg::solvers::IterativeSolverParameters{ 50, 1e-6, 1e-16 }, table, coarse_grid_tmps );
+    coarse_grid_solver.set_tag( "coarse_grid_pcg" );
 
     logroot << "Setting up multigrid preconditioner ..." << std::endl;
 
@@ -909,7 +933,7 @@ Result<> run( const Parameters& prm )
         const auto Nu_top_0 = compute_nusselt(
             domains[velocity_level], T, T_ref, coords_shell[velocity_level], coords_radii[velocity_level], boundary_mask_data[velocity_level], ownership_mask_data[velocity_level], true );
         const auto Nu_top_fv_0 = compute_nusselt_fv(
-            domains[velocity_level], T_fct,
+            domains[velocity_level], T_fct, boundary_mask_data[velocity_level],
             prm.boundary_conditions_parameters.temperature_surface,
             prm.boundary_conditions_parameters.temperature_cmb,
             prm.mesh_parameters.radius_min, prm.mesh_parameters.radius_max, true );
@@ -1005,6 +1029,7 @@ Result<> run( const Parameters& prm )
                 if ( print_convergence )
                 {
                     table->query_rows_equals( "tag", "stokes_fgmres" ).print_pretty();
+                    table->query_rows_equals( "tag", "coarse_grid_pcg" ).print_pretty();
                 }
                 table->clear();
 
@@ -1233,6 +1258,7 @@ Result<> run( const Parameters& prm )
             const auto Nu_top_fv = compute_nusselt_fv(
                 domains[velocity_level],
                 T_fct,
+                boundary_mask_data[velocity_level],
                 prm.boundary_conditions_parameters.temperature_surface,
                 prm.boundary_conditions_parameters.temperature_cmb,
                 prm.mesh_parameters.radius_min,

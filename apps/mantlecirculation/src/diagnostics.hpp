@@ -23,13 +23,14 @@ namespace terra::mantlecirculation {
 ///
 /// where the average is weighted by the surface area element 4π r².
 inline ScalarType compute_nusselt_fv(
-    const grid::shell::DistributedDomain&       domain,
-    const linalg::VectorFVScalar< ScalarType >& T_fct,
-    const ScalarType                            T_bc_surface,
-    const ScalarType                            T_bc_cmb,
-    const ScalarType                            r_min,
-    const ScalarType                            r_max,
-    const bool                                  at_surface )
+    const grid::shell::DistributedDomain&                             domain,
+    const linalg::VectorFVScalar< ScalarType >&                       T_fct,
+    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >&   boundary_mask,
+    const ScalarType                                                  T_bc_surface,
+    const ScalarType                                                  T_bc_cmb,
+    const ScalarType                                                  r_min,
+    const ScalarType                                                  r_max,
+    const bool                                                        at_surface )
 {
     // The FV grid has ghost layers: indices run from 0..n+1 in each direction.
     // Interior cells (no ghost) are at indices 1..n.
@@ -41,6 +42,12 @@ inline ScalarType compute_nusselt_fv(
     const int nx_fv = fv_grid.extent( 1 );
     const int ny_fv = fv_grid.extent( 2 );
     const int nr_fv = fv_grid.extent( 3 );
+
+    // Q1 node-layer index of the boundary (for filtering subdomains that actually touch it).
+    const int  nr_node           = domain.domain_info().subdomain_num_nodes_radially();
+    const int  r_boundary_node   = at_surface ? ( nr_node - 1 ) : 0;
+    const auto expected_flag     = at_surface ? grid::shell::ShellBoundaryFlag::SURFACE
+                                              : grid::shell::ShellBoundaryFlag::CMB;
 
     // The FV Dirichlet BC sets the outermost interior cell to T_bc.
     // The actual evolved temperature is in the cell BELOW the boundary cell.
@@ -70,6 +77,9 @@ inline ScalarType compute_nusselt_fv(
         "nusselt_fv_surface",
         Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 1, 1 }, { nsd, nx_fv - 1, ny_fv - 1 } ),
         KOKKOS_LAMBDA( const int sd, const int x, const int y, ScalarType& sum ) {
+            // Skip subdomains that do not actually own the boundary at hand.
+            if ( boundary_mask( sd, 1, 1, r_boundary_node ) != expected_flag )
+                return;
             const ScalarType T_cell = fv_grid( sd, x, y, r_cell_fv );
             const ScalarType dTdr = normal_sign * ( T_bc - T_cell ) / ( r_face - r_center );
             sum += dTdr;
@@ -81,6 +91,8 @@ inline ScalarType compute_nusselt_fv(
         "nusselt_fv_count",
         Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 1, 1 }, { nsd, nx_fv - 1, ny_fv - 1 } ),
         KOKKOS_LAMBDA( const int sd, const int x, const int y, int& cnt ) {
+            if ( boundary_mask( sd, 1, 1, r_boundary_node ) != expected_flag )
+                return;
             cnt += 1;
         },
         local_count );
