@@ -9,6 +9,8 @@
 
 namespace terra::mantlecirculation {
 
+using ScalarType = double;
+
 struct MeshParameters
 {
     int refinement_level_mesh_min   = 1;
