@@ -110,7 +110,6 @@ enum class EnergySolverType
 {
     FCT,
     SUPG,
-    CenteredRK2,
 };
 
 struct TimeSteppingParameters
@@ -125,12 +124,6 @@ struct TimeSteppingParameters
     int picard_iterations  = 1;
 
     EnergySolverType energy_solver = EnergySolverType::FCT;
-
-    // Centred-RK2 only: re-solve Stokes between the two RK substages so that
-    // the second rate evaluation sees velocity consistent with the half-step
-    // temperature T_mid. Mirrors TERRA's `usolvenp` between RK1 and RK2
-    // (convct.F:212-222). On by default — matches TERRA's behaviour.
-    bool restage_stokes_mid_rk = true;
 };
 
 struct IOParameters
@@ -384,7 +377,6 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     std::map< std::string, EnergySolverType > energy_solver_map{
         { "fct", EnergySolverType::FCT },
         { "supg", EnergySolverType::SUPG },
-        { "centered_rk2", EnergySolverType::CenteredRK2 },
     };
 
     add_option_with_default( app, "--energy-solver", parameters.time_stepping_parameters.energy_solver )
@@ -393,17 +385,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Time Discretization" )
         ->description(
             "'fct': Explicit FCT advection-diffusion (default). "
-            "'supg': Implicit SUPG advection-diffusion with FGMRES solver. "
-            "'centered_rk2': Explicit Galerkin centred RK2 on Q1 (TERRA-style)." );
-
-    add_option_with_default(
-        app, "--restage-stokes-mid-rk", parameters.time_stepping_parameters.restage_stokes_mid_rk )
-        ->group( "Time Discretization" )
-        ->description(
-            "Centred-RK2 only: re-solve Stokes between the two RK substages so that "
-            "the second rate evaluation sees velocity consistent with the half-step "
-            "temperature T_mid. Doubles Stokes cost per energy substep but matches "
-            "TERRA's `usolvenp` between RK1/RK2. Default: true." );
+            "'supg': Implicit SUPG advection-diffusion with FGMRES solver." );
 
     /////////////////////
     /// Stokes solver ///

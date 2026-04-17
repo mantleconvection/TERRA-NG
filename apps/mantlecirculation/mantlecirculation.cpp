@@ -7,7 +7,6 @@
 #include "fe/strong_algebraic_dirichlet_enforcement.hpp"
 #include "fe/strong_algebraic_freeslip_enforcement.hpp"
 #include "fe/wedge/integrands.hpp"
-#include "fe/wedge/operators/shell/centered_rk2_advection_diffusion.hpp"
 #include "fe/wedge/operators/shell/epsilon_divdiv_stokes.hpp"
 #include "fe/wedge/operators/shell/kmass.hpp"
 #include "fe/wedge/operators/shell/mass.hpp"
@@ -1351,15 +1350,12 @@ Result<> run( const Parameters& prm )
     // radial direction.
     const auto h = grid::shell::min_radial_h( domains[velocity_level].domain_info().radii() );
 
-    // --- SUPG / centred-RK2 energy solver setup (only constructed if needed) ---
+    // --- SUPG energy solver setup (only constructed if needed) ---
 
     using AD = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPG< ScalarType >;
     using TempMass = fe::wedge::operators::shell::Mass< ScalarType >;
-    using CenteredRK2RateOp = fe::wedge::operators::shell::Q1CenteredAdvDiffRateOperator< ScalarType >;
 
     const bool use_supg = ( prm.time_stepping_parameters.energy_solver == EnergySolverType::SUPG );
-    const bool use_centered_rk2 =
-        ( prm.time_stepping_parameters.energy_solver == EnergySolverType::CenteredRK2 );
 
     // SUPG operator: A = M + dt * (K_diff + K_adv + K_supg), with Dirichlet rows.
     using DiagSolver = linalg::solvers::DiagonalSolver< AD >;
@@ -1424,46 +1420,6 @@ Result<> run( const Parameters& prm )
         logroot << "SUPG energy solver ready." << std::endl;
     }
 
-    // --- Centred-RK2 (TERRA-style) energy solver setup (only constructed if needed) ---
-
-    std::unique_ptr< CenteredRK2RateOp > rk2_rate_op;
-    VectorQ1Scalar< ScalarType > rk2_dhdt1( "rk2_dhdt1", domains[velocity_level], ownership_mask_data[velocity_level] );
-    VectorQ1Scalar< ScalarType > rk2_dhdt2( "rk2_dhdt2", domains[velocity_level], ownership_mask_data[velocity_level] );
-    VectorQ1Scalar< ScalarType > rk2_T_mid( "rk2_T_mid", domains[velocity_level], ownership_mask_data[velocity_level] );
-    VectorQ1Scalar< ScalarType > rk2_M_inv( "rk2_M_inv", domains[velocity_level], ownership_mask_data[velocity_level] );
-    VectorQ1Scalar< ScalarType > rk2_source( "rk2_source", domains[velocity_level], ownership_mask_data[velocity_level] );
-    linalg::assign( rk2_source, 0.0 );
-
-    if ( use_centered_rk2 )
-    {
-        logroot << "Setting up centred-RK2 energy solver ..." << std::endl;
-
-        // Build the matrix-free Galerkin rate operator. velocity_ stores a handle that aliases
-        // u.block_1()'s underlying device view, so any in-place Stokes solve (including the
-        // mid-RK restage) is picked up automatically at the next apply.
-        rk2_rate_op = std::make_unique< CenteredRK2RateOp >(
-            domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level],
-            u.block_1(), prm.physics_parameters.diffusivity );
-
-        // Precompute the inverse of the row-sum lumped mass diagonal once.
-        // M_inv = 1 / (Mass_lumped * 1) — see mantlecirculation.cpp:1395-1399 (SUPG diag pattern).
-        {
-            TempMass mass_lumped(
-                domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level],
-                /*diagonal=*/false, /*lumped_diagonal=*/true );
-            VectorQ1Scalar< ScalarType > ones(
-                "ones", domains[velocity_level], ownership_mask_data[velocity_level] );
-            linalg::assign( ones, 1.0 );
-            linalg::assign( rk2_M_inv, 0.0 );
-            linalg::apply( mass_lumped, ones, rk2_M_inv );
-            linalg::invert_entries( rk2_M_inv );
-        }
-
-        logroot << "Centred-RK2 energy solver ready (restage_stokes_mid_rk = "
-                << ( prm.time_stepping_parameters.restage_stokes_mid_rk ? "true" : "false" )
-                << ")." << std::endl;
-    }
-
     // Time stepping
 
     logroot << "Starting time stepping!" << std::endl;
@@ -1506,64 +1462,6 @@ Result<> run( const Parameters& prm )
             logroot << "    h:                             " << h << std::endl;
             logroot << "=>  dt (= pseudo_cfl * h/v_max):   " << dt << std::endl;
         }
-        else if ( use_centered_rk2 )
-        {
-            // Explicit Q1 Galerkin centred RK2 has TWO independent stability constraints:
-            //
-            //   1. Diffusive: the centred Laplacian has eigenvalues in [-c_diff κ/h^2, 0],
-            //      and explicit midpoint is stable on the negative real axis up to ~ -2,
-            //      giving dt ≤ h^2 / (c_diff κ) with c_diff ~ 6 for Q1 wedge elements in 3D.
-            //
-            //   2. Advective: centred Galerkin advection has a purely imaginary spectrum
-            //      (range ~ ± i u_max / h), and explicit midpoint has |R(iy)|² = 1 + y^4/4 > 1
-            //      for any y ≠ 0 — i.e. it is *unconditionally unstable* on the imaginary axis.
-            //      Stability is then only achieved if the diffusion term drags the worst-mode
-            //      eigenvalues into the bounded stable region. The combined von-Neumann
-            //      condition for the worst Fourier mode gives, to leading order,
-            //          dt ≤ 2 κ / u_max^2
-            //      once the cell Péclet number Pe = u_max h / κ exceeds ~1.  In the
-            //      diffusion-dominated regime (Pe ≪ 1) the diffusive constraint dominates;
-            //      in the advection-dominated regime (Pe ≫ 1) the advective constraint
-            //      becomes binding and shrinks as 1/u_max^2.
-            //
-            // We take the minimum of the two so that the scheme refuses to take a dt that
-            // sits in the unstable region.  When κ = 0 the centred scheme is unconditionally
-            // unstable and there is no usable bound; we fall back to an advective h/|u|_max
-            // estimate and emit a warning.  Pure-advection runs should not normally be used
-            // with this solver — choose SUPG or FCT instead.
-            const auto max_vel = kernels::common::max_vector_magnitude( u.block_1().grid_data() );
-            const auto kappa   = prm.physics_parameters.diffusivity;
-            ScalarType dt_stable;
-            ScalarType dt_diff = ScalarType( 0 );
-            ScalarType dt_adv  = ScalarType( 0 );
-            if ( kappa > ScalarType( 1e-30 ) )
-            {
-                dt_diff = ( h * h ) / ( ScalarType( 6.0 ) * kappa );
-                dt_adv  = ( max_vel > ScalarType( 1e-12 ) )
-                              ? ( ScalarType( 2.0 ) * kappa / ( max_vel * max_vel ) )
-                              : ScalarType( 1e30 );
-                dt_stable = Kokkos::min( dt_diff, dt_adv );
-            }
-            else
-            {
-                dt_stable = ( max_vel > 1e-12 ) ? ( h / max_vel ) : ScalarType( 1e-3 );
-            }
-            dt = prm.time_stepping_parameters.pseudo_cfl * dt_stable;
-            const ScalarType peclet =
-                ( kappa > ScalarType( 1e-30 ) ) ? ( max_vel * h / kappa ) : ScalarType( -1 );
-            logroot << "Computing dt (centred-RK2 explicit stability) ..." << std::endl;
-            logroot << "    max_vel:                       " << max_vel << std::endl;
-            logroot << "    h:                             " << h << std::endl;
-            logroot << "    kappa:                         " << kappa << std::endl;
-            if ( kappa > ScalarType( 1e-30 ) )
-            {
-                logroot << "    cell Peclet (u h / kappa):     " << peclet << std::endl;
-                logroot << "    dt_diff (h^2 / (6 kappa)):     " << dt_diff << std::endl;
-                logroot << "    dt_adv  (2 kappa / u_max^2):   " << dt_adv  << std::endl;
-            }
-            logroot << "    dt_stable:                     " << dt_stable << std::endl;
-            logroot << "=>  dt (= dt_stable * pseudo_cfl): " << dt << std::endl;
-        }
         else
         {
             const auto dt_stable = fv::hex::operators::compute_dt_stable(
@@ -1591,12 +1489,6 @@ Result<> run( const Parameters& prm )
             }
 
             // --- Stokes solve ---
-            //
-            // Wrapped in a lambda so it can be re-invoked for the centred-RK2 mid-step
-            // restage at the half-step temperature T_mid (mirroring TERRA's `usolvenp`
-            // between RK1 and RK2, convct.F:212-222). The lambda accepts the temperature
-            // field to use as the buoyancy source so we can pass either `T` (normal path)
-            // or `rk2_T_mid` (restage path).
             const auto solve_stokes_at_temperature = [&]( const VectorQ1Scalar< ScalarType >& T_for_buoyancy,
                                                           const bool                          print_convergence ) {
                 util::Timer timer_stokes( "stokes" );
@@ -1718,117 +1610,6 @@ Result<> run( const Parameters& prm )
                     }
                     table->clear();
                 }
-            }
-            else if ( use_centered_rk2 )
-            {
-                // --- Centred-RK2 (TERRA-style) explicit energy solve ---
-                //
-                // Mirrors TERRA's `advance` (convct.F:207-244):
-                //   energy(tdot1)
-                //   T  = T + 0.5*dt*tdot1
-                //   usolvenp                          (mid-RK Stokes restage; opt-in here)
-                //   energy(tdot2)
-                //   T  = T + dt*(tdot2 - 0.5*tdot1)
-                //
-                // The rate operator yields the assembled, ghost-reduced  -K*T  (Galerkin
-                // centred advection + diffusion). We pointwise-multiply by the precomputed
-                // 1 / M_lumped to recover dT/dt at owned nodes (analogue of TERRA's
-                // dhdt = dhdt * vol(:,:,2) at energy.f:171), then add the source.
-
-                util::Timer timer_rk2_substeps( "centered_rk2_substeps" );
-
-                const ScalarType T_cmb_val =
-                    static_cast< ScalarType >( prm.boundary_conditions_parameters.temperature_cmb );
-                const ScalarType T_surface_val =
-                    static_cast< ScalarType >( prm.boundary_conditions_parameters.temperature_surface );
-
-                // Helper: enforce Dirichlet T at CMB / surface nodes by overwriting them.
-                // (TERRA equivalent: dhdt(:,:,1) = dhdt(:,:,nr+1) = 0 with prescribed T.)
-                const auto enforce_dirichlet_T = [&]( VectorQ1Scalar< ScalarType >& T_field ) {
-                    auto T_grid = T_field.grid_data();
-                    auto mask   = boundary_mask_data[velocity_level];
-                    Kokkos::parallel_for(
-                        "rk2_enforce_dirichlet",
-                        local_domain_md_range_policy_nodes( domains[velocity_level] ),
-                        KOKKOS_LAMBDA( const int sd, const int x, const int y, const int r ) {
-                            const auto flag = mask( sd, x, y, r );
-                            if ( flag == grid::shell::ShellBoundaryFlag::CMB )
-                                T_grid( sd, x, y, r ) = T_cmb_val;
-                            else if ( flag == grid::shell::ShellBoundaryFlag::SURFACE )
-                                T_grid( sd, x, y, r ) = T_surface_val;
-                        } );
-                    Kokkos::fence();
-                };
-
-                // Helper: dhdt <- M_lumped^{-1} * dhdt + source  (pointwise on owned nodes).
-                const auto finalize_rate = [&]( VectorQ1Scalar< ScalarType >& dhdt ) {
-                    auto       dhdt_grid   = dhdt.grid_data();
-                    const auto M_inv_grid  = rk2_M_inv.grid_data();
-                    const auto source_grid = rk2_source.grid_data();
-                    Kokkos::parallel_for(
-                        "rk2_finalize_rate",
-                        local_domain_md_range_policy_nodes( domains[velocity_level] ),
-                        KOKKOS_LAMBDA( const int sd, const int x, const int y, const int r ) {
-                            dhdt_grid( sd, x, y, r ) =
-                                dhdt_grid( sd, x, y, r ) * M_inv_grid( sd, x, y, r ) + source_grid( sd, x, y, r );
-                        } );
-                    Kokkos::fence();
-                };
-
-                for ( int i = 0; i < prm.time_stepping_parameters.energy_substeps; i++ )
-                {
-                    logroot << "Solving energy (centred-RK2, substep " << i << ") ..." << std::endl;
-
-                    // Refresh source term (Q1, nodal).
-                    if ( prm.physics_parameters.constant_internal_heating )
-                    {
-                        linalg::assign( rk2_source, prm.physics_parameters.constant_internal_heating_value );
-                    }
-                    else
-                    {
-                        linalg::assign( rk2_source, 0.0 );
-                    }
-
-                    // ---- RK1: k1 = M^{-1} (-K T^n) + source ----
-                    util::Timer timer_rk1( "centered_rk2_stage_1" );
-                    rk2_rate_op->apply_impl( T, rk2_dhdt1 );
-                    finalize_rate( rk2_dhdt1 );
-                    timer_rk1.stop();
-
-                    // T_mid = T + 0.5 * dt * dhdt1
-                    linalg::lincomb( rk2_T_mid, { 1.0, 0.5 * dt }, { T, rk2_dhdt1 } );
-                    enforce_dirichlet_T( rk2_T_mid );
-
-                    // ---- Optional Stokes restage at T_mid ----
-                    // Default: ON (matches TERRA's `usolvenp` between RK1 and RK2).
-                    if ( prm.time_stepping_parameters.restage_stokes_mid_rk )
-                    {
-                        logroot << "  Restaging Stokes at T_mid ..." << std::endl;
-                        solve_stokes_at_temperature( rk2_T_mid, /*print_convergence=*/false );
-                    }
-
-                    // ---- RK2: k2 = M^{-1} (-K T_mid) + source ----
-                    util::Timer timer_rk2( "centered_rk2_stage_2" );
-                    rk2_rate_op->apply_impl( rk2_T_mid, rk2_dhdt2 );
-                    finalize_rate( rk2_dhdt2 );
-                    timer_rk2.stop();
-
-                    // T^{n+1} = T^n + dt * k2  (explicit midpoint RK2).
-                    //
-                    // NOTE: TERRA's convct.F:243 update reads `T = T + dt*(tdot2 - 0.5*tdot1)`
-                    // because TERRA performs the half-step `T = T + 0.5*dt*tdot1` IN PLACE
-                    // before the second rate evaluation, so by the time of the second update
-                    // T already equals T_mid and the algebra collapses to T_n + dt*tdot2.
-                    // Here T_mid lives in the separate buffer `rk2_T_mid` and T is unchanged
-                    // between stages, so we use the direct midpoint form.
-                    linalg::lincomb( T, { 1.0, dt }, { T, rk2_dhdt2 } );
-                    enforce_dirichlet_T( T );
-                }
-
-                timer_rk2_substeps.stop();
-
-                // No projection: T lives in Q1 throughout the centred-RK2 substeps and is
-                // already in the form Stokes and the Q1 Nusselt diagnostic want to read.
             }
             else
             {
