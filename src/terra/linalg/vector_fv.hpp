@@ -105,11 +105,61 @@ class VectorFVScalar
     /// Computes: \f$ y_i = y_i \cdot x_i \f$
     /// @param x Scaling vector.
     void scale_with_vector_impl( const VectorFVScalar& x )
-    { kernels::common::mult_elementwise_inplace( grid_data_, x.grid_data() ); }
+    {
+        kernels::common::mult_elementwise_inplace( grid_data_, x.grid_data() );
+    }
 
     /// @brief Randomize entries implementation for VectorLike concept.
     /// Sets each entry of grid_data to a random value.
     void randomize_impl() { return kernels::common::rand( grid_data_ ); }
+
+    /// @brief Min entry implementation for VectorLike concept.
+    /// Computes: \f$ \min_i y_i \f$
+    /// @return Minimum value.
+    ScalarType min_entry_impl() const
+    {
+        return kernels::common::min_entry_subset(
+            grid_data_,
+            dense::Vec< int, 4 >{ 0, 1, 1, 1 },
+            dense::Vec< int, 4 >{
+                static_cast< int >( grid_data_.extent( 0 ) ),
+                static_cast< int >( grid_data_.extent( 1 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 2 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 3 ) - 1 ) },
+            comm_ );
+    }
+
+    /// @brief Min absolute entry implementation for VectorLike concept.
+    /// Computes: \f$ \min_i |y_i| \f$
+    /// @return Minimum absolute value.
+    ScalarType min_abs_entry_impl() const
+    {
+        return kernels::common::min_abs_entry_subset(
+            grid_data_,
+            dense::Vec< int, 4 >{ 0, 1, 1, 1 },
+            dense::Vec< int, 4 >{
+                static_cast< int >( grid_data_.extent( 0 ) ),
+                static_cast< int >( grid_data_.extent( 1 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 2 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 3 ) - 1 ) },
+            comm_ );
+    }
+
+    /// @brief Max entry implementation for VectorLike concept.
+    /// Computes: \f$ \max_i y_i \f$
+    /// @return Maximum value.
+    ScalarType max_entry_impl() const
+    {
+        return kernels::common::max_entry_subset(
+            grid_data_,
+            dense::Vec< int, 4 >{ 0, 1, 1, 1 },
+            dense::Vec< int, 4 >{
+                static_cast< int >( grid_data_.extent( 0 ) ),
+                static_cast< int >( grid_data_.extent( 1 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 2 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 3 ) - 1 ) },
+            comm_ );
+    }
 
     /// @brief Max absolute entry implementation for VectorLike concept.
     /// Computes: \f$ \max_i |y_i| \f$
@@ -120,10 +170,10 @@ class VectorFVScalar
             grid_data_,
             dense::Vec< int, 4 >{ 0, 1, 1, 1 },
             dense::Vec< int, 4 >{
-                grid_data_.extent( 0 ),
-                grid_data_.extent( 1 ) - 1,
-                grid_data_.extent( 2 ) - 1,
-                grid_data_.extent( 3 ) - 1 },
+                static_cast< int >( grid_data_.extent( 0 ) ),
+                static_cast< int >( grid_data_.extent( 1 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 2 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 3 ) - 1 ) },
             comm_ );
     }
 
@@ -252,11 +302,61 @@ class VectorFVVec
     /// Computes: \f$ y_i = y_i \cdot x_i \f$
     /// @param x Scaling vector.
     void scale_with_vector_impl( const VectorFVVec& x )
-    { kernels::common::mult_elementwise_inplace( grid_data_, x.grid_data() ); }
+    {
+        kernels::common::mult_elementwise_inplace( grid_data_, x.grid_data() );
+    }
 
     /// @brief Randomize entries implementation for VectorLike concept.
     /// Sets each entry of grid_data to a random value.
     void randomize_impl() { return kernels::common::rand( grid_data_ ); }
+
+    /// @brief Min entry implementation for VectorLike concept.
+    /// Computes: \f$ \min_i y_i \f$
+    /// @return Minimum value.
+    ScalarType min_entry_impl() const
+    {
+        return kernels::common::min_entry_subset(
+            grid_data_,
+            dense::Vec< int, 5 >{ 0, 1, 1, 1, 0 },
+            dense::Vec< int, 5 >{
+                static_cast< int >( grid_data_.extent( 0 ) ),
+                static_cast< int >( grid_data_.extent( 1 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 2 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 3 ) - 1 ),
+                VecDim } );
+    }
+
+    /// @brief Min absolute entry implementation for VectorLike concept.
+    /// Computes: \f$ \min_i |y_i| \f$
+    /// @return Minimum absolute value.
+    ScalarType min_abs_entry_impl() const
+    {
+        return kernels::common::min_abs_entry_subset(
+            grid_data_,
+            dense::Vec< int, 5 >{ 0, 1, 1, 1, 0 },
+            dense::Vec< int, 5 >{
+                static_cast< int >( grid_data_.extent( 0 ) ),
+                static_cast< int >( grid_data_.extent( 1 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 2 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 3 ) - 1 ),
+                VecDim } );
+    }
+
+    /// @brief Max entry implementation for VectorLike concept.
+    /// Computes: \f$ \max_i y_i \f$
+    /// @return Maximum value.
+    ScalarType max_entry_impl() const
+    {
+        return kernels::common::max_entry_subset(
+            grid_data_,
+            dense::Vec< int, 5 >{ 0, 1, 1, 1, 0 },
+            dense::Vec< int, 5 >{
+                static_cast< int >( grid_data_.extent( 0 ) ),
+                static_cast< int >( grid_data_.extent( 1 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 2 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 3 ) - 1 ),
+                VecDim } );
+    }
 
     /// @brief Max absolute entry implementation for VectorLike concept.
     /// Computes: \f$ \max_i |y_i| \f$
@@ -267,10 +367,10 @@ class VectorFVVec
             grid_data_,
             dense::Vec< int, 5 >{ 0, 1, 1, 1, 0 },
             dense::Vec< int, 5 >{
-                grid_data_.extent( 0 ),
-                grid_data_.extent( 1 ) - 1,
-                grid_data_.extent( 2 ) - 1,
-                grid_data_.extent( 3 ) - 1,
+                static_cast< int >( grid_data_.extent( 0 ) ),
+                static_cast< int >( grid_data_.extent( 1 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 2 ) - 1 ),
+                static_cast< int >( grid_data_.extent( 3 ) - 1 ),
                 VecDim } );
     }
 

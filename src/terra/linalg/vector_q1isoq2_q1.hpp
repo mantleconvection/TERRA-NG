@@ -101,6 +101,24 @@ class VectorQ1IsoQ2Q1
         block_2().randomize_impl();
     }
 
+    /// @brief Min entry implementation for Block2VectorLike concept.
+    /// Computes: \( \min( \min_i \text{block}_1, \min_j \text{block}_2 ) \)
+    /// @return Minimum value across both blocks.
+    ScalarType min_entry_impl() const { return std::min( block_1().min_entry_impl(), block_2().min_entry_impl() ); }
+
+    /// @brief Min absolute entry implementation for Block2VectorLike concept.
+    /// Computes: \( \min( \min_i |\text{block}_1|, \min_j |\text{block}_2| ) \)
+    /// @return Minimum absolute value across both blocks.
+    ScalarType min_abs_entry_impl() const
+    {
+        return std::min( block_1().min_abs_entry_impl(), block_2().min_abs_entry_impl() );
+    }
+
+    /// @brief Max entry implementation for Block2VectorLike concept.
+    /// Computes: \( \max( \max_i \text{block}_1, \max_j \text{block}_2 ) \)
+    /// @return Maximum value across both blocks.
+    ScalarType max_entry_impl() const { return std::max( block_1().max_entry_impl(), block_2().max_entry_impl() ); }
+
     /// @brief Max absolute entry implementation for Block2VectorLike concept.
     /// Computes: \( \max( \max_i |\text{block}_1|, \max_j |\text{block}_2| ) \)
     /// @return Maximum absolute value across both blocks.
