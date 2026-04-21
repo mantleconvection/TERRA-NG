@@ -1,10 +1,9 @@
 #pragma once
 
-#include "parameters.hpp"
-
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "kokkos/kokkos_wrapper.hpp"
+#include "parameters.hpp"
 #include "util/bit_masking.hpp"
 
 namespace terra::mantlecirculation {
@@ -19,6 +18,8 @@ struct InitialConditionInterpolator
 {
     ScalarType                                         r_min_;
     ScalarType                                         r_max_;
+    ScalarType                                         T_min_;
+    ScalarType                                         T_max_;
     Grid3DDataVec< ScalarType, 3 >                     grid_;
     Grid2DDataScalar< ScalarType >                     radii_;
     Grid4DDataScalar< ScalarType >                     data_;
@@ -28,6 +29,8 @@ struct InitialConditionInterpolator
     InitialConditionInterpolator(
         const ScalarType                                          r_min,
         const ScalarType                                          r_max,
+        const ScalarType                                          T_min,
+        const ScalarType                                          T_max,
         const Grid3DDataVec< ScalarType, 3 >&                     grid,
         const Grid2DDataScalar< ScalarType >&                     radii,
         const Grid4DDataScalar< ScalarType >&                     data,
@@ -35,6 +38,8 @@ struct InitialConditionInterpolator
         bool                                                      only_boundary )
     : r_min_( r_min )
     , r_max_( r_max )
+    , T_min_( T_min )
+    , T_max_( T_max )
     , grid_( grid )
     , radii_( radii )
     , data_( data )
@@ -53,7 +58,7 @@ struct InitialConditionInterpolator
             const dense::Vec< ScalarType, 3 > coords =
                 grid::shell::coords( local_subdomain_id, x, y, r, grid_, radii_ );
             const auto frac                      = ( r_max_ - coords.norm() ) / ( r_max_ - r_min_ );
-            data_( local_subdomain_id, x, y, r ) = Kokkos::pow( frac, 5 );
+            data_( local_subdomain_id, x, y, r ) = T_min_ + ( T_max_ - T_min_ ) * Kokkos::pow( frac, 5 );
         }
     }
 };
@@ -64,18 +69,18 @@ struct InitialConditionInterpolator
 ///   T_ref(r) = r_min * r_max / r  -  r_min
 struct ConductiveProfileInterpolator
 {
-    ScalarType                          r_min_, r_max_, eps_;
-    Grid3DDataVec< ScalarType, 3 >      grid_;
-    Grid2DDataScalar< ScalarType >      radii_;
-    Grid4DDataScalar< ScalarType >      data_;
-    Grid3DDataScalar< ScalarType >      sph_coeffs_;
-    bool                                has_sph_;
+    ScalarType                     r_min_, r_max_, eps_;
+    Grid3DDataVec< ScalarType, 3 > grid_;
+    Grid2DDataScalar< ScalarType > radii_;
+    Grid4DDataScalar< ScalarType > data_;
+    Grid3DDataScalar< ScalarType > sph_coeffs_;
+    bool                           has_sph_;
 
     KOKKOS_INLINE_FUNCTION
     void operator()( const int sd, const int x, const int y, const int r ) const
     {
         const dense::Vec< ScalarType, 3 > coords = grid::shell::coords( sd, x, y, r, grid_, radii_ );
-        const ScalarType radius = coords.norm();
+        const ScalarType                  radius = coords.norm();
 
         // Guard against zero radius (non-owned ghost nodes may have zero coordinates).
         if ( radius < ScalarType( 1e-15 ) )
@@ -134,6 +139,8 @@ struct RHSVelocityInterpolator
 
 struct NoiseAdder
 {
+    ScalarType                                  T_min_;
+    ScalarType                                  T_max_;
     Grid3DDataVec< ScalarType, 3 >              grid_;
     Grid2DDataScalar< ScalarType >              radii_;
     Grid4DDataScalar< ScalarType >              data_T_;
@@ -141,11 +148,15 @@ struct NoiseAdder
     Kokkos::Random_XorShift64_Pool<>            rand_pool_;
 
     NoiseAdder(
+        const ScalarType                                   T_min,
+        const ScalarType                                   T_max,
         const Grid3DDataVec< ScalarType, 3 >&              grid,
         const Grid2DDataScalar< ScalarType >&              radii,
         const Grid4DDataScalar< ScalarType >&              data_T,
         const Grid4DDataScalar< grid::NodeOwnershipFlag >& mask )
-    : grid_( grid )
+    : T_min_( T_min )
+    , T_max_( T_max )
+    , grid_( grid )
     , radii_( radii )
     , data_T_( data_T )
     , mask_( mask )
@@ -166,11 +177,11 @@ struct NoiseAdder
         if ( process_ownes_point )
         {
             data_T_( local_subdomain_id, x, y, r ) =
-                Kokkos::clamp( data_T_( local_subdomain_id, x, y, r ) + perturbation, 0.0, 1.0 );
+                Kokkos::clamp( data_T_( local_subdomain_id, x, y, r ) + perturbation, T_min_, T_max_ );
         }
         else
         {
-            data_T_( local_subdomain_id, x, y, r ) = 0.0;
+            data_T_( local_subdomain_id, x, y, r ) = T_min_;
         }
 
         rand_pool_.free_state( generator );
@@ -182,6 +193,7 @@ struct NoiseAdder
 struct FVInitialConditionInterpolator
 {
     ScalarType                     r_min_, r_max_;
+    ScalarType                     T_min_, T_max_;
     Grid4DDataVec< ScalarType, 3 > cell_centers_;
     Grid4DDataScalar< ScalarType > data_;
 
@@ -193,7 +205,7 @@ struct FVInitialConditionInterpolator
         const ScalarType cz     = cell_centers_( id, x, y, r, 2 );
         const ScalarType radius = Kokkos::sqrt( cx * cx + cy * cy + cz * cz );
         const ScalarType frac   = ( r_max_ - radius ) / ( r_max_ - r_min_ );
-        data_( id, x, y, r )    = Kokkos::pow( frac, ScalarType( 5 ) );
+        data_( id, x, y, r )    = T_min_ + ( T_max_ - T_min_ ) * Kokkos::pow( frac, ScalarType( 5 ) );
     }
 };
 
@@ -201,6 +213,7 @@ struct FVInitialConditionInterpolator
 /// so no ownership mask is needed.
 struct FVNoiseAdder
 {
+    ScalarType                       T_min_, T_max_;
     Grid4DDataScalar< ScalarType >   data_T_;
     Kokkos::Random_XorShift64_Pool<> rand_pool_;
 
@@ -210,7 +223,7 @@ struct FVNoiseAdder
         auto             gen          = rand_pool_.get_state();
         const ScalarType eps          = 1e-1;
         const ScalarType perturbation = eps * ( 2.0 * gen.drand() - 1.0 );
-        data_T_( id, x, y, r )        = Kokkos::clamp( data_T_( id, x, y, r ) + perturbation, 0.0, 1.0 );
+        data_T_( id, x, y, r )        = Kokkos::clamp( data_T_( id, x, y, r ) + perturbation, T_min_, T_max_ );
         rand_pool_.free_state( gen );
     }
 };
