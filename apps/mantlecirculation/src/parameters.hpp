@@ -17,11 +17,13 @@ struct MeshParameters
     int refinement_level_mesh_max   = 4;
     int refinement_level_subdomains = 0;
 
-    double radius_min       = 0.5;
-    double radius_max       = 1.0;
-    double radius_surface   = 6371000.0;
-    double radius_cmb       = 3480000.0;
-    double mantle_thickness = 2891000.0;
+    // Nondimensional radii
+    double radius_min = 0.5;
+    double radius_max = 1.0;
+    // Dimensional radii in meter
+    double radius_surface_m   = 6371000.0;
+    double radius_cmb_m       = 3480000.0;
+    double mantle_thickness_m = 2891000.0;
 
     // Anisotropic refinement (Path B.1): radial diamond level is set to
     // (refinement_level_mesh_* + radial_extra_levels) at every MG level, so the
@@ -65,11 +67,13 @@ struct BoundaryConditionsParameters
 
     double plate_velocity_scaling = 1.0;
 
-    double temperature_cmb     = 3800.0;
-    double temperature_surface = 300.0;
-    double delta_T_dimensional = temperature_cmb - temperature_surface;
-    double temperature_min     = 0.0;
-    double temperature_max     = 1.0;
+    // Nondimensional temperatures
+    double temperature_min = 0.0;
+    double temperature_max = 1.0;
+    // Dimensional temperatures in Kelvin
+    double temperature_cmb_K     = 3800.0;
+    double temperature_surface_K = 300.0;
+    double delta_T_K             = temperature_cmb_K - temperature_surface_K;
 
     PlateParameters plate_parameters{};
 };
@@ -160,12 +164,14 @@ struct PhysicsParameters
 {
     double gravity = 9.81;
 
+    // Non-dimensional numbers
+    double rayleigh_number    = 1e5;
+    double peclet_number      = 1.0;
+    double dissipation_number = 1.0;
+    double h_number           = 1.0;
+
     double thermal_diffusivity     = 1.0;
-    double rayleigh_number         = 1e5;
-    double peclet_number           = 1.0;
-    double dissipation_number      = 1.0;
-    double h_number                = 1.0;
-    double characteristic_velocity = 1e-10;
+    double characteristic_velocity = 1e-10; // characteristic diffusive velocity
 
     double reference_density      = 4500;
     double thermal_expansivity    = 2.5e-5;
@@ -312,17 +318,17 @@ inline void nondimensionalise( Parameters& prm )
     // --- Domain ---
 
     // radius_max is unchanged from default, always 1.0 per construction
-    mesh.radius_min       = mesh.radius_cmb / mesh.radius_surface;
-    mesh.mantle_thickness = mesh.radius_surface - mesh.radius_cmb;
+    mesh.radius_min         = mesh.radius_cmb_m / mesh.radius_surface_m;
+    mesh.mantle_thickness_m = mesh.radius_surface_m - mesh.radius_cmb_m;
 
     // --- Boundary conditions ---
 
-    boundary.temperature_min = boundary.temperature_surface / boundary.delta_T_dimensional;
-    boundary.temperature_max = boundary.temperature_cmb / boundary.delta_T_dimensional;
+    boundary.temperature_min = boundary.temperature_surface_K / boundary.delta_T_K;
+    boundary.temperature_max = boundary.temperature_cmb_K / boundary.delta_T_K;
 
     // Compute characteristic velocity and thermal diffusivity
     phys.characteristic_velocity =
-        phys.thermal_conductivity / ( phys.reference_density * phys.specific_heat_capacity * mesh.mantle_thickness );
+        phys.thermal_conductivity / ( phys.reference_density * phys.specific_heat_capacity * mesh.mantle_thickness_m );
 
     phys.thermal_diffusivity = phys.thermal_conductivity / ( phys.reference_density * phys.specific_heat_capacity );
 
@@ -334,19 +340,19 @@ inline void nondimensionalise( Parameters& prm )
         // Compute nondimensional numbers
         // Rayleigh number = ( rho * alpha * g * L^3 * dT ) / ( eta * kappa )
         phys.rayleigh_number = ( phys.reference_density * phys.gravity * phys.thermal_expansivity *
-                                 std::pow( mesh.mantle_thickness, 3 ) * boundary.delta_T_dimensional ) /
+                                 std::pow( mesh.mantle_thickness_m, 3 ) * boundary.delta_T_K ) /
                                ( phys.viscosity_parameters.reference_viscosity * phys.thermal_diffusivity );
 
         // Peclet number = ( U * L ) / kappa -> should be 1
-        phys.peclet_number = ( phys.characteristic_velocity * mesh.mantle_thickness ) / phys.thermal_diffusivity;
+        phys.peclet_number = ( phys.characteristic_velocity * mesh.mantle_thickness_m ) / phys.thermal_diffusivity;
 
         // Dissipation number = ( alpha * g * L ) / Cp
         phys.dissipation_number =
-            ( phys.thermal_expansivity * phys.gravity * mesh.mantle_thickness ) / phys.specific_heat_capacity;
+            ( phys.thermal_expansivity * phys.gravity * mesh.mantle_thickness_m ) / phys.specific_heat_capacity;
 
         // H-number = ( H * L ) / ( Cp * U * dT )
-        phys.h_number = ( phys.internal_heating_rate * mesh.mantle_thickness ) /
-                        ( phys.specific_heat_capacity * phys.characteristic_velocity * boundary.delta_T_dimensional );
+        phys.h_number = ( phys.internal_heating_rate * mesh.mantle_thickness_m ) /
+                        ( phys.specific_heat_capacity * phys.characteristic_velocity * boundary.delta_T_K );
     }
 }
 
@@ -387,8 +393,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         app, "--refinement-level-subdomains", parameters.mesh_parameters.refinement_level_subdomains )
         ->group( "Domain" );
 
-    add_option_with_default( app, "--radius-min", parameters.mesh_parameters.radius_min )->group( "Domain" );
-    add_option_with_default( app, "--radius-max", parameters.mesh_parameters.radius_max )->group( "Domain" );
+    add_option_with_default( app, "--radius-cmb", parameters.mesh_parameters.radius_cmb_m )->group( "Domain" );
+    add_option_with_default( app, "--radius-surface", parameters.mesh_parameters.radius_surface_m )->group( "Domain" );
 
     add_option_with_default( app, "--radial-extra-levels", parameters.mesh_parameters.radial_extra_levels )
         ->group( "Domain" )
@@ -446,10 +452,10 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->default_val( "noslip" )
         ->group( "Boundary Conditions" );
 
-    add_option_with_default( app, "--temperature-cmb", parameters.boundary_parameters.temperature_cmb )
+    add_option_with_default( app, "--temperature-cmb", parameters.boundary_parameters.temperature_cmb_K )
         ->group( "Boundary Conditions" );
 
-    add_option_with_default( app, "--temperature-surface", parameters.boundary_parameters.temperature_surface )
+    add_option_with_default( app, "--temperature-surface", parameters.boundary_parameters.temperature_surface_K )
         ->group( "Boundary Conditions" );
 
     //////////////////////////////

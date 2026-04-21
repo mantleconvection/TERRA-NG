@@ -311,14 +311,14 @@ Result<> run( const Parameters& prm )
     if ( prm.devel_parameters.output_dimensional )
     {
         // Redimensionalise ...
-        scale( T.grid_data(), prm.boundary_parameters.delta_T_dimensional );
+        scale( T.grid_data(), prm.boundary_parameters.delta_T_K );
         scale( u.block_1().grid_data(), prm.physics_parameters.calc_cm_per_year );
         scale( eta[velocity_level].grid_data(), prm.physics_parameters.viscosity_parameters.reference_viscosity );
 
         xdmf_output.write();
 
         // ... and nondimensionalise again
-        scale( T.grid_data(), 1.0 / prm.boundary_parameters.delta_T_dimensional );
+        scale( T.grid_data(), 1.0 / prm.boundary_parameters.delta_T_K );
         scale( u.block_1().grid_data(), 1.0 / prm.physics_parameters.calc_cm_per_year );
         scale( eta[velocity_level].grid_data(), 1.0 / prm.physics_parameters.viscosity_parameters.reference_viscosity );
     }
@@ -508,7 +508,7 @@ Result<> run( const Parameters& prm )
             if ( prm.devel_parameters.output_dimensional )
             {
                 // Redimensionalise ...
-                scale( T.grid_data(), prm.boundary_parameters.delta_T_dimensional );
+                scale( T.grid_data(), prm.boundary_parameters.delta_T_K );
                 scale( u.block_1().grid_data(), prm.physics_parameters.calc_cm_per_year );
                 scale(
                     eta[velocity_level].grid_data(), prm.physics_parameters.viscosity_parameters.reference_viscosity );
@@ -516,7 +516,7 @@ Result<> run( const Parameters& prm )
                 xdmf_output.write();
 
                 // ... and nondimensionalise again
-                scale( T.grid_data(), 1.0 / prm.boundary_parameters.delta_T_dimensional );
+                scale( T.grid_data(), 1.0 / prm.boundary_parameters.delta_T_K );
                 scale( u.block_1().grid_data(), 1.0 / prm.physics_parameters.calc_cm_per_year );
                 scale(
                     eta[velocity_level].grid_data(),
