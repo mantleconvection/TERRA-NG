@@ -50,6 +50,13 @@ void scale( const grid::Grid4DDataScalar< ScalarType >& x, ScalarType value )
     Kokkos::fence();
 }
 
+template < typename ScalarType, int VecDim >
+void scale( const grid::Grid4DDataVec< ScalarType, VecDim >& x, ScalarType value )
+{
+    for ( int d = 0; d < VecDim; ++d )
+        scale( x.comp_[d], value );
+}
+
 template < typename ScalarType, util::FlagLike FlagType >
 void assign_masked_else_keep_old(
     const grid::Grid4DDataScalar< ScalarType >& dst,
