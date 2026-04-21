@@ -986,7 +986,7 @@ class FCTSolver : public EnergySolver< ScalarType >
         // Project T_fct -> Q1 T once after all substeps.
         {
             util::Timer timer_fct_projection( "fct_l2_projection" );
-            fv::hex::l2_project_fv_to_fe(
+            fv::hex::l2_project_fv_to_fe_lumped(
                 T_, T_fct_, *domain_, coords_shell_, coords_radii_, l2_proj_tmps_ );
 
             // Enforce Dirichlet BCs on the Q1 temperature.

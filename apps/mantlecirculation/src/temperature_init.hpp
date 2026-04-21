@@ -153,7 +153,7 @@ void initialize_temperature_fields(
             init_l2_tmps.emplace_back(
                 "init_l2_tmp_" + std::to_string( i ), domain, ownership_mask );
         }
-        fv::hex::l2_project_fv_to_fe(
+        fv::hex::l2_project_fv_to_fe_lumped(
             T, T_fct, domain, coords_shell, coords_radii, init_l2_tmps );
     }
 }
