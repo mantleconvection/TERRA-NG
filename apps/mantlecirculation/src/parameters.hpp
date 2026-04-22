@@ -19,6 +19,14 @@ struct MeshParameters
 
     double radius_min = 0.5;
     double radius_max = 1.0;
+
+    // Anisotropic refinement (Path B.1): radial diamond level is set to
+    // (refinement_level_mesh_* + radial_extra_levels) at every MG level, so the
+    // full hierarchy stays consistent (both axes halve per step). lat_sdr/rad_sdr
+    // override refinement_level_subdomains per axis when >= 0.
+    int radial_extra_levels = 0;
+    int lat_sdr             = -1;
+    int rad_sdr             = -1;
 };
 
 struct BoundaryConditionsParameters
@@ -202,6 +210,24 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
 
     add_option_with_default( app, "--radius-min", parameters.mesh_parameters.radius_min )->group( "Domain" );
     add_option_with_default( app, "--radius-max", parameters.mesh_parameters.radius_max )->group( "Domain" );
+
+    add_option_with_default(
+        app, "--radial-extra-levels", parameters.mesh_parameters.radial_extra_levels )
+        ->group( "Domain" )
+        ->description(
+            "Per-MG-level offset added to the radial diamond refinement level relative to the "
+            "lateral one. Radial level at each MG level L becomes L + radial_extra_levels, so the "
+            "hierarchy coarsens uniformly in both axes. Default 0 = isotropic." );
+    add_option_with_default(
+        app, "--lat-sdr", parameters.mesh_parameters.lat_sdr )
+        ->group( "Domain" )
+        ->description(
+            "Override the lateral subdomain refinement level (otherwise --refinement-level-subdomains is used)." );
+    add_option_with_default(
+        app, "--rad-sdr", parameters.mesh_parameters.rad_sdr )
+        ->group( "Domain" )
+        ->description(
+            "Override the radial subdomain refinement level (otherwise --refinement-level-subdomains is used)." );
 
     ///////////////////////////
     /// Boundary conditions ///

@@ -110,20 +110,27 @@ Result<> run( const Parameters& prm )
     std::vector< Grid4DDataScalar< grid::NodeOwnershipFlag > >        ownership_mask_data;
     std::vector< Grid4DDataScalar< grid::shell::ShellBoundaryFlag > > boundary_mask_data;
 
+    const int lat_sdr = ( prm.mesh_parameters.lat_sdr >= 0 ) ? prm.mesh_parameters.lat_sdr
+                                                             : prm.mesh_parameters.refinement_level_subdomains;
+    const int rad_sdr = ( prm.mesh_parameters.rad_sdr >= 0 ) ? prm.mesh_parameters.rad_sdr
+                                                             : prm.mesh_parameters.refinement_level_subdomains;
+
     for ( int level = prm.mesh_parameters.refinement_level_mesh_min;
           level <= prm.mesh_parameters.refinement_level_mesh_max;
           level++ )
     {
-        const int idx = level - prm.mesh_parameters.refinement_level_mesh_min;
+        const int idx       = level - prm.mesh_parameters.refinement_level_mesh_min;
+        const int lat_level = level;
+        const int rad_level = level + prm.mesh_parameters.radial_extra_levels;
 
         domains.push_back(
             DistributedDomain::create_uniform(
-                level,
-                level,
+                lat_level,
+                rad_level,
                 prm.mesh_parameters.radius_min,
                 prm.mesh_parameters.radius_max,
-                prm.mesh_parameters.refinement_level_subdomains,
-                prm.mesh_parameters.refinement_level_subdomains ) );
+                lat_sdr,
+                rad_sdr ) );
         coords_shell.push_back( grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domains[idx] ) );
         coords_radii.push_back( grid::shell::subdomain_shell_radii< ScalarType >( domains[idx] ) );
         ownership_mask_data.push_back( grid::setup_node_ownership_mask_data( domains[idx] ) );

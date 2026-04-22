@@ -11,34 +11,19 @@ namespace terra::kernels::common {
 template < typename ScalarType >
 void set_constant( const grid::Grid2DDataScalar< ScalarType >& x, ScalarType value )
 {
-    Kokkos::parallel_for(
-        "set_constant (Grid2DDataScalar)",
-        Kokkos::MDRangePolicy( { 0, 0 }, { x.extent( 0 ), x.extent( 1 ) } ),
-        KOKKOS_LAMBDA( int i, int j ) { x( i, j ) = value; } );
-
-    Kokkos::fence();
+    Kokkos::deep_copy( x, value );
 }
 
 template < typename ScalarType >
 void set_constant( const grid::Grid3DDataScalar< ScalarType >& x, ScalarType value )
 {
-    Kokkos::parallel_for(
-        "set_constant (Grid3DDataScalar)",
-        Kokkos::MDRangePolicy( { 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ) } ),
-        KOKKOS_LAMBDA( int i, int j, int k ) { x( i, j, k ) = value; } );
-
-    Kokkos::fence();
+    Kokkos::deep_copy( x, value );
 }
 
 template < typename ScalarType >
 void set_constant( const grid::Grid4DDataScalar< ScalarType >& x, ScalarType value )
 {
-    Kokkos::parallel_for(
-        "set_constant (Grid4DDataScalar)",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
-        KOKKOS_LAMBDA( int subdomain, int i, int j, int k ) { x( subdomain, i, j, k ) = value; } );
-
-    Kokkos::fence();
+    Kokkos::deep_copy( x, value );
 }
 
 template < typename ScalarType, int VecDim >
@@ -51,13 +36,7 @@ void set_constant( const grid::Grid4DDataVec< ScalarType, VecDim >& x, ScalarTyp
 template < typename ScalarType >
 void set_constant( const grid::Grid5DDataScalar< ScalarType >& x, ScalarType value )
 {
-    Kokkos::parallel_for(
-        "set_constant (Grid5DDataScalar)",
-        Kokkos::MDRangePolicy(
-            { 0, 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ), x.extent( 4 ) } ),
-        KOKKOS_LAMBDA( int subdomain, int i, int j, int k, int w ) { x( subdomain, i, j, k, w ) = value; } );
-
-    Kokkos::fence();
+    Kokkos::deep_copy( x, value );
 }
 
 template < typename ScalarType >
