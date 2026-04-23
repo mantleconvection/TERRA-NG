@@ -2,6 +2,9 @@
 #pragma once
 #include <iostream>
 #include <mpi.h>
+#ifdef TERRANEO_USE_NESMIK
+#include <nesmik/nesmik.hpp>
+#endif
 
 namespace terra::mpi {
 
@@ -66,6 +69,9 @@ class MPIContext
         }
 
         int err = MPI_Init( argc, argv );
+        #ifdef TERRANEO_USE_NESMIK
+        nesmik::init();
+        #endif
         if ( err != MPI_SUCCESS )
         {
             char errstr[MPI_MAX_ERROR_STRING];
@@ -84,6 +90,9 @@ class MPIContext
     {
         if ( mpi_initialized_ && !is_finalized() )
         {
+            #ifdef TERRANEO_USE_NESMIK
+            nesmik::finalize();
+            #endif
             int err = MPI_Finalize();
             if ( err != MPI_SUCCESS )
             {

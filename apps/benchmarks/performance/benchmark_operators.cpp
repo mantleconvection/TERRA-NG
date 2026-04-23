@@ -12,6 +12,9 @@
 #include "util/cli11_helper.hpp"
 #include "util/info.hpp"
 #include "util/table.hpp"
+#ifdef TERRANEO_USE_NESMIK
+#include <nesmik/nesmik.hpp>
+#endif
 
 using namespace terra;
 
@@ -212,6 +215,9 @@ void run_all( const Parameters& p )
 int main( int argc, char** argv )
 {
     MPI_Init( &argc, &argv );
+    #ifdef TERRANEO_USE_NESMIK
+    nesmik::init();
+    #endif
     Kokkos::ScopeGuard scope_guard( argc, argv );
 
     util::print_general_info( argc, argv );
@@ -267,5 +273,8 @@ int main( int argc, char** argv )
 
     run_all( parameters );
 
+    #ifdef TERRANEO_USE_NESMIK
+    nesmik::finalize();
+    #endif
     MPI_Finalize();
 }
