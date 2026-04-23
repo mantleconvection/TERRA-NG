@@ -2,6 +2,7 @@
 
 #include "solver.hpp"
 #include "util/table.hpp"
+#include "util/timer.hpp"
 
 namespace terra::linalg::solvers {
 
@@ -118,6 +119,8 @@ class Multigrid
     /// @param b Right-hand side vector (input).
     void solve_impl( OperatorType& A, SolutionVectorType& x, const RHSVectorType& b )
     {
+        util::Timer timer_mg_solve( "mg_solve" );
+
         if ( P_additive_.size() != A_c_.size() || R_.size() != A_c_.size() || tmp_r_.size() != A_c_.size() ||
              tmp_e_.size() != A_c_.size() || tmp_.size() != A_c_.size() + 1 )
         {
@@ -132,6 +135,7 @@ class Multigrid
 
         if ( statistics_ )
         {
+            util::Timer t_res( "mg_residual_compute" );
             apply( A, x, tmp_[max_level] );
             lincomb( tmp_[max_level], { 1.0, -1.0 }, { b, tmp_[max_level] } );
             initial_residual = norm_2( tmp_[max_level] );
@@ -148,10 +152,14 @@ class Multigrid
 
         for ( int cycle = 1; cycle <= num_cycles_; ++cycle )
         {
-            solve_recursive( A, x, b, max_level );
+            {
+                util::Timer t_cyc( "mg_vcycle" );
+                solve_recursive( A, x, b, max_level );
+            }
 
             if ( statistics_ )
             {
+                util::Timer t_res( "mg_residual_compute" );
                 apply( A, x, tmp_[max_level] );
                 lincomb( tmp_[max_level], { 1.0, -1.0 }, { b, tmp_[max_level] } );
                 const auto absolute_residual = norm_2( tmp_[max_level] );
@@ -185,29 +193,40 @@ class Multigrid
     {
         if ( level == 0 )
         {
+            util::Timer t_cs( "mg_coarse_solve" );
             solve( coarse_grid_solver_, A, tmp_e_[0], tmp_r_[0] );
             return;
         }
 
         // relax on Ax = b
-        solve( smoothers_pre_[level], A, x, b );
+        {
+            util::Timer t_sp( "mg_smoother_pre" );
+            solve( smoothers_pre_[level], A, x, b );
+        }
 
-        // compute the residual r = b - Ax
-        apply( A, x, tmp_[level] );
-        lincomb( tmp_[level], { 1.0, -1.0 }, { b, tmp_[level] } );
-
-        // restrict the residual r_c = R r_f
-        apply( R_[level - 1], tmp_[level], tmp_r_[level - 1] );
+        // compute the residual r = b - Ax and restrict it to the coarse level
+        {
+            util::Timer t_rr( "mg_residual_and_restrict" );
+            apply( A, x, tmp_[level] );
+            lincomb( tmp_[level], { 1.0, -1.0 }, { b, tmp_[level] } );
+            apply( R_[level - 1], tmp_[level], tmp_r_[level - 1] );
+        }
 
         // solve (recursively) A_c e_c = r_c
         assign( tmp_e_[level - 1], 0.0 );
         solve_recursive( A_c_[level - 1], tmp_e_[level - 1], tmp_r_[level - 1], level - 1 );
 
         // apply the coarse grid correction x = x + P e_c
-        apply( P_additive_[level - 1], tmp_e_[level - 1], x );
+        {
+            util::Timer t_p( "mg_prolongate_correct" );
+            apply( P_additive_[level - 1], tmp_e_[level - 1], x );
+        }
 
         // relax on A x = b
-        solve( smoothers_post_[level], A, x, b );
+        {
+            util::Timer t_sP( "mg_smoother_post" );
+            solve( smoothers_post_[level], A, x, b );
+        }
     }
 };
 
