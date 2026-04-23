@@ -264,22 +264,37 @@ Result<> run( const Parameters& prm )
 
     // Setting up XDMF output (serves for both checkpointing and visualization).
 
-    io::XDMFOutput xdmf_output(
+    // Initialize two XDMFOutput insances - one at the finest level (velocity_level) and a second optional one if pressure (at pressure_level) is written out.
+    // Both are created as std::optional objects so that access syntax remains uniform.
+    std::optional< io::XDMFOutput< ScalarType > > xdmf_output;
+    std::optional< io::XDMFOutput< ScalarType > > xdmf_output_pressure;
+
+    xdmf_output.emplace(
         prm.io_parameters.outdir + "/" + prm.io_parameters.xdmf_dir,
         ( *domains[velocity_level] ),
         coords_shell[velocity_level],
         coords_radii[velocity_level] );
-
-    xdmf_output.add( T.grid_data() );
-    xdmf_output.add( u.block_1().grid_data() );
-    xdmf_output.add( stokes.eta_fine().grid_data() );
 
     // Reference conductive temperature profile (also used for the Nusselt number).
     VectorQ1Scalar< ScalarType > T_ref( "T_ref", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
     compute_reference_conductive_profile(
         T_ref, ( *domains[velocity_level] ), coords_shell[velocity_level], coords_radii[velocity_level] );
 
-    xdmf_output.add( T_ref.grid_data() );
+    xdmf_output->add( T_ref.grid_data() );
+    xdmf_output->add( T.grid_data() );                   // Temperature
+    xdmf_output->add( u.block_1().grid_data() );         // Velocity
+    xdmf_output->add( eta[velocity_level].grid_data() ); // Viscosity
+
+    if ( prm.io_parameters.output_pressure )
+    {
+        xdmf_output_pressure.emplace(
+            prm.io_parameters.outdir + "/" + prm.io_parameters.xdmf_dir + "_p",
+            domains[pressure_level],
+            coords_shell[pressure_level],
+            coords_radii[pressure_level] );
+
+        xdmf_output_pressure->add( u.block_2().grid_data() ); // Pressure
+    }
 
     int timestep_initial = 0;
 
@@ -310,7 +325,17 @@ Result<> run( const Parameters& prm )
     int pad_width = std::to_string( timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 ).length();
     xdmf_output->set_write_counter( timestep_initial, pad_width );
 
-    xdmf_output.write();
+    logroot << "Writing initial XDMF ..." << std::endl;
+
+    // Write to xdmf
+    write_xdmf(
+        xdmf_output,
+        xdmf_output_pressure,
+        prm,
+        T.grid_data(),
+        u.block_1().grid_data(),
+        eta[velocity_level].grid_data(),
+        u.block_2().grid_data() );
 
     logroot << "Writing initial radial profiles ..." << std::endl;
 
@@ -487,148 +512,128 @@ Result<> run( const Parameters& prm )
 
         const bool write_output = ( timestep % prm.io_parameters.output_frequency == 0 );
 
-        if ( write_output && !prm.io_parameters.no_xdmf )
+        // Write to xdmf
+        write_xdmf(
+            xdmf_output,
+            xdmf_output_pressure,
+            prm,
+            T.grid_data(),
+            u.block_1().grid_data(),
+            eta[velocity_level].grid_data(),
+            u.block_2().grid_data() );
+
+        // Energy-solver-specific diagnostics dump first — refreshes EV
+        // diagnostic views (lap_diag_) so the radial-profile pass below sees
+        // up-to-date data.
+        if ( write_output )
         {
-            logroot << "Writing XDMF output ..." << std::endl;
-            if ( prm.devel_parameters.output_dimensional )
-            {
-                // Redimensionalise ...
-                scale( T.grid_data(), prm.boundary_parameters.delta_T_K );
-                scale( u.block_1().grid_data(), prm.physics_parameters.calc_cm_per_year );
-                scale(
-                    eta[velocity_level].grid_data(), prm.physics_parameters.viscosity_parameters.reference_viscosity );
+            energy->dump_diagnostics( timestep, prm.io_parameters.outdir );
+        }
 
-                xdmf_output.write();
+        if ( write_output && !prm.io_parameters.no_radial_profiles )
+        {
+            logroot << "Writing radial profiles ..." << std::endl;
+            compute_and_write_radial_profiles(
+                T, subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
+            compute_and_write_radial_profiles(
+                stokes.eta_fine(), subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
+            compute_and_write_velocity_radial_profiles(
+                u.block_1(),
+                coords_shell[velocity_level],
+                subdomain_shell_idx,
+                ( *domains[velocity_level] ),
+                ownership_mask_data[velocity_level],
+                prm.io_parameters,
+                timestep );
 
-                // ... and nondimensionalise again
-                scale( T.grid_data(), 1.0 / prm.boundary_parameters.delta_T_K );
-                scale( u.block_1().grid_data(), 1.0 / prm.physics_parameters.calc_cm_per_year );
-                scale(
-                    eta[velocity_level].grid_data(),
-                    1.0 / prm.physics_parameters.viscosity_parameters.reference_viscosity );
-            }
-            else
+            // EV-specific diagnostic profiles (refreshed by dump_diagnostics).
+            if ( auto* lap_view = energy->lap_diag_view() )
             {
-                xdmf_output.write();
-            }
-
-            // Energy-solver-specific diagnostics dump first — refreshes EV
-            // diagnostic views (lap_diag_) so the radial-profile pass below sees
-            // up-to-date data.
-            if ( write_output )
-            {
-                energy->dump_diagnostics( timestep, prm.io_parameters.outdir );
-            }
-
-            if ( write_output && !prm.io_parameters.no_radial_profiles )
-            {
-                logroot << "Writing radial profiles ..." << std::endl;
                 compute_and_write_radial_profiles(
-                    T, subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
+                    *lap_view, subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
+            }
+            if ( auto* hw_view = energy->h_w_diag_view() )
+            {
                 compute_and_write_radial_profiles(
-                    stokes.eta_fine(), subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
-                compute_and_write_velocity_radial_profiles(
-                    u.block_1(),
-                    coords_shell[velocity_level],
-                    subdomain_shell_idx,
-                    ( *domains[velocity_level] ),
-                    ownership_mask_data[velocity_level],
-                    prm.io_parameters,
-                    timestep );
-
-                // EV-specific diagnostic profiles (refreshed by dump_diagnostics).
-                if ( auto* lap_view = energy->lap_diag_view() )
-                {
-                    compute_and_write_radial_profiles(
-                        *lap_view, subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
-                }
-                if ( auto* hw_view = energy->h_w_diag_view() )
-                {
-                    compute_and_write_radial_profiles(
-                        *hw_view, subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
-                }
-            }
-
-            // Nusselt number: computed and appended to <outdir>/nu.csv at the
-            // same cadence as XDMF output (output_frequency).
-            if ( write_output )
-            {
-                const auto Nu_top = compute_nusselt(
-                    ( *domains[velocity_level] ),
-                    T,
-                    T_ref,
-                    coords_shell[velocity_level],
-                    coords_radii[velocity_level],
-                    boundary_mask_data[velocity_level],
-                    ownership_mask_data[velocity_level],
-                    /*at_surface=*/true );
-                const auto Nu_top_fv = compute_nusselt_fv(
-                    ( *domains[velocity_level] ),
-                    T_fct,
-                    boundary_mask_data[velocity_level],
-                    prm.boundary_conditions_parameters.temperature_surface,
-                    prm.boundary_conditions_parameters.temperature_cmb,
-                    prm.mesh_parameters.radius_min,
-                    prm.mesh_parameters.radius_max,
-                    /*at_surface=*/true );
-                const auto V_rms = compute_v_rms(
-                    ( *domains[velocity_level] ),
-                    u.block_1(),
-                    coords_shell[velocity_level],
-                    coords_radii[velocity_level] );
-                if ( timestep % 10 == 0 )
-                {
-                    logroot << "Nu_top (Q1) = " << Nu_top << ", Nu_top (FV) = " << Nu_top_fv << ", V_rms = " << V_rms
-                            << std::endl;
-                }
-                // Per-step CSV. simulated_time is updated below; the value here is
-                // the time at the *end* of this step (current T just solved).
-                if ( mpi::rank() == 0 )
-                {
-                    const std::string path = prm.io_parameters.outdir + "/nu.csv";
-                    std::ofstream     out( path, std::ios::app );
-                    if ( out.tellp() == 0 )
-                    {
-                        out << "timestep,sim_time,Nu_top_Q1,Nu_top_FV,V_rms\n";
-                    }
-                    const double t_end_of_step = simulated_time + prm.time_stepping_parameters.energy_substeps * dt;
-                    out << timestep << "," << t_end_of_step << "," << Nu_top << "," << Nu_top_fv << "," << V_rms
-                        << "\n";
-                }
-            }
-
-            simulated_time += prm.time_stepping_parameters.energy_substeps * dt;
-
-            logroot << "Simulated time: " << simulated_time << " (stopping at " << prm.time_stepping_parameters.t_end
-                    << ", we're at " << simulated_time / prm.time_stepping_parameters.t_end * 100.0 << "%)"
-                    << std::endl;
-            timer_timestep.stop();
-
-            if ( write_output )
-            {
-                write_timer_tree( prm.io_parameters, timestep );
-            }
-
-            if ( simulated_time >= prm.time_stepping_parameters.t_end )
-            {
-                break;
-            }
-
-            if ( has_nan_or_inf( T ) )
-            {
-                logroot << "\nDETECTED NAN OR INF.\n\n"
-                           "For some reason the temperature vector contains NaN or inf values.\n"
-                           "Those might come from anywhere (not necessarily the energy solve).\n"
-                           "To avoid burning compute time, the simulation will exit now.\n\n"
-                           "You may be able to recover the simulation from an earlier checkpoint.\n\n"
-                           "Good luck and bye."
-                        << std::endl;
-                break;
+                    *hw_view, subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
             }
         }
 
-        return { Ok{} };
+        // Nusselt number: computed and appended to <outdir>/nu.csv at the
+        // same cadence as XDMF output (output_frequency).
+        if ( write_output )
+        {
+            const auto Nu_top = compute_nusselt(
+                ( *domains[velocity_level] ),
+                T,
+                T_ref,
+                coords_shell[velocity_level],
+                coords_radii[velocity_level],
+                boundary_mask_data[velocity_level],
+                ownership_mask_data[velocity_level],
+                /*at_surface=*/true );
+            const auto Nu_top_fv = compute_nusselt_fv(
+                ( *domains[velocity_level] ),
+                T_fct,
+                boundary_mask_data[velocity_level],
+                prm.boundary_conditions_parameters.temperature_surface,
+                prm.boundary_conditions_parameters.temperature_cmb,
+                prm.mesh_parameters.radius_min,
+                prm.mesh_parameters.radius_max,
+                /*at_surface=*/true );
+            const auto V_rms = compute_v_rms(
+                ( *domains[velocity_level] ), u.block_1(), coords_shell[velocity_level], coords_radii[velocity_level] );
+            if ( timestep % 10 == 0 )
+            {
+                logroot << "Nu_top (Q1) = " << Nu_top << ", Nu_top (FV) = " << Nu_top_fv << ", V_rms = " << V_rms
+                        << std::endl;
+            }
+            // Per-step CSV. simulated_time is updated below; the value here is
+            // the time at the *end* of this step (current T just solved).
+            if ( mpi::rank() == 0 )
+            {
+                const std::string path = prm.io_parameters.outdir + "/nu.csv";
+                std::ofstream     out( path, std::ios::app );
+                if ( out.tellp() == 0 )
+                {
+                    out << "timestep,sim_time,Nu_top_Q1,Nu_top_FV,V_rms\n";
+                }
+                const double t_end_of_step = simulated_time + prm.time_stepping_parameters.energy_substeps * dt;
+                out << timestep << "," << t_end_of_step << "," << Nu_top << "," << Nu_top_fv << "," << V_rms << "\n";
+            }
+        }
+
+        simulated_time += prm.time_stepping_parameters.energy_substeps * dt;
+
+        logroot << "Simulated time: " << simulated_time << " (stopping at " << prm.time_stepping_parameters.t_end
+                << ", we're at " << simulated_time / prm.time_stepping_parameters.t_end * 100.0 << "%)" << std::endl;
+        timer_timestep.stop();
+
+        if ( write_output )
+        {
+            write_timer_tree( prm.io_parameters, timestep );
+        }
+
+        if ( simulated_time >= prm.time_stepping_parameters.t_end )
+        {
+            break;
+        }
+
+        if ( has_nan_or_inf( T ) )
+        {
+            logroot << "\nDETECTED NAN OR INF.\n\n"
+                       "For some reason the temperature vector contains NaN or inf values.\n"
+                       "Those might come from anywhere (not necessarily the energy solve).\n"
+                       "To avoid burning compute time, the simulation will exit now.\n\n"
+                       "You may be able to recover the simulation from an earlier checkpoint.\n\n"
+                       "Good luck and bye."
+                    << std::endl;
+            break;
+        }
     }
+
+    return { Ok{} };
+}
 } // namespace terra::mantlecirculation
 
 int main( int argc, char** argv )

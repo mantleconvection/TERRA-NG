@@ -6,6 +6,7 @@
 
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
+#include "io/xdmf.hpp"
 #include "linalg/vector_q1isoq2_q1.hpp"
 #include "parameters.hpp"
 #include "shell/radial_profiles.hpp"
@@ -33,6 +34,8 @@ using util::logroot;
 using util::Ok;
 using util::Result;
 
+using terra::kernels::common::scale;
+
 using ScalarType = double;
 
 namespace terra::mantlecirculation {
@@ -53,6 +56,62 @@ inline Result<> create_directories( const IOParameters& io_parameters )
     util::prepare_empty_directory( xdmf_dir );
     util::prepare_empty_directory( radial_profiles_dir );
     util::prepare_empty_directory( timer_trees_dir );
+
+    return { Ok{} };
+}
+
+inline Result<> write_xdmf(
+    std::optional< io::XDMFOutput< ScalarType > >& xdmf_output,
+    std::optional< io::XDMFOutput< ScalarType > >& xdmf_output_pressure,
+    const Parameters&                              prm,
+    Grid4DDataScalar< ScalarType >&                Temperature_data,
+    Grid4DDataVec< ScalarType, 3 >&                Velocity_data,
+    Grid4DDataScalar< ScalarType >&                Viscosity_data,
+    Grid4DDataScalar< ScalarType >&                Pressure_data )
+{
+    if ( write_output && !prm.io_parameters.no_xdmf )
+    {
+        logroot << "Writing XDMF output ..." << std::endl;
+
+        if ( prm.devel_parameters.output_dimensional )
+        {
+            // Redimensionalise ...
+            scale( Temperature_data, prm.boundary_parameters.delta_T_K );
+            scale( Velocity_data, prm.physics_parameters.calc_cm_per_year );
+            scale( Viscosity_data, prm.physics_parameters.viscosity_parameters.reference_viscosity );
+
+            xdmf_output->write();
+
+            // ... and nondimensionalise again.
+            scale( Temperature_data, 1.0 / prm.boundary_parameters.delta_T_K );
+            scale( Velocity_data, 1.0 / prm.physics_parameters.calc_cm_per_year );
+            scale( Viscosity_data, 1.0 / prm.physics_parameters.viscosity_parameters.reference_viscosity );
+
+            // Redim, write and nondim pressure
+            if ( xdmf_output_pressure )
+            {
+                scale(
+                    Pressure_data,
+                    ( prm.physics_parameters.viscosity_parameters.reference_viscosity *
+                      prm.physics_parameters.characteristic_velocity ) /
+                        prm.mesh_parameters.mantle_thickness_m );
+
+                xdmf_output_pressure->write();
+
+                scale(
+                    Pressure_data,
+                    prm.mesh_parameters.mantle_thickness_m /
+                        ( prm.physics_parameters.viscosity_parameters.reference_viscosity *
+                          prm.physics_parameters.characteristic_velocity ) );
+            }
+        }
+        else
+        {
+            xdmf_output->write();
+            if ( xdmf_output_pressure )
+                xdmf_output_pressure->write();
+        }
+    }
 
     return { Ok{} };
 }
@@ -103,8 +162,7 @@ inline Result<> compute_and_write_velocity_radial_profiles(
     Kokkos::parallel_for(
         "decompose velocity into radial and tangential",
         Kokkos::MDRangePolicy(
-            { 0, 0, 0, 0 },
-            { u_grid.extent( 0 ), u_grid.extent( 1 ), u_grid.extent( 2 ), u_grid.extent( 3 ) } ),
+            { 0, 0, 0, 0 }, { u_grid.extent( 0 ), u_grid.extent( 1 ), u_grid.extent( 2 ), u_grid.extent( 3 ) } ),
         KOKKOS_LAMBDA( int sd, int x, int y, int r ) {
             const ScalarType ux      = u_grid( sd, x, y, r, 0 );
             const ScalarType uy      = u_grid( sd, x, y, r, 1 );

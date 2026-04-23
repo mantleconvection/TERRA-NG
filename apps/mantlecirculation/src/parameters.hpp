@@ -267,8 +267,9 @@ struct TimeSteppingParameters
 
 struct IOParameters
 {
-    std::string outdir    = "output";
-    bool        overwrite = false;
+    std::string outdir          = "output";
+    bool        overwrite       = false;
+    bool        output_pressure = true;
 
     std::string xdmf_dir                = "xdmf";
     std::string radial_profiles_out_dir = "radial_profiles";
@@ -684,6 +685,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
 
     add_option_with_default( app, "--outdir", parameters.io_parameters.outdir )->group( "I/O" );
     add_flag_with_default( app, "--outdir-overwrite", parameters.io_parameters.overwrite )->group( "I/O" );
+    add_option_with_default( app, "--output-pressure", parameters.io_parameters.output_pressure )->group( "I/O" );
 
     add_option_with_default( app, "--checkpoint-dir", parameters.io_parameters.checkpoint_dir )->group( "I/O" );
     add_option_with_default( app, "--checkpoint-step", parameters.io_parameters.checkpoint_step )->group( "I/O" );
