@@ -8,6 +8,13 @@ target_sources(terra
         library_dummy.cpp
         types.hpp)
 
+if(NESMIK_HOME)
+	target_include_directories(terra PUBLIC ${NESMIK_HOME}/include)
+	target_link_directories(terra PUBLIC ${NESMIK_HOME}/lib ${NESMIK_HOME}/lib64)
+	target_link_libraries(terra PUBLIC nesmik)
+        target_compile_definitions(terra PUBLIC TERRANEO_USE_NESMIK)
+endif()
+
 add_subdirectory(communication)
 add_subdirectory(dense)
 add_subdirectory(eigen)

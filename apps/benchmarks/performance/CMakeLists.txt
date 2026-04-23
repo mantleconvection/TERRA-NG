@@ -22,7 +22,7 @@ target_compile_options(benchmark_bandwidth PRIVATE --offload-arch=gfx90a)
 add_test(NAME benchmark_bandwidth COMMAND benchmark_bandwidth)
 
 # Raw HIP bandwidth benchmark (no Kokkos, no terra — hipcc links HIP automatically)
-add_executable(benchmark_bandwidth_raw benchmark_bandwidth_raw.cpp)
-target_compile_options(benchmark_bandwidth_raw PRIVATE --offload-arch=gfx90a)
-add_test(NAME benchmark_bandwidth_raw COMMAND benchmark_bandwidth_raw)
+#add_executable(benchmark_bandwidth_raw benchmark_bandwidth_raw.cpp)
+#target_compile_options(benchmark_bandwidth_raw PRIVATE --offload-arch=gfx90a)
+#add_test(NAME benchmark_bandwidth_raw COMMAND benchmark_bandwidth_raw)
 
