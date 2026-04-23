@@ -198,15 +198,17 @@ class Multigrid
             return;
         }
 
+        const std::string level_suffix = "_L" + std::to_string( level );
+
         // relax on Ax = b
         {
-            util::Timer t_sp( "mg_smoother_pre" );
+            util::Timer t_sp( "mg_smoother_pre" + level_suffix );
             solve( smoothers_pre_[level], A, x, b );
         }
 
         // compute the residual r = b - Ax and restrict it to the coarse level
         {
-            util::Timer t_rr( "mg_residual_and_restrict" );
+            util::Timer t_rr( "mg_residual_and_restrict" + level_suffix );
             apply( A, x, tmp_[level] );
             lincomb( tmp_[level], { 1.0, -1.0 }, { b, tmp_[level] } );
             apply( R_[level - 1], tmp_[level], tmp_r_[level - 1] );
@@ -218,13 +220,13 @@ class Multigrid
 
         // apply the coarse grid correction x = x + P e_c
         {
-            util::Timer t_p( "mg_prolongate_correct" );
+            util::Timer t_p( "mg_prolongate_correct" + level_suffix );
             apply( P_additive_[level - 1], tmp_e_[level - 1], x );
         }
 
         // relax on A x = b
         {
-            util::Timer t_sP( "mg_smoother_post" );
+            util::Timer t_sP( "mg_smoother_post" + level_suffix );
             solve( smoothers_post_[level], A, x, b );
         }
     }
