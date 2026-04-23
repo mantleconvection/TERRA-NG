@@ -13,7 +13,7 @@
 #include "fe/wedge/operators/shell/prolongation_constant.hpp"
 #include "fe/wedge/operators/shell/restriction_constant.hpp"
 #include "fe/wedge/operators/shell/stokes.hpp"
-#include "fe/wedge/operators/shell/unsteady_advection_diffusion_supg.hpp"
+#include "fe/wedge/operators/shell/unsteady_advection_diffusion_supg_kerngen.hpp"
 #include "fe/wedge/operators/shell/vector_mass.hpp"
 #include "fv/hex/conversion.hpp"
 #include "fv/hex/helpers.hpp"
@@ -863,7 +863,7 @@ Result<> run( const Parameters& prm )
 
     // --- SUPG energy solver setup (only constructed if needed) ---
 
-    using AD = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPG< ScalarType >;
+    using AD = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPGKerngen< ScalarType >;
     using TempMass = fe::wedge::operators::shell::Mass< ScalarType >;
 
     const bool use_supg = ( prm.time_stepping_parameters.energy_solver == EnergySolverType::SUPG );

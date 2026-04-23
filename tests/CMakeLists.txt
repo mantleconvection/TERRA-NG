@@ -92,6 +92,9 @@ add_terra_test(test_divergence_perf)
 add_terra_test(test_gradient_fast_vs_slow)
 add_terra_test(test_gradient_fast_vs_slow 4)
 add_terra_test(test_gradient_perf)
+add_terra_test(test_supg_fast_vs_slow)
+add_terra_test(test_supg_fast_vs_slow 4)
+add_terra_test(test_supg_perf)
 add_terra_test(test_xdmf_writer)
 
 # Adding target for all the tests.
