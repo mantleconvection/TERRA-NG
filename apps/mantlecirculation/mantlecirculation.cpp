@@ -954,6 +954,8 @@ Result<> run( const Parameters& prm )
     for ( int timestep = timestep_initial + 1; timestep < prm.time_stepping_parameters.max_timesteps; timestep++ )
     {
         logroot << "\n### Timestep " << timestep << " ###" << std::endl;
+        util::Timer timer_timestep( "timestep" );
+
 
         const int num_picard = prm.time_stepping_parameters.picard_iterations;
 
@@ -1278,6 +1280,7 @@ Result<> run( const Parameters& prm )
 
         logroot << "Simulated time: " << simulated_time << " (stopping at " << prm.time_stepping_parameters.t_end
                 << ", we're at " << simulated_time / prm.time_stepping_parameters.t_end * 100.0 << "%)" << std::endl;
+        timer_timestep.stop();
 
         write_timer_tree( prm.io_parameters, timestep );
 
