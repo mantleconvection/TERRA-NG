@@ -86,6 +86,12 @@ add_terra_test(test_unsteady_advection_diffusion_supg_2)
 add_terra_test(test_vector_laplace_cg)
 add_terra_test(test_vector_laplace_compare)
 add_terra_test(test_epsilon_divdiv_freeslip_fast_vs_slow)
+add_terra_test(test_divergence_fast_vs_slow)
+add_terra_test(test_divergence_fast_vs_slow 4)
+add_terra_test(test_divergence_perf)
+add_terra_test(test_gradient_fast_vs_slow)
+add_terra_test(test_gradient_fast_vs_slow 4)
+add_terra_test(test_gradient_perf)
 add_terra_test(test_xdmf_writer)
 
 # Adding target for all the tests.

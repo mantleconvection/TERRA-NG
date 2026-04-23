@@ -3,6 +3,7 @@
 
 #include "../../quadrature/quadrature.hpp"
 #include "communication/shell/communication.hpp"
+#include "communication/shell/communication_plan.hpp"
 #include "dense/vec.hpp"
 #include "fe/wedge/integrands.hpp"
 #include "fe/wedge/kernel_helpers.hpp"
@@ -47,8 +48,8 @@ class Divergence
     linalg::OperatorApplyMode         operator_apply_mode_;
     linalg::OperatorCommunicationMode operator_communication_mode_;
 
-    communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT > send_buffers_;
-    communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT > recv_buffers_;
+    communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT >                        recv_buffers_;
+    terra::communication::shell::ShellBoundaryCommPlan< grid::Grid4DDataScalar< ScalarT > >    comm_plan_;
 
     grid::Grid4DDataVec< ScalarType, 3 > src_;
     grid::Grid4DDataScalar< ScalarType > dst_;
@@ -71,9 +72,8 @@ class Divergence
     , boundary_mask_fine_( boundary_mask_fine )
     , operator_apply_mode_( operator_apply_mode )
     , operator_communication_mode_( operator_communication_mode )
-    // TODO: we can reuse the send and recv buffers and pass in from the outside somehow
-    , send_buffers_( domain_coarse )
     , recv_buffers_( domain_coarse )
+    , comm_plan_( domain_coarse )
     {
         bcs_[0] = bcs[0];
         bcs_[1] = bcs[1];
@@ -107,10 +107,7 @@ class Divergence
         if ( operator_communication_mode_ == linalg::OperatorCommunicationMode::CommunicateAdditively )
         {
             util::Timer timer_comm( "divergence_comm" );
-
-            communication::shell::pack_send_and_recv_local_subdomain_boundaries(
-                domain_coarse_, dst_, send_buffers_, recv_buffers_ );
-            communication::shell::unpack_and_reduce_local_subdomain_boundaries( domain_coarse_, dst_, recv_buffers_ );
+            terra::communication::shell::send_recv_with_plan( comm_plan_, dst_, recv_buffers_ );
         }
     }
 

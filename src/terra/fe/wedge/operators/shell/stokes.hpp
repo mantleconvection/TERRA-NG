@@ -2,8 +2,8 @@
 #pragma once
 
 #include "communication/shell/communication.hpp"
-#include "divergence.hpp"
-#include "gradient.hpp"
+#include "divergence_kerngen.hpp"
+#include "gradient_kerngen.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector_q1isoq2_q1.hpp"
@@ -22,14 +22,14 @@ class Stokes
     using ScalarType    = ScalarT;
 
     using Block11Type = VectorLaplace< ScalarType, VecDim >;
-    using Block12Type = Gradient< ScalarType >;
-    using Block21Type = Divergence< ScalarType >;
+    using Block12Type = GradientKerngen< ScalarType >;
+    using Block21Type = DivergenceKerngen< ScalarType >;
     using Block22Type = Zero< ScalarType >;
 
   private:
     VectorLaplace< ScalarType, VecDim > A_;
-    Gradient< ScalarType >              B_T_;
-    Divergence< ScalarType >            B_;
+    GradientKerngen< ScalarType >              B_T_;
+    DivergenceKerngen< ScalarType >            B_;
     Zero< ScalarType >                  O_;
 
     bool diagonal_;
