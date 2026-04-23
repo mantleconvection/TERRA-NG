@@ -302,30 +302,15 @@ Result<> run( const Parameters& prm )
         {
             stokes.update_viscosity( T );
         }
-        // Continue XDMF output sequence from the checkpoint file step.
-        xdmf_output.set_write_counter( prm.io_parameters.checkpoint_step );
     }
 
-    logroot << "Writing initial XDMF ..." << std::endl;
+    // Setting XDMF to the same step as we have loaded and padding width according to max_timesteps.
+    // Thus, we will re-write loaded data.
+    // Maybe a good sanity check.
+    int pad_width = std::to_string( timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 ).length();
+    xdmf_output->set_write_counter( timestep_initial, pad_width );
 
-    if ( prm.devel_parameters.output_dimensional )
-    {
-        // Redimensionalise ...
-        scale( T.grid_data(), prm.boundary_parameters.delta_T_K );
-        scale( u.block_1().grid_data(), prm.physics_parameters.calc_cm_per_year );
-        scale( eta[velocity_level].grid_data(), prm.physics_parameters.viscosity_parameters.reference_viscosity );
-
-        xdmf_output.write();
-
-        // ... and nondimensionalise again
-        scale( T.grid_data(), 1.0 / prm.boundary_parameters.delta_T_K );
-        scale( u.block_1().grid_data(), 1.0 / prm.physics_parameters.calc_cm_per_year );
-        scale( eta[velocity_level].grid_data(), 1.0 / prm.physics_parameters.viscosity_parameters.reference_viscosity );
-    }
-    else
-    {
-        xdmf_output.write();
-    }
+    xdmf_output.write();
 
     logroot << "Writing initial radial profiles ..." << std::endl;
 

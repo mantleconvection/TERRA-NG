@@ -2,6 +2,8 @@
 #pragma once
 
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 
 #include "mpi/mpi.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
@@ -200,11 +202,18 @@ class XDMFOutput
         }
     }
 
-    /// @brief Set the write counter manually.
+    /// @brief Set the write counter and according zero-padding width manually.
     ///
     /// This will only affect the step number attached to the file names. The geometry is still written once during the
     /// first write() call.
-    void set_write_counter( int write_counter ) { write_counter_ = write_counter; }
+    void set_write_counter( int write_counter, int pad_width )
+    {
+        pad_width_ = pad_width;
+
+        std::ostringstream oss;
+        oss << std::setw( pad_width ) << std::setfill( '0' ) << write_counter;
+        write_counter_str_ = oss.str();
+    }
 
     /// @brief Adds a new scalar data grid to be written out.
     ///
@@ -302,7 +311,8 @@ class XDMFOutput
         const auto geometry_file_path = directory_path_ + "/" + geometry_file_base;
         const auto topology_file_path = directory_path_ + "/" + topology_file_base;
 
-        const auto step_file_path = directory_path_ + "/step_" + std::to_string( write_counter_ ) + ".xmf";
+        // Construct file path and name with zero-padded write_counter.
+        const auto step_file_path = directory_path_ + "/step_" + write_counter_str_ + ".xmf";
 
         const int num_subdomains = coords_shell_device_.extent( 0 );
         const int nodes_x        = coords_shell_device_.extent( 1 );
@@ -509,6 +519,11 @@ class XDMFOutput
         }
 
         write_counter_++;
+
+        std::ostringstream oss;
+        oss << std::setw( pad_width_ ) << std::setfill( '0' ) << write_counter_;
+        write_counter_str_ = oss.str();
+
         first_write_happened_ = true;
     }
 
@@ -721,7 +736,7 @@ class XDMFOutput
         const grid::Grid4DDataScalar< ScalarTypeIn >& data,
         const OutputTypeFloat&                        output_type )
     {
-        const auto attribute_file_base = data.label() + "_" + std::to_string( write_counter_ ) + ".bin";
+        const auto attribute_file_base = data.label() + "_" + write_counter_str_ + ".bin";
         const auto attribute_file_path = directory_path_ + "/" + attribute_file_base;
 
         {
@@ -756,15 +771,14 @@ class XDMFOutput
 
         auto attribute =
             util::XML( "Attribute", { { "Name", data.label() }, { "AttributeType", "Scalar" }, { "Center", "Node" } } )
-                .add_child(
-                    util::XML(
-                        "DataItem",
-                        { { "Format", "Binary" },
-                          { "DataType", "Float" },
-                          { "Precision", std::to_string( static_cast< int >( output_type ) ) },
-                          { "Endian", "Little" },
-                          { "Dimensions", std::to_string( number_of_nodes_global_ ) } },
-                        attribute_file_base ) );
+                .add_child( util::XML(
+                    "DataItem",
+                    { { "Format", "Binary" },
+                      { "DataType", "Float" },
+                      { "Precision", std::to_string( static_cast< int >( output_type ) ) },
+                      { "Endian", "Little" },
+                      { "Dimensions", std::to_string( number_of_nodes_global_ ) } },
+                    attribute_file_base ) );
 
         return attribute;
     }
@@ -846,7 +860,7 @@ class XDMFOutput
         const grid::Grid4DDataVec< ScalarTypeIn, VecDim >& data,
         const OutputTypeFloat&                             output_type )
     {
-        const auto attribute_file_base = data.label() + "_" + std::to_string( write_counter_ ) + ".bin";
+        const auto attribute_file_base = data.label() + "_" + write_counter_str_ + ".bin";
         const auto attribute_file_path = directory_path_ + "/" + attribute_file_base;
 
         {
@@ -881,16 +895,14 @@ class XDMFOutput
 
         auto attribute =
             util::XML( "Attribute", { { "Name", data.label() }, { "AttributeType", "Vector" }, { "Center", "Node" } } )
-                .add_child(
-                    util::XML(
-                        "DataItem",
-                        { { "Format", "Binary" },
-                          { "DataType", "Float" },
-                          { "Precision", std::to_string( static_cast< int >( output_type ) ) },
-                          { "Endian", "Little" },
-                          { "Dimensions",
-                            std::to_string( number_of_nodes_global_ ) + " " + std::to_string( VecDim ) } },
-                        attribute_file_base ) );
+                .add_child( util::XML(
+                    "DataItem",
+                    { { "Format", "Binary" },
+                      { "DataType", "Float" },
+                      { "Precision", std::to_string( static_cast< int >( output_type ) ) },
+                      { "Endian", "Little" },
+                      { "Dimensions", std::to_string( number_of_nodes_global_ ) + " " + std::to_string( VecDim ) } },
+                    attribute_file_base ) );
 
         return attribute;
     }
@@ -1091,8 +1103,10 @@ class XDMFOutput
     std::optional< grid::Grid4DDataVec< double, 3 >::HostMirror > host_data_mirror_vec_double_;
     std::optional< grid::Grid4DDataVec< float, 3 >::HostMirror >  host_data_mirror_vec_float_;
 
-    int  write_counter_        = 0;
-    bool first_write_happened_ = false;
+    std::string write_counter_str_;
+    int         write_counter_        = 0;
+    int         pad_width_            = 0;
+    bool        first_write_happened_ = false;
 
     int64_t number_of_nodes_offset_      = -1;
     int64_t number_of_elements_offset_   = -1;
