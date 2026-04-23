@@ -453,6 +453,8 @@ class XDMFOutput
         auto domain = XML( "Domain" );
         auto grid   = XML( "Grid", { { "Name", "Grid" }, { "GridType", "Uniform" } } );
 
+	grid.add_child( XML( "Time", { { "Value", std::to_string( write_counter_ ) } } ) );
+
         auto geometry =
             XML( "Geometry", { { "Type", "XYZ" } } )
                 .add_child(
