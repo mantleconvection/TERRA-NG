@@ -43,6 +43,10 @@ stokes-viscous-pc-num-vcycles=1
 stokes-viscous-pc-cheby-order=2
 stokes-viscous-pc-num-smoothing-steps-prepost=3
 stokes-viscous-pc-num-power-iterations=10
+# Per-descent MG preconditioner agglomeration factors. Length must equal
+# num_mg_levels - 1. Empty list (default) = classical V-cycle, no agglomeration.
+# Example: stokes-viscous-pc-agglom-factors=[2, 2, 1, 1] for 5 MG levels.
+stokes-viscous-pc-agglom-factors=[]
 
 ## I/O
 outdir="./output_C1_lvl6_supg_cfl05_picard2"

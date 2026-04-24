@@ -106,6 +106,13 @@ struct StokesSolverParameters
     int viscous_pc_chebyshev_order             = 2;
     int viscous_pc_num_smoothing_steps_prepost = 2;
     int viscous_pc_num_power_iterations        = 10;
+
+    /// Per-descent agglomeration factors for the viscous MG preconditioner.
+    /// Length must equal num_mg_levels - 1 (one factor per coarse descent step).
+    /// Empty = classical MG, all levels on MPI_COMM_WORLD.
+    /// Factor f > 1 at descent i means the comm shrinks by f ranks going from
+    /// MG level max-i-1 to level max-i-2. Factor 1 = identity (no shrink).
+    std::vector< int > viscous_pc_agglom_factors = {};
 };
 
 struct EnergySolverParameters
@@ -445,6 +452,13 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         app,
         "--stokes-viscous-pc-num-power-iterations",
         parameters.stokes_solver_parameters.viscous_pc_num_power_iterations )
+        ->group( "Stokes Solver" );
+    app.add_option(
+           "--stokes-viscous-pc-agglom-factors",
+           parameters.stokes_solver_parameters.viscous_pc_agglom_factors,
+           "Per-descent agglomeration factors for the viscous MG preconditioner. "
+           "Space-separated list of length num_mg_levels-1. Example: \"2 2 1 1\". "
+           "Empty (default) = classical MG with all levels on MPI_COMM_WORLD." )
         ->group( "Stokes Solver" );
 
     /////////////////////

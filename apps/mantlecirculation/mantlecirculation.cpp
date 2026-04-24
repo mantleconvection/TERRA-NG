@@ -4,6 +4,9 @@
 
 #include "communication/shell/communication.hpp"
 #include "communication/shell/fv_communication.hpp"
+#include "communication/shell/redistribute.hpp"
+#include "grid/shell/agglomerated_distribution.hpp"
+#include "mpi/level_comms.hpp"
 #include "fe/strong_algebraic_dirichlet_enforcement.hpp"
 #include "fe/strong_algebraic_freeslip_enforcement.hpp"
 #include "fe/wedge/integrands.hpp"
@@ -115,6 +118,58 @@ Result<> run( const Parameters& prm )
     const int rad_sdr = ( prm.mesh_parameters.rad_sdr >= 0 ) ? prm.mesh_parameters.rad_sdr
                                                              : prm.mesh_parameters.refinement_level_subdomains;
 
+    // -------------------------------------------------------------------------
+    // Build a per-MG-mesh-level communicator ladder from the (optional) MG
+    // preconditioner agglomeration factors. When the list is empty every
+    // level's comm is MPI_COMM_WORLD and behavior is identical to the pre-
+    // agglomeration code path. When non-empty, coarser MG levels receive a
+    // progressively smaller sub-communicator; every DistributedDomain built
+    // below is created with its level's sub-comm, so all downstream objects
+    // (eta, A_c, smoothers, inverse_diagonals, coarse_grid_solver, tmp_mg_*)
+    // automatically live on the correct communicator.
+    // -------------------------------------------------------------------------
+    const auto& agglom_factors = prm.stokes_solver_parameters.viscous_pc_agglom_factors;
+    const int   num_mg_levels  = prm.mesh_parameters.refinement_level_mesh_max
+                                 - prm.mesh_parameters.refinement_level_mesh_min + 1;
+    if ( !agglom_factors.empty() && static_cast< int >( agglom_factors.size() ) != num_mg_levels - 1 )
+    {
+        throw std::runtime_error(
+            "viscous_pc_agglom_factors length (" + std::to_string( agglom_factors.size() ) +
+            ") must equal num_mg_levels - 1 (" + std::to_string( num_mg_levels - 1 ) + ")" );
+    }
+
+    std::vector< MPI_Comm > agglom_level_comms;  // index 0 = finest (= MPI_COMM_WORLD)
+    std::vector< int >      agglom_cum_factors;  // cumulative factor per rung
+    if ( agglom_factors.empty() )
+    {
+        agglom_level_comms.assign( num_mg_levels, MPI_COMM_WORLD );
+        agglom_cum_factors.assign( num_mg_levels, 1 );
+    }
+    else
+    {
+        agglom_level_comms = mpi::build_level_comms( MPI_COMM_WORLD, agglom_factors );
+        agglom_cum_factors.push_back( 1 );
+        for ( int f : agglom_factors )
+            agglom_cum_factors.push_back( agglom_cum_factors.back() * f );
+
+        logroot << "MG agglomeration enabled with factors = {";
+        for ( size_t i = 0; i < agglom_factors.size(); ++i )
+            logroot << ( i ? ", " : "" ) << agglom_factors[i];
+        logroot << "}" << std::endl;
+    }
+
+    // Map MG level (0 = coarsest, num_mg_levels-1 = finest) to its sub-comm +
+    // cumulative-factor entry in the ladder above.
+    auto mg_level_comm       = [&]( int L ) { return agglom_level_comms[( num_mg_levels - 1 ) - L]; };
+    auto mg_level_cum_factor = [&]( int L ) { return agglom_cum_factors[( num_mg_levels - 1 ) - L]; };
+
+    const auto orig_subdomain_to_rank = grid::shell::subdomain_to_rank_iterate_diamond_subdomains;
+    auto       mg_level_subdomain_fn  = [&]( int L ) -> grid::shell::SubdomainToRankDistributionFunction {
+        const int cf = mg_level_cum_factor( L );
+        if ( cf == 1 ) return orig_subdomain_to_rank;
+        return grid::shell::agglomerated_subdomain_to_rank( orig_subdomain_to_rank, cf );
+    };
+
     for ( int level = prm.mesh_parameters.refinement_level_mesh_min;
           level <= prm.mesh_parameters.refinement_level_mesh_max;
           level++ )
@@ -124,13 +179,14 @@ Result<> run( const Parameters& prm )
         const int rad_level = level + prm.mesh_parameters.radial_extra_levels;
 
         domains.push_back(
-            DistributedDomain::create_uniform(
+            DistributedDomain::create_uniform_on_comm(
+                mg_level_comm( idx ),
                 lat_level,
-                rad_level,
-                prm.mesh_parameters.radius_min,
-                prm.mesh_parameters.radius_max,
+                grid::shell::uniform_shell_radii(
+                    prm.mesh_parameters.radius_min, prm.mesh_parameters.radius_max, ( 1 << rad_level ) + 1 ),
                 lat_sdr,
-                rad_sdr ) );
+                rad_sdr,
+                mg_level_subdomain_fn( idx ) ) );
         coords_shell.push_back( grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domains[idx] ) );
         coords_radii.push_back( grid::shell::subdomain_shell_radii< ScalarType >( domains[idx] ) );
         ownership_mask_data.push_back( grid::setup_node_ownership_mask_data( domains[idx] ) );
@@ -231,6 +287,21 @@ Result<> run( const Parameters& prm )
     // Determine AGCA elements.
     VectorQ1Scalar< ScalarType > GCAElements( "GCAElements", domains[0], ownership_mask_data[0] );
     int                          gca = 0;
+
+    // GCA is not compatible with MG agglomeration yet: TwoGridGCA transfers
+    // element matrices between A_c[level+1] and A_c[level], which under
+    // agglomeration live on different sub-communicators. The current GCA
+    // implementation assumes the two ends share a comm, so enabling both would
+    // silently produce wrong coarse operators. Abort early with a clear error.
+    if ( gca > 0 && !prm.stokes_solver_parameters.viscous_pc_agglom_factors.empty() )
+    {
+        throw std::runtime_error(
+            "MG agglomeration (--stokes-viscous-pc-agglom-factors) is not yet compatible with GCA (gca > 0). "
+            "TwoGridGCA's element-matrix transfer between consecutive MG levels currently assumes both levels "
+            "share a communicator, which is violated when the coarse level has been agglomerated onto a sub-comm. "
+            "Either disable agglomeration or keep gca = 0 until the GCA assembly is extended to bridge "
+            "sub-comms via Redistribute." );
+    }
     if ( gca == 2 )
     {
         linalg::assign( GCAElements, 0 );
@@ -452,6 +523,14 @@ Result<> run( const Parameters& prm )
         inverse_diagonals.emplace_back(
             "inverse_diagonal_" + std::to_string( level ), domains[level], ownership_mask_data[level] );
 
+        // Dropped ranks (not in this MG level's sub-comm under agglomeration)
+        // would hit MPI_Allreduce on MPI_COMM_NULL inside apply()'s halo exchange,
+        // or inside invert_entries's safety check. The coarse-level operator is
+        // never applied from those ranks at runtime (guarded inside Multigrid),
+        // so leaving inverse_diagonals uninitialized is safe.
+        if ( domains[level].comm() == MPI_COMM_NULL )
+            continue;
+
         VectorQ1Vec< ScalarType > tmp(
             "inverse_diagonal_tmp" + std::to_string( level ), domains[level], ownership_mask_data[level] );
 
@@ -501,6 +580,11 @@ Result<> run( const Parameters& prm )
     // estimation lazily on first solve, so this just reports what it will compute.
     for ( int level = 0; level < num_levels; level++ )
     {
+        // Under agglomeration, dropped ranks at this level have MPI_COMM_NULL
+        // and would segfault in the power iteration's MPI_Allreduce. Skip.
+        if ( domains[level].comm() == MPI_COMM_NULL )
+            continue;
+
         VectorQ1Vec< ScalarType > tmp_pi_it(
             "cheby_est_tmpIt", domains[level], ownership_mask_data[level] );
         VectorQ1Vec< ScalarType > tmp_pi_aux(
@@ -536,7 +620,102 @@ Result<> run( const Parameters& prm )
 
     logroot << "Setting up multigrid preconditioner ..." << std::endl;
 
-    using PrecVisc = linalg::solvers::Multigrid< Viscous, Prolongation, Restriction, Smoother, CoarseGridSolver >;
+    // Agglomeration setup. If viscous_pc_agglom_factors is empty, the Multigrid
+    // collapses to its classical V-cycle at runtime (redistribute_down_ empty)
+    // while still being templated on Redistribute so the type is stable.
+    using VelGridData  = grid::Grid4DDataVec< ScalarType, 3 >;
+    using Redistribute = communication::shell::Redistribute< VelGridData >;
+    using PrecVisc     = linalg::solvers::Multigrid< Viscous, Prolongation, Restriction, Smoother, CoarseGridSolver,
+                                                      Redistribute >;
+
+    // Agglomeration: all per-level objects above (domains, eta, A_c, smoothers,
+    // inverse_diagonals, tmp_mg, tmp_mg_r/e, CGS) already live on the correct
+    // sub-comm because `domains[level]` was built on `mg_level_comm(level)`.
+    // The only extra pieces the agglomerated V-cycle needs are:
+    //   - per-descent "upper-comm" variants of each coarse mesh (for R[L]/P[L]
+    //     halos and mirror buffers, which cannot straddle communicators);
+    //   - per-descent Redistribute plans;
+    //   - per-descent tmp_mg_r_fine / tmp_mg_e_fine on the upper comm.
+    // When agglom_factors is empty every upper comm equals its lower comm so the
+    // "upper variant" would be identical to domains[L] — we skip building it and
+    // leave the three vectors empty, which the Multigrid interprets as
+    // "classical V-cycle at runtime".
+    std::vector< Redistribute >              redistribute_down;
+    std::vector< VectorQ1Vec< ScalarType > > tmp_mg_r_fine;
+    std::vector< VectorQ1Vec< ScalarType > > tmp_mg_e_fine;
+    std::vector< DistributedDomain >         domains_upper;   // coarse mesh L on level (L+1)'s comm
+    std::vector< Grid4DDataScalar< grid::NodeOwnershipFlag > > mask_upper;
+
+    if ( !agglom_factors.empty() )
+    {
+        redistribute_down.reserve( num_mg_levels - 1 );
+        tmp_mg_r_fine.reserve( num_mg_levels - 1 );
+        tmp_mg_e_fine.reserve( num_mg_levels - 1 );
+        domains_upper.reserve( num_mg_levels - 1 );
+        mask_upper.reserve( num_mg_levels - 1 );
+
+        for ( int L = 0; L < num_mg_levels - 1; ++L )
+        {
+            const int lat_level = prm.mesh_parameters.refinement_level_mesh_min + L;
+            const int rad_level = lat_level + prm.mesh_parameters.radial_extra_levels;
+
+            // Upper-side mesh: coarse level L, but distributed on level (L+1)'s comm.
+            // If the descent L+1 -> L has factor 1 (no agglomeration at that step),
+            // upper == lower: we reuse the existing domains[L] / ownership_mask_data[L].
+            const MPI_Comm upper_comm = mg_level_comm( L + 1 );
+            const int      upper_cf   = mg_level_cum_factor( L + 1 );
+            const bool     same_as_lower = ( upper_comm == mg_level_comm( L ) );
+
+            if ( same_as_lower )
+            {
+                domains_upper.push_back( domains[L] );
+                mask_upper.push_back( ownership_mask_data[L] );
+            }
+            else
+            {
+                DistributedDomain dom_up = DistributedDomain::create_uniform_on_comm(
+                    upper_comm,
+                    lat_level,
+                    grid::shell::uniform_shell_radii(
+                        prm.mesh_parameters.radius_min,
+                        prm.mesh_parameters.radius_max,
+                        ( 1 << rad_level ) + 1 ),
+                    lat_sdr,
+                    rad_sdr,
+                    ( upper_cf == 1 ) ? orig_subdomain_to_rank
+                                       : grid::shell::agglomerated_subdomain_to_rank( orig_subdomain_to_rank,
+                                                                                        upper_cf ) );
+                mask_upper.push_back( grid::setup_node_ownership_mask_data( dom_up ) );
+                domains_upper.push_back( std::move( dom_up ) );
+            }
+
+            // Mirror buffers on the upper comm.
+            tmp_mg_r_fine.emplace_back( "tmp_r_fine_L" + std::to_string( L ),
+                                         domains_upper.back(), mask_upper.back() );
+            tmp_mg_e_fine.emplace_back( "tmp_e_fine_L" + std::to_string( L ),
+                                         domains_upper.back(), mask_upper.back() );
+
+            // Redistribute from upper (coarse mesh on level L+1's comm) to lower
+            // (coarse mesh on level L's comm).
+            redistribute_down.emplace_back(
+                domains_upper.back(),
+                domains[L],
+                ( upper_cf == 1 ) ? orig_subdomain_to_rank
+                                   : grid::shell::agglomerated_subdomain_to_rank( orig_subdomain_to_rank, upper_cf ),
+                mg_level_subdomain_fn( L ) );
+        }
+
+        // The classical R[L] constructor uses domains[L] (coarse side). Under
+        // agglomeration we need R to halo on the UPPER comm — that's exactly
+        // what domains_upper[L] carries. Rebuild R accordingly. (P is
+        // domain-free for the constant-prolongation path in this codebase, so
+        // only R needs the swap.)
+        R.clear();
+        R.reserve( num_mg_levels - 1 );
+        for ( int L = 0; L < num_mg_levels - 1; ++L )
+            R.emplace_back( domains_upper[L] );
+    }
+
     PrecVisc prec_11(
         P,
         R,
@@ -548,7 +727,10 @@ Result<> run( const Parameters& prm )
         smoothers,
         coarse_grid_solver,
         prm.stokes_solver_parameters.viscous_pc_num_vcycles,
-        1e-6 );
+        1e-6,
+        std::move( redistribute_down ),
+        std::move( tmp_mg_r_fine ),
+        std::move( tmp_mg_e_fine ) );
 
     // Schur complement: lumped inverse diagonal of pressure mass
 

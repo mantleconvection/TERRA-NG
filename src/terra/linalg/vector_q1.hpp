@@ -35,6 +35,7 @@ class VectorQ1Scalar
         const grid::shell::DistributedDomain&                    distributed_domain,
         const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask_data )
     : mask_data_( mask_data )
+    , comm_( distributed_domain.comm() )
     {
         grid::Grid4DDataScalar< ScalarType > grid_data(
             label,
@@ -95,7 +96,7 @@ class VectorQ1Scalar
     ScalarType dot_impl( const VectorQ1Scalar& x ) const
     {
         return kernels::common::masked_dot_product(
-            grid_data_, x.grid_data(), mask_data(), grid::NodeOwnershipFlag::OWNED );
+            grid_data_, x.grid_data(), mask_data(), grid::NodeOwnershipFlag::OWNED, comm_ );
     }
 
     /// @brief Invert entries implementation for VectorLike concept.
@@ -117,12 +118,12 @@ class VectorQ1Scalar
     /// @brief Max absolute entry implementation for VectorLike concept.
     /// Computes: \f$ \max_i |y_i| \f$
     /// @return Maximum absolute value.
-    ScalarType max_abs_entry_impl() const { return kernels::common::max_abs_entry( grid_data_ ); }
+    ScalarType max_abs_entry_impl() const { return kernels::common::max_abs_entry( grid_data_, comm_ ); }
 
     /// @brief NaN/inf check implementation for VectorLike concept.
     /// Returns true if any entry of grid_data is NaN/inf.
     /// @return True if NaN/inf is present.
-    bool has_nan_or_inf_impl() const { return kernels::common::has_nan_or_inf( grid_data_ ); }
+    bool has_nan_or_inf_impl() const { return kernels::common::has_nan_or_inf( grid_data_, comm_ ); }
 
     /// @brief Swap implementation for VectorLike concept.
     /// Exchanges grid_data and mask_data with another vector.
@@ -131,6 +132,7 @@ class VectorQ1Scalar
     {
         std::swap( grid_data_, other.grid_data_ );
         std::swap( mask_data_, other.mask_data_ );
+        std::swap( comm_, other.comm_ );
     }
 
     /// @brief Get const reference to grid data.
@@ -143,9 +145,13 @@ class VectorQ1Scalar
     /// @brief Get mutable reference to mask data.
     grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask_data() { return mask_data_; }
 
+    /// @brief MPI communicator this vector's reductions run on.
+    MPI_Comm comm() const { return comm_; }
+
   private:
     grid::Grid4DDataScalar< ScalarType >              grid_data_;
     grid::Grid4DDataScalar< grid::NodeOwnershipFlag > mask_data_;
+    MPI_Comm                                          comm_ = MPI_COMM_WORLD;
 };
 
 /// @brief Static assertion: VectorQ1Scalar satisfies VectorLike concept.
@@ -173,6 +179,7 @@ class VectorQ1Vec
         const grid::shell::DistributedDomain&                    distributed_domain,
         const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask_data )
     : mask_data_( mask_data )
+    , comm_( distributed_domain.comm() )
     {
         grid::Grid4DDataVec< ScalarType, VecDim > grid_data(
             label,
@@ -238,7 +245,7 @@ class VectorQ1Vec
     ScalarType dot_impl( const VectorQ1Vec& x ) const
     {
         return kernels::common::masked_dot_product(
-            grid_data_, x.grid_data(), mask_data_, grid::NodeOwnershipFlag::OWNED );
+            grid_data_, x.grid_data(), mask_data_, grid::NodeOwnershipFlag::OWNED, comm_ );
     }
 
     /// @brief Invert entries implementation for VectorLike concept.
@@ -260,12 +267,12 @@ class VectorQ1Vec
     /// @brief Max absolute entry implementation for VectorLike concept.
     /// Computes: \f$ \max_i |y_i| \f$
     /// @return Maximum absolute value.
-    ScalarType max_abs_entry_impl() const { return kernels::common::max_abs_entry( grid_data_ ); }
+    ScalarType max_abs_entry_impl() const { return kernels::common::max_abs_entry( grid_data_, comm_ ); }
 
     /// @brief NaN/inf check implementation for VectorLike concept.
     /// Returns true if any entry of grid_data is NaN/inf.
     /// @return True if NaN/inf is present.
-    bool has_nan_or_inf_impl() const { return kernels::common::has_nan_or_inf( grid_data_ ); }
+    bool has_nan_or_inf_impl() const { return kernels::common::has_nan_or_inf( grid_data_, comm_ ); }
 
     /// @brief Swap implementation for VectorLike concept.
     /// Exchanges grid_data and mask_data with another vector.
@@ -274,6 +281,7 @@ class VectorQ1Vec
     {
         std::swap( grid_data_, other.grid_data_ );
         std::swap( mask_data_, other.mask_data_ );
+        std::swap( comm_, other.comm_ );
     }
 
     /// @brief Get const reference to grid data.
@@ -286,9 +294,13 @@ class VectorQ1Vec
     /// @brief Get mutable reference to mask data.
     grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask_data() { return mask_data_; }
 
+    /// @brief MPI communicator this vector's reductions run on.
+    MPI_Comm comm() const { return comm_; }
+
   private:
     grid::Grid4DDataVec< ScalarType, VecDim >         grid_data_;
     grid::Grid4DDataScalar< grid::NodeOwnershipFlag > mask_data_;
+    MPI_Comm                                          comm_ = MPI_COMM_WORLD;
 };
 
 /// @brief Static assertion: VectorQ1Vec satisfies VectorLike concept.

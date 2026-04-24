@@ -156,7 +156,7 @@ class ShellBoundaryCommPlan
                     const auto& [neighbor_subdomain_info, neighbor_local_boundary, neighbor_rank] = neighbor;
                     send_recv_pairs_.push_back( SendRecvPair{
                         .boundary_type               = 0,
-                        .local_rank                  = mpi::rank(),
+                        .local_rank                  = mpi::rank( domain.comm() ),
                         .local_subdomain             = local_subdomain_info,
                         .local_subdomain_boundary    = static_cast< int >( local_vertex_boundary ),
                         .local_subdomain_id          = local_subdomain_id,
@@ -174,7 +174,7 @@ class ShellBoundaryCommPlan
                         neighbor;
                     send_recv_pairs_.push_back( SendRecvPair{
                         .boundary_type               = 1,
-                        .local_rank                  = mpi::rank(),
+                        .local_rank                  = mpi::rank( domain.comm() ),
                         .local_subdomain             = local_subdomain_info,
                         .local_subdomain_boundary    = static_cast< int >( local_edge_boundary ),
                         .local_subdomain_id          = local_subdomain_id,
@@ -191,7 +191,7 @@ class ShellBoundaryCommPlan
                     neighbor;
                 send_recv_pairs_.push_back( SendRecvPair{
                     .boundary_type               = 2,
-                    .local_rank                  = mpi::rank(),
+                    .local_rank                  = mpi::rank( domain.comm() ),
                     .local_subdomain             = local_subdomain_info,
                     .local_subdomain_boundary    = static_cast< int >( local_face_boundary ),
                     .local_subdomain_id          = local_subdomain_id,
@@ -313,7 +313,7 @@ class ShellBoundaryCommPlan
                 mpi::mpi_datatype< ScalarType >(),
                 rank,
                 MPI_TAG_BOUNDARY_DATA,
-                MPI_COMM_WORLD,
+                domain_->comm(),
                 &data_recv_requests_[i] );
             recv_request_ranks_[i] = rank;
             ++i;
@@ -458,7 +458,7 @@ class ShellBoundaryCommPlan
                 mpi::mpi_datatype< ScalarType >(),
                 rank,
                 MPI_TAG_BOUNDARY_DATA,
-                MPI_COMM_WORLD,
+                domain_->comm(),
                 &data_send_requests_[i] );
             ++i;
         }
