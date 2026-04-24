@@ -344,7 +344,8 @@ Result<> run( const Parameters& prm )
     compute_and_write_radial_profiles(
         eta[velocity_level], subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep_initial );
 
-    ScalarType simulated_time = ScalarType( 0 );
+    ScalarType simulated_time    = ScalarType( 0 );
+    ScalarType simulated_time_Ma = ScalarType( 0 );
 
     // We need some global h. Let's, for simplicity (does not need to be too accurate) just choose the smallest h in
     // radial direction.
@@ -604,9 +605,14 @@ Result<> run( const Parameters& prm )
         }
 
         simulated_time += prm.time_stepping_parameters.energy_substeps * dt;
+        simulated_time_Ma = simulated_time * prm.physics_parameters.calc_time_Ma;
 
-        logroot << "Simulated time: " << simulated_time << " (stopping at " << prm.time_stepping_parameters.t_end
-                << ", we're at " << simulated_time / prm.time_stepping_parameters.t_end * 100.0 << "%)" << std::endl;
+        logroot << "Simulated time: " << simulated_time_Ma << " Ma\n";
+        logroot << "  Stopping at " << prm.time_stepping_parameters.t_end_Ma << " Ma, "
+                << std::round( simulated_time_Ma / prm.time_stepping_parameters.t_end_Ma * 100.0 * 10.0 ) / 10.0
+                << "% done.\n";
+        logroot << std::endl;
+
         timer_timestep.stop();
 
         if ( write_output )
