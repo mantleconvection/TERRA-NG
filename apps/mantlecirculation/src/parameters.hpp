@@ -160,6 +160,13 @@ struct StokesSolverParameters
     ///       flagged by `GCAElementsCollector`, leaving the rest re-discretised.
     ///       Uses less memory than mode 1 but slightly less robust.
     int gca = 0;
+
+    /// Per-descent agglomeration factors for the viscous MG preconditioner.
+    /// Length must equal num_mg_levels - 1 (one factor per coarse descent step).
+    /// Empty = classical MG, all levels on MPI_COMM_WORLD.
+    /// Factor f > 1 at descent i means the comm shrinks by f ranks going from
+    /// MG level max-i-1 to level max-i-2. Factor 1 = identity (no shrink).
+    std::vector< int > viscous_pc_agglom_factors = {};
 };
 
 struct EnergySolverParameters
@@ -514,6 +521,13 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
             "preconditioner. 0 = disabled (default; coarse operators rediscretised), "
             "1 = full GCA (more robust at variable viscosity), "
             "2 = adaptive GCA (memory-saving, slightly less robust)." );
+    app.add_option(
+           "--stokes-viscous-pc-agglom-factors",
+           parameters.stokes_solver_parameters.viscous_pc_agglom_factors,
+           "Per-descent agglomeration factors for the viscous MG preconditioner. "
+           "Space-separated list of length num_mg_levels-1. Example: \"2 2 1 1\". "
+           "Empty (default) = classical MG with all levels on MPI_COMM_WORLD." )
+        ->group( "Stokes Solver" );
 
     /////////////////////
     /// Energy solver ///

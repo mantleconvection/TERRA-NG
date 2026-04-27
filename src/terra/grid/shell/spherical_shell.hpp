@@ -905,8 +905,19 @@ class DomainInfo
 
     std::vector< SubdomainInfo > local_subdomains( const SubdomainToRankDistributionFunction& subdomain_to_rank ) const
     {
-        const auto rank = mpi::rank();
+        return local_subdomains( subdomain_to_rank, mpi::rank() );
+    }
 
+    /// @brief Same as the no-arg overload but compares subdomain owners against an explicit rank.
+    ///
+    /// Used when building a DistributedDomain on a sub-communicator: the caller passes
+    /// their sub-comm rank and a subdomain_to_rank function that returns sub-comm-local
+    /// indices, and the returned subdomain list is the one this rank owns on the sub-comm.
+    /// Unlike the no-arg overload, returns an empty vector (not throws) when no subdomains
+    /// land here — that happens legitimately for ranks that are inactive on this level.
+    std::vector< SubdomainInfo >
+        local_subdomains( const SubdomainToRankDistributionFunction& subdomain_to_rank, mpi::MPIRank my_rank ) const
+    {
         std::vector< SubdomainInfo > subdomains;
         for ( int diamond_id = 0; diamond_id < 10; diamond_id++ )
         {
@@ -921,18 +932,13 @@ class DomainInfo
                         const auto target_rank = subdomain_to_rank(
                             subdomain, num_subdomains_per_diamond_side(), num_subdomains_in_radial_direction() );
 
-                        if ( target_rank == rank )
+                        if ( target_rank == my_rank )
                         {
                             subdomains.push_back( subdomain );
                         }
                     }
                 }
             }
-        }
-
-        if ( subdomains.empty() )
-        {
-            throw std::logic_error( "No local subdomains found on rank " + std::to_string( rank ) + "." );
         }
 
         return subdomains;
@@ -2587,6 +2593,56 @@ class DistributedDomain
         return domain;
     }
 
+    /// @brief MPI communicator this domain lives on. Defaults to MPI_COMM_WORLD.
+    /// For agglomerated multigrid, coarse levels carry a sub-communicator so their
+    /// reductions / halo exchanges hit only the participating ranks.
+    [[nodiscard]] MPI_Comm comm() const { return comm_; }
+
+    /// @brief Override the MPI communicator (non-owning; caller manages lifetime).
+    /// Used by MG setup to assign each coarse level its own sub-comm after construction.
+    void set_comm( MPI_Comm comm ) { comm_ = comm; }
+
+    /// @brief Build a DistributedDomain that lives on a sub-communicator.
+    ///
+    /// Same geometry as create_uniform but resolves subdomain ownership against the
+    /// caller's sub-comm rank, and stamps the sub-comm on the resulting domain so
+    /// downstream reductions/halos run on the restricted comm.
+    ///
+    /// @param comm The sub-comm this domain is distributed over (MPI_COMM_NULL for
+    ///             ranks that are not part of the sub-comm at this level — the
+    ///             returned domain is then empty of local subdomains).
+    /// @param subdomain_to_rank Must return sub-comm-local rank indices (not parent ranks).
+    static DistributedDomain create_uniform_on_comm(
+        MPI_Comm                                   comm,
+        const int                                  lateral_diamond_refinement_level,
+        const std::vector< double >&               radii,
+        const int                                  lateral_subdomain_refinement_level,
+        const int                                  radial_subdomain_refinement_level,
+        const SubdomainToRankDistributionFunction& subdomain_to_rank )
+    {
+        DistributedDomain domain;
+        domain.domain_info_ = DomainInfo(
+            lateral_diamond_refinement_level,
+            radii,
+            ( 1 << lateral_subdomain_refinement_level ),
+            ( 1 << radial_subdomain_refinement_level ) );
+        domain.comm_ = comm;
+
+        if ( comm != MPI_COMM_NULL )
+        {
+            const auto my_rank = mpi::rank( comm );
+            int        idx     = 0;
+            for ( const auto& subdomain : domain.domain_info_.local_subdomains( subdomain_to_rank, my_rank ) )
+            {
+                domain.subdomains_[subdomain] = {
+                    idx, SubdomainNeighborhood( domain.domain_info_, subdomain, subdomain_to_rank ) };
+                domain.local_subdomain_index_to_subdomain_info_[idx] = subdomain;
+                idx++;
+            }
+        }
+        return domain;
+    }
+
     /// @brief Returns a const reference
     [[nodiscard]] const DomainInfo& domain_info() const { return domain_info_; }
 
@@ -2605,6 +2661,7 @@ class DistributedDomain
     DomainInfo                                                                        domain_info_;
     std::map< SubdomainInfo, std::tuple< LocalSubdomainIdx, SubdomainNeighborhood > > subdomains_;
     std::map< LocalSubdomainIdx, SubdomainInfo > local_subdomain_index_to_subdomain_info_;
+    MPI_Comm                                     comm_ = MPI_COMM_WORLD;
 };
 
 struct SubdomainDistribution
@@ -2622,12 +2679,12 @@ inline SubdomainDistribution subdomain_distribution( const DistributedDomain& do
     int        min                  = num_local_subdomains;
     int        max                  = num_local_subdomains;
 
-    MPI_Reduce( &num_local_subdomains, &total, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD );
-    MPI_Reduce( &num_local_subdomains, &min, 1, MPI_INT, MPI_MIN, 0, MPI_COMM_WORLD );
-    MPI_Reduce( &num_local_subdomains, &max, 1, MPI_INT, MPI_MAX, 0, MPI_COMM_WORLD );
+    MPI_Reduce( &num_local_subdomains, &total, 1, MPI_INT, MPI_SUM, 0, domain.comm() );
+    MPI_Reduce( &num_local_subdomains, &min, 1, MPI_INT, MPI_MIN, 0, domain.comm() );
+    MPI_Reduce( &num_local_subdomains, &max, 1, MPI_INT, MPI_MAX, 0, domain.comm() );
 
     const SubdomainDistribution result{
-        .total = total, .min = min, .max = max, .avg = static_cast< double >( total ) / mpi::num_processes() };
+        .total = total, .min = min, .max = max, .avg = static_cast< double >( total ) / mpi::num_processes( domain.comm() ) };
     return result;
 }
 

@@ -347,7 +347,7 @@ void pack_send_and_recv_local_subdomain_boundaries(
 
                 SendRecvPair send_recv_pair{
                     .boundary_type               = 0,
-                    .local_rank                  = mpi::rank(),
+                    .local_rank                  = mpi::rank( domain.comm() ),
                     .local_subdomain             = local_subdomain_info,
                     .local_subdomain_boundary    = static_cast< int >( local_vertex_boundary ),
                     .local_subdomain_id          = local_subdomain_id,
@@ -367,7 +367,7 @@ void pack_send_and_recv_local_subdomain_boundaries(
 
                 SendRecvPair send_recv_pair{
                     .boundary_type               = 1,
-                    .local_rank                  = mpi::rank(),
+                    .local_rank                  = mpi::rank( domain.comm() ),
                     .local_subdomain             = local_subdomain_info,
                     .local_subdomain_boundary    = static_cast< int >( local_edge_boundary ),
                     .local_subdomain_id          = local_subdomain_id,
@@ -385,7 +385,7 @@ void pack_send_and_recv_local_subdomain_boundaries(
 
             SendRecvPair send_recv_pair{
                 .boundary_type               = 2,
-                .local_rank                  = mpi::rank(),
+                .local_rank                  = mpi::rank( domain.comm() ),
                 .local_subdomain             = local_subdomain_info,
                 .local_subdomain_boundary    = static_cast< int >( local_face_boundary ),
                 .local_subdomain_id          = local_subdomain_id,
@@ -471,7 +471,7 @@ void pack_send_and_recv_local_subdomain_boundaries(
             mpi::mpi_datatype< ScalarType >(),
             send_recv_pair.neighbor_rank,
             MPI_TAG_BOUNDARY_DATA,
-            MPI_COMM_WORLD,
+            domain.comm(),
             &data_recv_request );
         data_recv_requests.push_back( data_recv_request );
     }
@@ -644,7 +644,7 @@ void pack_send_and_recv_local_subdomain_boundaries(
             mpi::mpi_datatype< ScalarType >(),
             send_recv_pair.neighbor_rank,
             MPI_TAG_BOUNDARY_DATA,
-            MPI_COMM_WORLD,
+            domain.comm(),
             &data_send_request );
         data_send_requests.push_back( data_send_request );
     }

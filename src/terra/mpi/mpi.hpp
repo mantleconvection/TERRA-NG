@@ -17,10 +17,24 @@ inline MPIRank rank()
     return rank;
 }
 
+inline MPIRank rank( MPI_Comm comm )
+{
+    MPIRank rank;
+    MPI_Comm_rank( comm, &rank );
+    return rank;
+}
+
 inline int num_processes()
 {
     int num_processes;
     MPI_Comm_size( MPI_COMM_WORLD, &num_processes );
+    return num_processes;
+}
+
+inline int num_processes( MPI_Comm comm )
+{
+    int num_processes;
+    MPI_Comm_size( comm, &num_processes );
     return num_processes;
 }
 
