@@ -69,7 +69,6 @@ class GCAElementsCollector
         constexpr auto num_quad_points = fe::wedge::quadrature::quad_felippa_1x1_num_quad_points;
 
         dense::Vec< ScalarT, 3 > quad_points[num_quad_points];
-        ScalarT                  quad_weights[num_quad_points];
 
         fe::wedge::quadrature::quad_felippa_1x1_quad_points( quad_points );
 
@@ -91,7 +90,7 @@ class GCAElementsCollector
                 int r_cell_coarsest = map_to_coarse_element( r_cell, level_range_ );
 
                 GCAElements_( local_subdomain_id, x_cell_coarsest, y_cell_coarsest, r_cell_coarsest ) = 1;
-           }
+            }
         }
     }
 };

@@ -1,0 +1,26 @@
+# Simple pressure/temperature → density lookup table.
+#
+# Axes:
+#   pressure    (x): 3 points,  0 / 5 / 10  [GPa],   x_min=0  dx=5
+#   temperature (y): 4 points,  1000 / 1500 / 2000 / 2500  [K],   y_min=1000  dy=500
+#
+# Layout: x-outer  (outer loop over pressure, inner loop over temperature)
+#   file row k → grid index (ix = k/4, iy = k%4)
+#
+# Columns:  pressure[GPa]   temperature[K]   density[kg/m^3]
+#
+# ix=0 (p=0 GPa) ─────────────────────────────────────────────────────────────
+  0.0    1000.0   3300.0
+  0.0    1500.0   3250.0
+  0.0    2000.0   3200.0
+  0.0    2500.0   3150.0
+# ix=1 (p=5 GPa) ─────────────────────────────────────────────────────────────
+  5.0    1000.0   3400.0
+  5.0    1500.0   3350.0
+  5.0    2000.0   3300.0
+  5.0    2500.0   3250.0
+# ix=2 (p=10 GPa) ────────────────────────────────────────────────────────────
+ 10.0    1000.0   3500.0
+ 10.0    1500.0   3450.0
+ 10.0    2000.0   3400.0
+ 10.0    2500.0   3350.0

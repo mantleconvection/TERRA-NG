@@ -10,14 +10,23 @@ with the block-structured solver used in applications such as `apps/mantlecircul
 We solve the steady-state Stokes equations governing slow, viscous mantle flow:
 
 \f[
-    \begin{aligned}
-    -\nabla \cdot \boldsymbol{\tau}(\mathbf{u})
-    + \nabla p &= \mathbf{f}, \\
-    \nabla \cdot \mathbf{u} &= g.
-    \end{aligned}
-\f]
+\begin{aligned}
+-\nabla \cdot \boldsymbol{\tau}(\mathbf{u})
 
-In the incompressible (Boussinesq) case \f$g = 0\f$.  For compressible/anelastic
++ \nabla p &= \mathbf{f}, \\
+    - \nabla \cdot \mathbf{u} &= g.
+      \end{aligned}
+      \f]
+
+> Note that we adhere to the convention of having a negative sign in front of the divergence term in the mass
+> conservation equation. This is important for the correct implementation of the compressibility terms later.
+> While this convection is not typical in the literature, it is more natural here because it reflects the implementation
+> and is required to make the system symmetric. This comes from the fact that the weak form of the pressure gradient 
+> in the momentum equation also introduces a negative sign 
+> (\f$\int_\Omega \mathbf{v} \cdot \nabla p = - \int_\Omega p \nabla \cdot \mathbf{v} + 
+> \int_{\partial \Omega} p \mathbf{n} \cdot \mathbf{v} \f$, with test function \f$\mathbf{v}\f$) 
+
+In the incompressible (Boussinesq) case \f$g = 0\f$. For compressible/anelastic
 extensions \f$g \neq 0\f$ but the momentum operator on the left-hand side stays the same
 — see [Compressible and anelastic extensions](#stokes-compressible) below.
 
@@ -28,8 +37,11 @@ extensions \f$g \neq 0\f$ but the momentum operator on the left-hand side stays 
 - \f$\eta > 0\f$ — dynamic viscosity (scalar, possibly spatially varying),
 - \f$\boldsymbol{\varepsilon}(\mathbf{u}) = \frac{1}{2}(\nabla\mathbf{u} + (\nabla\mathbf{u})^T)\f$
   — symmetric strain-rate tensor,
-- \f$\boldsymbol{\tau}(\mathbf{u}) = 2\eta\bigl(\boldsymbol{\varepsilon}(\mathbf{u}) - \frac{1}{3}(\nabla\cdot\mathbf{u})\,\mathbf{I}\bigr)\f$
-  — deviatoric stress tensor,
+-
+
+\f$\boldsymbol{\tau}(\mathbf{u}) = 2\eta\bigl(\boldsymbol{\varepsilon}(\mathbf{u}) - \frac{1}{3}(\nabla\cdot\mathbf{u})\,\mathbf{I}\bigr)\f$
+— deviatoric stress tensor,
+
 - \f$\mathbf{f}\f$ — body force; for mantle convection the buoyancy
   \f$\mathbf{f} = \mathrm{Ra}\,T\,\hat{r}\f$ (Rayleigh number \f$\mathrm{Ra}\f$,
   temperature \f$T\f$, outward radial unit vector \f$\hat{r}\f$),
@@ -37,8 +49,8 @@ extensions \f$g \neq 0\f$ but the momentum operator on the left-hand side stays 
 
 The stress tensor \f$\boldsymbol{\tau}\f$ crucially does **not** assume
 \f$\nabla\cdot\mathbf{u} = 0\f$: the \f$-\frac{2}{3}\eta(\nabla\cdot\mathbf{u})\mathbf{I}\f$
-correction is always present in the discrete operator.  This makes the same LHS operator
-valid for both incompressible and compressible/anelastic formulations (and the same optimized implementation 
+correction is always present in the discrete operator. This makes the same LHS operator
+valid for both incompressible and compressible/anelastic formulations (and the same optimized implementation
 can be used in either case).
 
 The system is solved at every time step with the current temperature field to obtain the
@@ -54,7 +66,7 @@ for the next temperature update.
 The velocity–pressure pair uses the **P1-iso-P2 / P1** mixed finite element:
 
 - **Velocity** \f$\mathbf{u}_h\f$: continuous piecewise-linear (P1) on a twice-refined mesh
-  (`velocity_level = mesh_level`).  Three components per node.
+  (`velocity_level = mesh_level`). Three components per node.
 - **Pressure** \f$p_h\f$: continuous piecewise-linear (P1) on the coarser mesh
   (`pressure_level = mesh_level - 1`).
 
@@ -62,8 +74,8 @@ This pair satisfies the inf-sup (LBB) stability condition, preventing pressure o
 without requiring any stabilization on the pressure field.
 
 The underlying geometry uses **wedge (prism) elements** formed by extruding triangular
-surface elements in the radial direction.  Each hexahedral shell cell is decomposed into
-two wedges.  The geometric mapping and basis functions are defined in `fe/wedge/integrands.hpp`.
+surface elements in the radial direction. Each hexahedral shell cell is decomposed into
+two wedges. The geometric mapping and basis functions are defined in `fe/wedge/integrands.hpp`.
 
 ### Discrete system
 
@@ -85,6 +97,7 @@ where
 - \f$\mathbf{g}\f$ is the discretised mass conservation source (\f$\mathbf{g} = \mathbf{0}\f$ for incompressible flow).
 
 The corresponding C++ types from `EpsDivDivStokes` are:
+
 - `Block11Type` = `EpsilonDivDivKerngen` (deviatoric viscous block, optimized kernel)
 - `Block12Type` = `Gradient`
 - `Block21Type` = `Divergence`
@@ -102,18 +115,18 @@ Two variants of the viscous block are available:
 2. **`EpsDivDivStokes`** (`epsilon_divdiv_stokes.hpp`): uses the **deviatoric stress**
    bilinear form implemented in `EpsilonDivDivKerngen`:
    \f[
-       a(\mathbf{u},\mathbf{v})
-       = \int_\Omega 2\eta\,\boldsymbol{\varepsilon}(\mathbf{u}):\boldsymbol{\varepsilon}(\mathbf{v})
-         - \frac{2}{3}\eta\,(\nabla\cdot\mathbf{u})(\nabla\cdot\mathbf{v})\,\mathrm{d}x,
-   \f]
-   which is the weak form of \f$-\nabla\cdot\boldsymbol{\tau}(\mathbf{u})\f$.
-   The \f$-\frac{2}{3}(\nabla\cdot\mathbf{u})(\nabla\cdot\mathbf{v})\f$ term is the
-   deviatoric correction; it vanishes only when \f$\nabla\cdot\mathbf{u} = 0\f$ but is
-   always included in the discrete operator.  This is the variant used in
-   `mantlecirculation`.
+   a(\mathbf{u},\mathbf{v})
+   = \int_\Omega 2\eta\,\boldsymbol{\varepsilon}(\mathbf{u}):\boldsymbol{\varepsilon}(\mathbf{v})
+    - \frac{2}{3}\eta\,(\nabla\cdot\mathbf{u})(\nabla\cdot\mathbf{v})\,\mathrm{d}x,
+      \f]
+      which is the weak form of \f$-\nabla\cdot\boldsymbol{\tau}(\mathbf{u})\f$.
+      The \f$-\frac{2}{3}(\nabla\cdot\mathbf{u})(\nabla\cdot\mathbf{v})\f$ term is the
+      deviatoric correction; it vanishes only when \f$\nabla\cdot\mathbf{u} = 0\f$ but is
+      always included in the discrete operator. This is the variant used in
+      `mantlecirculation`.
 
 The viscous block \f$A\f$ is implemented by the **optimized kernel** `EpsilonDivDivKerngen`
-(`epsilon_divdiv_kerngen.hpp`).  Unlike the reference implementation `EpsilonDivDiv`, the
+(`epsilon_divdiv_kerngen.hpp`). Unlike the reference implementation `EpsilonDivDiv`, the
 kerngen variant fuses the loop over velocity components and quadrature points into a
 single, highly optimized Kokkos kernel that avoids redundant memory traffic and allows the
 compiler to vectorize the inner loop more aggressively.
@@ -121,12 +134,12 @@ compiler to vectorize the inner loop more aggressively.
 ### Matrix-free assembly
 
 All fine-grid operators (\f$A\f$, \f$B\f$, \f$B^T\f$) are **matrix-free**: no global
-sparse matrix is ever assembled or stored.  Instead, each call to `apply_impl` recomputes
+sparse matrix is ever assembled or stored. Instead, each call to `apply_impl` recomputes
 all element integrals from scratch using the current viscosity field and geometry.
 
 The implementation follows the standard element-loop pattern but executed via
 `Kokkos::parallel_for` over all locally owned cells with atomic contributions to shared
-nodes.  This means:
+nodes. This means:
 
 - **Memory footprint**: proportional to the number of degrees of freedom (vectors only),
   independent of the number of non-zeros in the stiffness matrix.
@@ -161,7 +174,7 @@ using a warm start (initial guess = previous solution) and a small number of tim
   NaN or Inf entries (which can happen during the early iterations of a poorly conditioned
   problem or after a large viscosity change), the preconditioned direction is silently
   replaced by the raw input vector — equivalent to skipping the preconditioner for that
-  step — and a warning is printed.  This prevents divergence propagation while allowing
+  step — and a warning is printed. This prevents divergence propagation while allowing
   the iteration to continue.
 - **Arnoldi breakdown**: if the new Krylov basis vector has norm below machine epsilon
   times the initial residual (\f$h_{j+1,j} < \epsilon\,\|r_0\|\f$), the inner loop exits
@@ -179,7 +192,7 @@ The preconditioner has the upper-triangular form
 \f]
 
 where \f$\hat{S}^{-1}\f$ approximates the inverse of the Schur complement
-\f$S = -B A^{-1} B^T\f$.  This is implemented in
+\f$S = -B A^{-1} B^T\f$. This is implemented in
 `linalg::solvers::BlockTriangularPreconditioner2x2`.
 
 **Velocity block** \f$A^{-1}\f$: **multigrid.**
@@ -194,14 +207,14 @@ The viscous block is inverted approximately by a geometric multigrid (GMG) V-cyc
 #### Chebyshev smoother and eigenvalue estimation
 
 The smoother is a **Chebyshev-accelerated Jacobi** iteration of polynomial order \f$p\f$
-(`viscous_pc_chebyshev_order`).  For \f$p = 1\f$ it reduces to standard weighted Jacobi;
+(`viscous_pc_chebyshev_order`). For \f$p = 1\f$ it reduces to standard weighted Jacobi;
 for \f$p \geq 2\f$ it applies the Chebyshev three-term recurrence to \f$D^{-1}A\f$,
-where \f$D = \mathrm{diag}(A)\f$.  The recurrence coefficients depend on bounds
+where \f$D = \mathrm{diag}(A)\f$. The recurrence coefficients depend on bounds
 \f$[\lambda_{\min}, \lambda_{\max}]\f$ of the spectrum of \f$D^{-1}A\f$:
 \f[
-    \lambda_{\max} = 1.5 \cdot \hat\lambda_{\max},
-    \qquad
-    \lambda_{\min} = 0.1 \cdot \hat\lambda_{\max},
+\lambda_{\max} = 1.5 \cdot \hat\lambda_{\max},
+\qquad
+\lambda_{\min} = 0.1 \cdot \hat\lambda_{\max},
 \f]
 where \f$\hat\lambda_{\max}\f$ is the spectral radius estimate obtained by
 **power iteration** on \f$D^{-1}A\f$ (`viscous_pc_num_power_iterations` steps).
@@ -213,21 +226,21 @@ The power iteration and eigenvalue estimation are performed **once** before the 
 solve, and re-triggered automatically if `refresh_max_eigenvalue_estimate_in_next_solve()`
 is called (e.g. after a viscosity update).
 
-Each Chebyshev application performs \f$p\f$ matrix-vector products.  The number of
+Each Chebyshev application performs \f$p\f$ matrix-vector products. The number of
 pre/post-smoothing steps (iterations of the whole Chebyshev polynomial) is set by
 `viscous_pc_num_smoothing_steps_prepost`.
 
 #### Galerkin coarse-grid approximation (GCA)
 
 Standard geometric multigrid constructs coarse-grid operators by re-discretising the PDE
-on coarser meshes.  For **strongly varying viscosity** (several orders of magnitude, as
+on coarser meshes. For **strongly varying viscosity** (several orders of magnitude, as
 typical in the mantle) this produces poor coarse-grid representations: a coarse element
 spanning a viscosity jump will use the wrong effective viscosity, and the multigrid
 convergence deteriorates badly.
 
 The GCA avoids this by computing the coarse-grid operator as the Galerkin triple product
 \f[
-    A_c = R\,A_f\,P,
+A_c = R\,A_f\,P,
 \f]
 where \f$P\f$ is the prolongation operator and \f$R = P^T\f$ is the restriction.
 This guarantees that the coarse-grid operator is spectrally equivalent to the fine-grid
@@ -235,27 +248,28 @@ operator projected onto the coarse space, regardless of viscosity variations.
 
 **What is stored.**  GCA is the only place in the code where a matrix is explicitly
 assembled, and it is applied only on the **coarser grid levels** — the finest grid
-always remains matrix-free.  Because each refinement step multiplies the number of cells
+always remains matrix-free. Because each refinement step multiplies the number of cells
 by 8, the coarser levels together hold at most about \f$1/8\f$ of what a full fine-grid
-matrix would require.  For each coarse-grid element (wedge), `TwoGridGCA` computes and
+matrix would require. For each coarse-grid element (wedge), `TwoGridGCA` computes and
 stores the \f$18 \times 18\f$ local element matrix (6 velocity nodes × 3 components).
-These local matrices are held in a `Grid4DDataMatrices` array on the device.  During a
+These local matrices are held in a `Grid4DDataMatrices` array on the device. During a
 coarse-grid matrix-vector product the stored local matrices are applied element by element
 — essentially a sparse matrix-vector product in local-matrix form.
 
 **Two application modes** are supported via `OperatorStoredMatrixMode`:
-- `Full` (`gca = 1`): GCA is applied on all elements.  Safe default for any viscosity
+
+- `Full` (`gca = 1`): GCA is applied on all elements. Safe default for any viscosity
   structure.
 - `Selective` (`gca = 2`): GCA is applied only on elements identified by
   `GCAElementsCollector` as having significant viscosity contrast; remaining elements use
-  the matrix-free kernel.  Reduces memory and assembly cost when high-viscosity regions
+  the matrix-free kernel. Reduces memory and assembly cost when high-viscosity regions
   are localised.
 
 **Pressure Schur complement** \f$\hat{S}^{-1}\f$: **lumped viscosity-weighted pressure mass.**
-The exact Schur complement \f$S = -B A^{-1} B^T\f$ is dense and expensive.  For a
+The exact Schur complement \f$S = -B A^{-1} B^T\f$ is dense and expensive. For a
 Stokes problem with variable viscosity the standard approximation is
 \f$S \approx -M_p(\eta^{-1})\f$, i.e. the pressure mass matrix weighted by the inverse
-viscosity \f$\eta^{-1}\f$.  This captures the viscosity dependence and is the
+viscosity \f$\eta^{-1}\f$. This captures the viscosity dependence and is the
 approximation used here (`KMass` with coefficient \f$k = \eta^{-1}\f$).
 
 The approximation is then further simplified to a **lumped (row-summed) diagonal**:
@@ -264,7 +278,7 @@ This is a single scalar per pressure DOF, cheap to apply, and implemented as
 `linalg::solvers::DiagonalSolver<KMass>`.
 
 > **Note:** while the viscosity-weighted scaling is physically motivated and significantly
-> better than a pure mass matrix, this preconditioner is not yet optimal.  An improved
+> better than a pure mass matrix, this preconditioner is not yet optimal. An improved
 > approximation would invert the full (non-lumped) weighted pressure mass matrix, which
 > would require a PCG iteration on the pressure block instead of a simple diagonal scaling.
 
@@ -298,7 +312,7 @@ For a general description of boundary condition enforcement in terraneo see the
 Velocity boundary conditions are specified via the `BoundaryConditions` struct, which
 maps each shell boundary (`CMB`, `SURFACE`) to one of:
 
-- `DIRICHLET` (**no-slip**): the velocity is prescribed to zero.  Enforced strongly
+- `DIRICHLET` (**no-slip**): the velocity is prescribed to zero. Enforced strongly
   (algebraic row replacement) via `fe::strong_algebraic_dirichlet_enforcement`.
 - `FREESLIP`: the normal velocity component is zero and the tangential components are
   unconstrained (free-slip condition).
@@ -313,18 +327,14 @@ reflects the unconstrained stiffness rather than the BC-modified rows).
 
 ## Compressible and anelastic extensions {#stokes-compressible}
 
-> **Not yet implemented.**  The current codebase solves the incompressible
-> (\f$\nabla\cdot\mathbf{u} = 0\f$) Stokes system only.  The notes below sketch how
-> compressible/anelastic formulations could be added with minimal changes to the solver.
-
 The goal is to approximate the full compressible mass conservation
 \f[
-    \nabla\cdot(\rho\,\mathbf{u}) = 0
+\nabla\cdot(\rho\,\mathbf{u}) = 0
 \f]
 without changing the left-hand side operators in the formulation at the top of this page.
 Specific formulations (e.g. anelastic) then introduce a reference-state density \f$\bar\rho\f$.
-For anelastic flow the mass conservation constraint is modified but the momentum operator
-and the entire solver infrastructure stay the same.  Only the right-hand side of the
+For anelastic flow the mass conservation constraint is modified, but the momentum operator
+and the entire solver infrastructure stay the same. Only the right-hand side of the
 pressure equation gains a non-zero term \f$\mathbf{g}\f$:
 
 \f[
@@ -337,24 +347,44 @@ pressure equation gains a non-zero term \f$\mathbf{g}\f$:
 \f$A\f$, \f$B\f$, \f$B^T\f$, and the block-triangular preconditioner are unchanged
 (the Schur complement \f$S = -BA^{-1}B^T\f$ is independent of \f$\mathbf{g}\f$).
 
-### Anelastic approximation and frozen-velocity approach
+### Truncated anelastic liquid approximation (TALA) and the frozen-velocity approach
 
-The anelastic approximation replaces \f$\nabla\cdot\mathbf{u} = 0\f$ with:
-\f[
-    \nabla\cdot(\bar\rho\,\mathbf{u}) = 0
-    \;\Longleftrightarrow\;
-    \nabla\cdot\mathbf{u} = -\mathbf{u}\cdot\nabla\ln\bar\rho,
-\f]
-giving the discrete compressibility RHS
-\f[
-    g_i = -\int_\Omega \phi_i^p\,\mathbf{u}\cdot\nabla\ln\bar\rho\,\mathrm{d}x.
-\f]
-Since \f$\mathbf{g}\f$ depends on \f$\mathbf{u}\f$ the system is nonlinear.  The
-**frozen-velocity approach** linearises it by substituting the velocity from the previous
-time step or outer iteration \f$\mathbf{u}^{(k-1)}\f$.  The solver is then called
-identically to the incompressible case; only the assembly of \f$\mathbf{g}\f$ before the
-`solve` call changes.
+> **Following [Ilangovan et al. (2026)](https://doi.org/10.5194/gmd-19-1455-2026). Consult the paper for details and
+> derivations.**
 
-A related strategy is the **Projected Density Approximation (PDA)** (see Gassmöller et al.),
-where the buoyancy force and the compressibility source are derived from a consistent
-density projection that also accounts for the equation of state.
+
+The frozen velocity approach applied to the truncated anelastic approximation (TALA) replaces
+\f$-\nabla\cdot\mathbf{u} = 0\f$ with:
+\f[
+- \nabla\cdot\mathbf{u} = \frac{\nabla \rho}{\rho} \cdot \mathbf{u}^{\text{(old)}},
+\f]
+introducing a linearization that results in the left-hand side of the mass conservation equation
+being the same as in the incompressible case. The downside of this linearization is that
+the right-hand-side velocity is 'frozen' and typically taken from the previous time step,
+or improved via an outer iteration over the Stokes solver.
+
+The linear form that evaluates the right-hand side of the pressure equation is
+\f[
+\mathbf{g}^\text{TALA}_i = \int_\Omega \frac{1}{\rho} \nabla\rho \cdot \mathbf{u} \, \phi_i \, \mathrm{d}x,
+\f]
+and implemented in `terra::fe::wedge::linearforms::shell::InvRhoGradRhoDotU`.
+
+### Projected density approximation (PDA)
+
+> **Following [Gassmöller et al. (2020)](https://doi.org/10.1093/gji/ggaa078). Consult the paper for details and
+derivations.**
+
+Therein, compressible flow is approximated by adding another term to the right-hand side of the mass conservation
+equation:
+\f[
+-\nabla\cdot\mathbf{u} = \underbrace{\frac{1}{\rho} \frac{\partial \rho}{\partial t}}_{\text{new term}} \quad + \quad
+\underbrace{\frac{\nabla \rho}{\rho} \cdot \mathbf{u}^{\text{(old)}}}_{\text{see TALA}}.
+\f]
+The new term involves a time derivative of the density \f$\rho\f$ that has to be approximated (via Euler or BDF2 for
+example) before the linear form is evaluated.
+
+The full right-hand side is evaluated via the PDA linear form:
+\f[
+\mathbf{g}^\text{PDA}_i = \mathbf{g}^\text{TALA}_i + \int_\Omega \frac{1}{\rho} \dot\rho \, \phi_i \, \mathrm{d}x.
+\f]
+The second term is implemented in `terra::fe::wedge::linearforms::shell::InvRhoDrhoDt`.

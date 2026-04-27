@@ -8,6 +8,9 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#ifdef TERRANEO_USE_NESMIK
+#include <nesmik/nesmik.hpp>
+#endif
 
 namespace terra::util {
 
@@ -279,6 +282,9 @@ class Timer
     : name( n )
     {
         TimerTree::instance().enter_scope( name );
+        #ifdef TERRANEO_USE_NESMIK
+        nesmik::region_start( name );
+        #endif
         timer.reset();
         running = true;
     }
@@ -292,6 +298,9 @@ class Timer
         {
             double elapsed = timer.seconds();
             TimerTree::instance().exit_scope( elapsed );
+            #ifdef TERRANEO_USE_NESMIK
+            nesmik::region_stop( name );
+            #endif
             running = false;
         }
     }

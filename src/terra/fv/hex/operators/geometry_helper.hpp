@@ -50,8 +50,18 @@ struct GeometryHelper
         return v[n];
     }
 
-    enum class WedgeContribution : int { NONE = 0, TRIANGLE = 1, QUAD = 2 };
-    enum class CrossProductType : int  { XI_ETA = 0, XI_ZETA = 1, ETA_ZETA = 2 };
+    enum class WedgeContribution : int
+    {
+        NONE     = 0,
+        TRIANGLE = 1,
+        QUAD     = 2
+    };
+    enum class CrossProductType : int
+    {
+        XI_ETA   = 0,
+        XI_ZETA  = 1,
+        ETA_ZETA = 2
+    };
 
     KOKKOS_INLINE_FUNCTION
     static constexpr WedgeContribution contribution( const int hex_direction, const int wedge_id )
@@ -60,22 +70,32 @@ struct GeometryHelper
         {
             switch ( hex_direction )
             {
-            case 0: return WedgeContribution::QUAD;
-            case 2: return WedgeContribution::QUAD;
-            case 4: return WedgeContribution::TRIANGLE;
-            case 5: return WedgeContribution::TRIANGLE;
-            default: return WedgeContribution::NONE;
+            case 0:
+                return WedgeContribution::QUAD;
+            case 2:
+                return WedgeContribution::QUAD;
+            case 4:
+                return WedgeContribution::TRIANGLE;
+            case 5:
+                return WedgeContribution::TRIANGLE;
+            default:
+                return WedgeContribution::NONE;
             }
         }
         else
         {
             switch ( hex_direction )
             {
-            case 1: return WedgeContribution::QUAD;
-            case 3: return WedgeContribution::QUAD;
-            case 4: return WedgeContribution::TRIANGLE;
-            case 5: return WedgeContribution::TRIANGLE;
-            default: return WedgeContribution::NONE;
+            case 1:
+                return WedgeContribution::QUAD;
+            case 3:
+                return WedgeContribution::QUAD;
+            case 4:
+                return WedgeContribution::TRIANGLE;
+            case 5:
+                return WedgeContribution::TRIANGLE;
+            default:
+                return WedgeContribution::NONE;
             }
         }
     }
@@ -95,22 +115,68 @@ struct GeometryHelper
         {
             switch ( hex_direction )
             {
-            case 0: xi = 0;   eta = s;  zeta = t;    cross_product_type = CrossProductType::ETA_ZETA; break;
-            case 2: xi = s;   eta = 0;  zeta = t;    cross_product_type = CrossProductType::XI_ZETA;  break;
-            case 4: xi = s;   eta = t;  zeta = -1.0; cross_product_type = CrossProductType::XI_ETA;   break;
-            case 5: xi = s;   eta = t;  zeta =  1.0; cross_product_type = CrossProductType::XI_ETA;   break;
-            default: xi = eta = zeta = 0; cross_product_type = CrossProductType::XI_ETA; break;
+            case 0:
+                xi                 = 0;
+                eta                = s;
+                zeta               = t;
+                cross_product_type = CrossProductType::ETA_ZETA;
+                break;
+            case 2:
+                xi                 = s;
+                eta                = 0;
+                zeta               = t;
+                cross_product_type = CrossProductType::XI_ZETA;
+                break;
+            case 4:
+                xi                 = s;
+                eta                = t;
+                zeta               = -1.0;
+                cross_product_type = CrossProductType::XI_ETA;
+                break;
+            case 5:
+                xi                 = s;
+                eta                = t;
+                zeta               = 1.0;
+                cross_product_type = CrossProductType::XI_ETA;
+                break;
+            default:
+                xi = eta = zeta    = 0;
+                cross_product_type = CrossProductType::XI_ETA;
+                break;
             }
         }
         else
         {
             switch ( hex_direction )
             {
-            case 1: xi = 0;   eta = s;  zeta = t;    cross_product_type = CrossProductType::ETA_ZETA; break;
-            case 3: xi = s;   eta = 0;  zeta = t;    cross_product_type = CrossProductType::XI_ZETA;  break;
-            case 4: xi = s;   eta = t;  zeta = -1.0; cross_product_type = CrossProductType::XI_ETA;   break;
-            case 5: xi = s;   eta = t;  zeta =  1.0; cross_product_type = CrossProductType::XI_ETA;   break;
-            default: xi = eta = zeta = 0; cross_product_type = CrossProductType::XI_ETA; break;
+            case 1:
+                xi                 = 0;
+                eta                = s;
+                zeta               = t;
+                cross_product_type = CrossProductType::ETA_ZETA;
+                break;
+            case 3:
+                xi                 = s;
+                eta                = 0;
+                zeta               = t;
+                cross_product_type = CrossProductType::XI_ZETA;
+                break;
+            case 4:
+                xi                 = s;
+                eta                = t;
+                zeta               = -1.0;
+                cross_product_type = CrossProductType::XI_ETA;
+                break;
+            case 5:
+                xi                 = s;
+                eta                = t;
+                zeta               = 1.0;
+                cross_product_type = CrossProductType::XI_ETA;
+                break;
+            default:
+                xi = eta = zeta    = 0;
+                cross_product_type = CrossProductType::XI_ETA;
+                break;
             }
         }
     }
@@ -123,18 +189,22 @@ struct GeometryHelper
     ///                      All three are needed by advection-diffusion; only beta and M_ii by pure advection.
     KOKKOS_INLINE_FUNCTION
     static void compute_geometry(
-        const grid::Grid3DDataVec< ScalarT, 3 >&  grid,
-        const grid::Grid2DDataScalar< ScalarT >&  radii,
-        const grid::Grid4DDataVec< ScalarT, 3 >&  cell_centers,
-        const grid::Grid4DDataVec< ScalarT, 3 >&  vel_grid,
-        const int                                  local_subdomain_id,
-        const int                                  x_cell,
-        const int                                  y_cell,
-        const int                                  r_cell,
+        const grid::Grid3DDataVec< ScalarT, 3 >& grid,
+        const grid::Grid2DDataScalar< ScalarT >& radii,
+        const grid::Grid4DDataVec< ScalarT, 3 >& cell_centers,
+        const grid::Grid4DDataVec< ScalarT, 3 >& vel_grid,
+        const int                                local_subdomain_id,
+        const int                                x_cell,
+        const int                                y_cell,
+        const int                                r_cell,
         ScalarT ( &beta )[num_neighbors],
-        ScalarT&                                   M_ii,
+        ScalarT& M_ii,
         Vec3 ( &S_f )[num_neighbors] )
     {
+        constexpr int cell_offset_x[num_neighbors] = { -1, 1, 0, 0, 0, 0 };
+        constexpr int cell_offset_y[num_neighbors] = { 0, 0, -1, 1, 0, 0 };
+        constexpr int cell_offset_r[num_neighbors] = { 0, 0, 0, 0, -1, 1 };
+
         // Surface coords for both wedges.
         dense::Vec< ScalarT, 3 > wedge_phy_surf[fe::wedge::num_wedges_per_hex_cell]
                                                [fe::wedge::num_nodes_per_wedge_surface] = {};
@@ -150,7 +220,7 @@ struct GeometryHelper
                 vel_coeffs[d], local_subdomain_id, x_cell - 1, y_cell - 1, r_cell - 1, d, vel_grid );
 
         // Quadrature for face integrals.
-        constexpr auto num_quad_points_tri = fe::triangle::quadrature::quad_triangle_3_num_quad_points;
+        constexpr auto           num_quad_points_tri = fe::triangle::quadrature::quad_triangle_3_num_quad_points;
         dense::Vec< ScalarT, 2 > quad_points_tri[num_quad_points_tri];
         ScalarT                  quad_weights_tri[num_quad_points_tri];
         fe::triangle::quadrature::quad_triangle_3_quad_points( quad_points_tri );
@@ -180,7 +250,8 @@ struct GeometryHelper
             for ( int wedge = 0; wedge < fe::wedge::num_wedges_per_hex_cell; ++wedge )
             {
                 const auto contr = contribution( neighbor, wedge );
-                if ( contr == WedgeContribution::NONE ) continue;
+                if ( contr == WedgeContribution::NONE )
+                    continue;
 
                 if ( contr == WedgeContribution::TRIANGLE )
                 {
@@ -189,7 +260,7 @@ struct GeometryHelper
                         const auto s = quad_points_tri[q]( 0 );
                         const auto t = quad_points_tri[q]( 1 );
 
-                        ScalarT xi = 0, eta = 0, zeta = 0;
+                        ScalarT          xi = 0, eta = 0, zeta = 0;
                         CrossProductType cpt;
                         map_face( neighbor, wedge, s, t, xi, eta, zeta, cpt );
 
@@ -199,16 +270,17 @@ struct GeometryHelper
                             const auto shape_i = fe::wedge::shape( i, xi, eta, zeta );
                             const auto grad_i  = fe::wedge::grad_shape( i, xi, eta, zeta );
                             const Vec3 x_i     = wedge_phy_surf[wedge][i % 3] * ( i < 3 ? r_1 : r_2 );
-                            const Vec3 u_i{ vel_coeffs[0][wedge]( i ), vel_coeffs[1][wedge]( i ), vel_coeffs[2][wedge]( i ) };
-                            dx_dxi   = dx_dxi   + grad_i( 0 ) * x_i;
-                            dx_deta  = dx_deta  + grad_i( 1 ) * x_i;
+                            const Vec3 u_i{
+                                vel_coeffs[0][wedge]( i ), vel_coeffs[1][wedge]( i ), vel_coeffs[2][wedge]( i ) };
+                            dx_dxi   = dx_dxi + grad_i( 0 ) * x_i;
+                            dx_deta  = dx_deta + grad_i( 1 ) * x_i;
                             dx_dzeta = dx_dzeta + grad_i( 2 ) * x_i;
-                            u        = u        + shape_i * u_i;
+                            u        = u + shape_i * u_i;
                         }
 
                         const Vec3 n = dx_dxi.cross( dx_deta ); // cpt must be XI_ETA here
                         beta[neighbor] += quad_weights_tri[q] * u.dot( n );
-                        S_f[neighbor]   = S_f[neighbor] + quad_weights_tri[q] * n;
+                        S_f[neighbor] = S_f[neighbor] + quad_weights_tri[q] * n;
                     }
                 }
                 else // QUAD
@@ -232,7 +304,7 @@ struct GeometryHelper
                             const auto t = quad_points_line[q_b];
                             const auto w = ScalarT( 0.5 ) * quad_weights_line[q_a] * quad_weights_line[q_b];
 
-                            ScalarT xi = 0, eta = 0, zeta = 0;
+                            ScalarT          xi = 0, eta = 0, zeta = 0;
                             CrossProductType cpt;
                             map_face( neighbor, wedge, s, t, xi, eta, zeta, cpt );
 
@@ -242,11 +314,12 @@ struct GeometryHelper
                                 const auto shape_i = fe::wedge::shape( i, xi, eta, zeta );
                                 const auto grad_i  = fe::wedge::grad_shape( i, xi, eta, zeta );
                                 const Vec3 x_i     = wedge_phy_surf[wedge][i % 3] * ( i < 3 ? r_1 : r_2 );
-                                const Vec3 u_i{ vel_coeffs[0][wedge]( i ), vel_coeffs[1][wedge]( i ), vel_coeffs[2][wedge]( i ) };
-                                dx_dxi   = dx_dxi   + grad_i( 0 ) * x_i;
-                                dx_deta  = dx_deta  + grad_i( 1 ) * x_i;
+                                const Vec3 u_i{
+                                    vel_coeffs[0][wedge]( i ), vel_coeffs[1][wedge]( i ), vel_coeffs[2][wedge]( i ) };
+                                dx_dxi   = dx_dxi + grad_i( 0 ) * x_i;
+                                dx_deta  = dx_deta + grad_i( 1 ) * x_i;
                                 dx_dzeta = dx_dzeta + grad_i( 2 ) * x_i;
-                                u        = u        + shape_i * u_i;
+                                u        = u + shape_i * u_i;
                             }
 
                             Vec3 n{};
@@ -256,7 +329,7 @@ struct GeometryHelper
                                 n = dx_deta.cross( dx_dzeta );
 
                             beta[neighbor] += w * u.dot( n );
-                            S_f[neighbor]   = S_f[neighbor] + w * n;
+                            S_f[neighbor] = S_f[neighbor] + w * n;
                         }
                     }
                 }
@@ -275,13 +348,13 @@ struct GeometryHelper
 
             if ( S_f[neighbor].dot( neighbor_center - cell_center ) < 0 )
             {
-                S_f[neighbor]  = S_f[neighbor] * ScalarT( -1 );
+                S_f[neighbor] = S_f[neighbor] * ScalarT( -1 );
                 beta[neighbor] *= ScalarT( -1 );
             }
         }
 
         // Cell volume = mass matrix diagonal entry.
-        constexpr auto num_quad_points_vol = fe::wedge::quadrature::quad_felippa_3x2_num_quad_points;
+        constexpr auto           num_quad_points_vol = fe::wedge::quadrature::quad_felippa_3x2_num_quad_points;
         dense::Vec< ScalarT, 3 > quad_points_vol[num_quad_points_vol];
         ScalarT                  quad_weights_vol[num_quad_points_vol];
         fe::wedge::quadrature::quad_felippa_3x2_quad_points( quad_points_vol );

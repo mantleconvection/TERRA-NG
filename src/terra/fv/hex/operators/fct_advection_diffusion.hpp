@@ -50,22 +50,25 @@ struct FVFCTBuffers
            domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
            domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
            domain.domain_info().subdomain_num_nodes_radially() + 1 )
-    , antidiff( "fct_antidiff",
-                domain.subdomains().size(),
-                domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
-                domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
-                domain.domain_info().subdomain_num_nodes_radially() + 1,
-                6 )
-    , R_plus( "fct_R_plus",
-              domain.subdomains().size(),
-              domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
-              domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
-              domain.domain_info().subdomain_num_nodes_radially() + 1 )
-    , R_minus( "fct_R_minus",
-               domain.subdomains().size(),
-               domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
-               domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
-               domain.domain_info().subdomain_num_nodes_radially() + 1 )
+    , antidiff(
+          "fct_antidiff",
+          domain.subdomains().size(),
+          domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
+          domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
+          domain.domain_info().subdomain_num_nodes_radially() + 1,
+          6 )
+    , R_plus(
+          "fct_R_plus",
+          domain.subdomains().size(),
+          domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
+          domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
+          domain.domain_info().subdomain_num_nodes_radially() + 1 )
+    , R_minus(
+          "fct_R_minus",
+          domain.subdomains().size(),
+          domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
+          domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1,
+          domain.domain_info().subdomain_num_nodes_radially() + 1 )
     , ghost_T( domain )
     , ghost_R_plus( domain )
     , ghost_R_minus( domain )
@@ -122,6 +125,10 @@ struct ComputeDtStableKernel
     KOKKOS_INLINE_FUNCTION
     void operator()( const int id, const int x, const int y, const int r, ScalarT& local_min ) const
     {
+        constexpr int cell_offset_x[num_neighbors] = { -1, 1, 0, 0, 0, 0 };
+        constexpr int cell_offset_y[num_neighbors] = { 0, 0, -1, 1, 0, 0 };
+        constexpr int cell_offset_r[num_neighbors] = { 0, 0, 0, 0, -1, 1 };
+
         ScalarT beta[num_neighbors];
         ScalarT M_ii = ScalarT( 0 );
         Vec3    S_f[num_neighbors];
@@ -153,7 +160,7 @@ struct ComputeDtStableKernel
         }
 
         const ScalarT dt_cell = ( lambda > ScalarT( 0 ) ) ? ( M_ii / lambda ) : ScalarT( 1e30 );
-        local_min = Kokkos::min( local_min, dt_cell );
+        local_min             = Kokkos::min( local_min, dt_cell );
     }
 };
 
@@ -166,9 +173,12 @@ struct ComputeDtStableKernel
 /// unlike the approximate estimate \f$h_\text{min,radial} / u_\text{max}\f$ which ignores
 /// lateral cell sizes and diffusion stiffness on non-orthogonal cells.
 ///
+/// @note The resulting time step size can still be too large to ensure an "accurate" time discretization.
+///       It can be a good idea to scale it down further in practice.
+///
 /// **Typical usage:**
 /// @code
-///   const ScalarType dt = pseudo_cfl * fv::hex::operators::compute_dt_stable(
+///   const ScalarType dt = dt_scaling * fv::hex::operators::compute_dt_stable(
 ///       domain, u, cell_centers.grid_data(), coords_shell, coords_radii, diffusivity);
 /// @endcode
 ///
@@ -257,17 +267,19 @@ struct FCTPredictorKernel
 
     static constexpr int num_neighbors = GH::num_neighbors;
 
-    grid::Grid3DDataVec< ScalarT, 3 >   grid_;
-    grid::Grid2DDataScalar< ScalarT >   radii_;
-    grid::Grid4DDataVec< ScalarT, 3 >   cell_centers_;
-    grid::Grid4DDataVec< ScalarT, 3 >   vel_grid_;
+    grid::Grid3DDataVec< ScalarT, 3 > grid_;
+    grid::Grid2DDataScalar< ScalarT > radii_;
+    grid::Grid4DDataVec< ScalarT, 3 > cell_centers_;
+    grid::Grid4DDataVec< ScalarT, 3 > vel_grid_;
 
-    grid::Grid4DDataScalar< ScalarT >   T_old_;    ///< \f$T^n\f$: scalar at time level \f$n\f$ (ghost layers must be filled).
-    grid::Grid4DDataScalar< ScalarT >   T_L_;      ///< \f$T^L\f$: low-order predictor output.
-    grid::Grid5DDataScalar< ScalarT >   antidiff_; ///< \f$\tilde{f}_{ij}\f$: pre-scaled antidiff flux per face, shape \f$[\ldots, 6]\f$.
+    grid::Grid4DDataScalar< ScalarT >
+        T_old_;                             ///< \f$T^n\f$: scalar at time level \f$n\f$ (ghost layers must be filled).
+    grid::Grid4DDataScalar< ScalarT > T_L_; ///< \f$T^L\f$: low-order predictor output.
+    grid::Grid5DDataScalar< ScalarT >
+        antidiff_; ///< \f$\tilde{f}_{ij}\f$: pre-scaled antidiff flux per face, shape \f$[\ldots, 6]\f$.
 
-    ScalarT dt_;           ///< Time step \f$\Delta t\f$.
-    ScalarT diffusivity_;  ///< Physical diffusivity \f$\kappa \geq 0\f$; set to 0 for pure advection.
+    ScalarT dt_;          ///< Time step \f$\Delta t\f$.
+    ScalarT diffusivity_; ///< Physical diffusivity \f$\kappa \geq 0\f$; set to 0 for pure advection.
 
     /// @name Optional volumetric source term \f$f\f$ [T/time]
     ///@{
@@ -289,9 +301,13 @@ struct FCTPredictorKernel
     KOKKOS_INLINE_FUNCTION
     void operator()( const int id, const int x, const int y, const int r ) const
     {
-        ScalarT   beta[num_neighbors];
-        ScalarT   M_ii;
-        Vec3      S_f[num_neighbors];
+        constexpr int cell_offset_x[num_neighbors] = { -1, 1, 0, 0, 0, 0 };
+        constexpr int cell_offset_y[num_neighbors] = { 0, 0, -1, 1, 0, 0 };
+        constexpr int cell_offset_r[num_neighbors] = { 0, 0, 0, 0, -1, 1 };
+
+        ScalarT beta[num_neighbors];
+        ScalarT M_ii;
+        Vec3    S_f[num_neighbors];
         GH::compute_geometry( grid_, radii_, cell_centers_, vel_grid_, id, x, y, r, beta, M_ii, S_f );
 
         const ScalarT T_i = T_old_( id, x, y, r );
@@ -330,17 +346,15 @@ struct FCTPredictorKernel
                 cell_centers_( id, nx, ny, nr, 1 ),
                 cell_centers_( id, nx, ny, nr, 2 ) };
             const Vec3 cell_center{
-                cell_centers_( id, x, y, r, 0 ),
-                cell_centers_( id, x, y, r, 1 ),
-                cell_centers_( id, x, y, r, 2 ) };
-            const Vec3    dx       = neighbor_center - cell_center;
-            const ScalarT denom    = dx.dot( S_f[n] );
+                cell_centers_( id, x, y, r, 0 ), cell_centers_( id, x, y, r, 1 ), cell_centers_( id, x, y, r, 2 ) };
+            const Vec3    dx         = neighbor_center - cell_center;
+            const ScalarT denom      = dx.dot( S_f[n] );
             const ScalarT diff_coeff = diffusivity_ * ( S_f[n].dot( S_f[n] ) / denom );
-            lo_diag   += diff_coeff;           // diagonal: κ*(S·S/dx·S)*T_i
-            lo_update -= diff_coeff * T_j;     // off-diagonal: -κ*(S·S/dx·S)*T_j  (note: lo_update is subtracted below)
+            lo_diag += diff_coeff;         // diagonal: κ*(S·S/dx·S)*T_i
+            lo_update -= diff_coeff * T_j; // off-diagonal: -κ*(S·S/dx·S)*T_j  (note: lo_update is subtracted below)
 
             // Antidiffusive flux: purely advective, not affected by physical diffusion.
-            const ScalarT abs_beta = Kokkos::abs( beta[n] );
+            const ScalarT abs_beta      = Kokkos::abs( beta[n] );
             antidiff_( id, x, y, r, n ) = ( dt_ / M_ii ) * ( abs_beta / ScalarT( 2 ) ) * ( T_i - T_j );
         }
 
@@ -353,11 +367,10 @@ struct FCTPredictorKernel
         ScalarT T_L_val = T_i - ( dt_ / M_ii ) * ( lo_diag * T_i + lo_update );
 
         // Volumetric source term: T^L += dt * f_i  (f_i in [T/time]).
-        if ( has_source_ ) 
+        if ( has_source_ )
         {
             T_L_val += dt_ * source_( id, x, y, r );
         }
-            
 
         T_L_( id, x, y, r ) = T_L_val;
     }
@@ -390,17 +403,17 @@ struct FCTPredictorKernel
 ///                             unphysical source term.
 template < typename ScalarT >
 void fct_predictor(
-    const grid::shell::DistributedDomain&       domain,
-    const linalg::VectorFVScalar< ScalarT >&    T_old,
-    const linalg::VectorQ1Vec< ScalarT, 3 >&    vel,
-    const grid::Grid4DDataVec< ScalarT, 3 >&    cell_centers,
-    const grid::Grid3DDataVec< ScalarT, 3 >&    grid,
-    const grid::Grid2DDataScalar< ScalarT >&    radii,
-    const ScalarT                               dt,
-    FVFCTBuffers< ScalarT >&                    bufs,
-    const ScalarT                               diffusivity          = ScalarT( 0 ),
-    const grid::Grid4DDataScalar< ScalarT >&    source               = {},
-    const bool                                  subtract_divergence  = true )
+    const grid::shell::DistributedDomain&    domain,
+    const linalg::VectorFVScalar< ScalarT >& T_old,
+    const linalg::VectorQ1Vec< ScalarT, 3 >& vel,
+    const grid::Grid4DDataVec< ScalarT, 3 >& cell_centers,
+    const grid::Grid3DDataVec< ScalarT, 3 >& grid,
+    const grid::Grid2DDataScalar< ScalarT >& radii,
+    const ScalarT                            dt,
+    FVFCTBuffers< ScalarT >&                 bufs,
+    const ScalarT                            diffusivity         = ScalarT( 0 ),
+    const grid::Grid4DDataScalar< ScalarT >& source              = {},
+    const bool                               subtract_divergence = true )
 {
     util::Timer timer_predictor( "fct_predictor" );
 
@@ -410,26 +423,24 @@ void fct_predictor(
     }
 
     FCTPredictorKernel< ScalarT > kernel{
-        .grid_                 = grid,
-        .radii_                = radii,
-        .cell_centers_         = cell_centers,
-        .vel_grid_             = vel.grid_data(),
-        .T_old_                = T_old.grid_data(),
-        .T_L_                  = bufs.T_L,
-        .antidiff_             = bufs.antidiff,
-        .dt_                   = dt,
-        .diffusivity_          = diffusivity,
-        .source_               = source,
-        .has_source_           = ( source.data() != nullptr ),
-        .subtract_divergence_  = subtract_divergence,
+        .grid_                = grid,
+        .radii_               = radii,
+        .cell_centers_        = cell_centers,
+        .vel_grid_            = vel.grid_data(),
+        .T_old_               = T_old.grid_data(),
+        .T_L_                 = bufs.T_L,
+        .antidiff_            = bufs.antidiff,
+        .dt_                  = dt,
+        .diffusivity_         = diffusivity,
+        .source_              = source,
+        .has_source_          = ( source.data() != nullptr ),
+        .subtract_divergence_ = subtract_divergence,
     };
 
     {
         util::Timer timer_kernel( "fct_predictor_kernel" );
         Kokkos::parallel_for(
-            "fct_predictor",
-            grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ),
-            kernel );
+            "fct_predictor", grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ), kernel );
         Kokkos::fence();
     }
 }
@@ -474,17 +485,21 @@ void fct_predictor(
 template < typename ScalarT >
 struct FCTLimiterKernel
 {
-    using GH = fct_detail::GeometryHelper< ScalarT >;
+    using GH                           = fct_detail::GeometryHelper< ScalarT >;
     static constexpr int num_neighbors = GH::num_neighbors;
 
-    grid::Grid4DDataScalar< ScalarT > T_L_;       ///< \f$T^L\f$ with ghost layers filled.
-    grid::Grid5DDataScalar< ScalarT > antidiff_;  ///< \f$\tilde{f}_{ij}\f$: pre-scaled antidiff fluxes.
-    grid::Grid4DDataScalar< ScalarT > R_plus_;    ///< Output: \f$R_i^+\f$ correction factor.
-    grid::Grid4DDataScalar< ScalarT > R_minus_;   ///< Output: \f$R_i^-\f$ correction factor.
+    grid::Grid4DDataScalar< ScalarT > T_L_;      ///< \f$T^L\f$ with ghost layers filled.
+    grid::Grid5DDataScalar< ScalarT > antidiff_; ///< \f$\tilde{f}_{ij}\f$: pre-scaled antidiff fluxes.
+    grid::Grid4DDataScalar< ScalarT > R_plus_;   ///< Output: \f$R_i^+\f$ correction factor.
+    grid::Grid4DDataScalar< ScalarT > R_minus_;  ///< Output: \f$R_i^-\f$ correction factor.
 
     KOKKOS_INLINE_FUNCTION
     void operator()( const int id, const int x, const int y, const int r ) const
     {
+        constexpr int cell_offset_x[num_neighbors] = { -1, 1, 0, 0, 0, 0 };
+        constexpr int cell_offset_y[num_neighbors] = { 0, 0, -1, 1, 0, 0 };
+        constexpr int cell_offset_r[num_neighbors] = { 0, 0, 0, 0, -1, 1 };
+
         const ScalarT T_L_i = T_L_( id, x, y, r );
 
         ScalarT P_plus  = ScalarT( 0 );
@@ -510,8 +525,10 @@ struct FCTLimiterKernel
         const ScalarT Q_plus  = T_max - T_L_i; // ≥ 0
         const ScalarT Q_minus = T_min - T_L_i; // ≤ 0
 
-        R_plus_( id, x, y, r ) = ( P_plus  > ScalarT( 0 ) ) ? Kokkos::min( ScalarT( 1 ), Q_plus  / P_plus  ) : ScalarT( 1 );
-        R_minus_( id, x, y, r ) = ( P_minus < ScalarT( 0 ) ) ? Kokkos::min( ScalarT( 1 ), Q_minus / P_minus ) : ScalarT( 1 );
+        R_plus_( id, x, y, r ) =
+            ( P_plus > ScalarT( 0 ) ) ? Kokkos::min( ScalarT( 1 ), Q_plus / P_plus ) : ScalarT( 1 );
+        R_minus_( id, x, y, r ) =
+            ( P_minus < ScalarT( 0 ) ) ? Kokkos::min( ScalarT( 1 ), Q_minus / P_minus ) : ScalarT( 1 );
     }
 };
 
@@ -529,9 +546,7 @@ struct FCTLimiterKernel
 /// @param domain  Distributed domain (used for ghost-layer exchange).
 /// @param bufs    FCT scratch arrays; reads `T_L` and `antidiff`, writes `R_plus` and `R_minus`.
 template < typename ScalarT >
-void fct_limiter(
-    const grid::shell::DistributedDomain& domain,
-    FVFCTBuffers< ScalarT >&              bufs )
+void fct_limiter( const grid::shell::DistributedDomain& domain, FVFCTBuffers< ScalarT >& bufs )
 {
     util::Timer timer_limiter( "fct_limiter" );
 
@@ -550,16 +565,14 @@ void fct_limiter(
     {
         util::Timer timer_kernel( "fct_limiter_kernel" );
         Kokkos::parallel_for(
-            "fct_limiter",
-            grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ),
-            kernel );
+            "fct_limiter", grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ), kernel );
         Kokkos::fence();
     }
 
     // R+/R- ghost layers must be filled before the correction kernel reads neighbours.
     {
         util::Timer timer_comm_r( "fct_limiter_comm_r" );
-        communication::shell::update_fv_ghost_layers( domain, bufs.R_plus,  bufs.ghost_R_plus );
+        communication::shell::update_fv_ghost_layers( domain, bufs.R_plus, bufs.ghost_R_plus );
         communication::shell::update_fv_ghost_layers( domain, bufs.R_minus, bufs.ghost_R_minus );
     }
 }
@@ -592,18 +605,22 @@ void fct_limiter(
 template < typename ScalarT >
 struct FCTCorrectionKernel
 {
-    using GH = fct_detail::GeometryHelper< ScalarT >;
+    using GH                           = fct_detail::GeometryHelper< ScalarT >;
     static constexpr int num_neighbors = GH::num_neighbors;
 
-    grid::Grid4DDataScalar< ScalarT > T_L_;       ///< \f$T^L\f$: low-order predictor.
-    grid::Grid5DDataScalar< ScalarT > antidiff_;  ///< \f$\tilde{f}_{ij}\f$: pre-scaled antidiff fluxes.
-    grid::Grid4DDataScalar< ScalarT > R_plus_;    ///< \f$R^+\f$ correction factor (ghost layers filled).
-    grid::Grid4DDataScalar< ScalarT > R_minus_;   ///< \f$R^-\f$ correction factor (ghost layers filled).
-    grid::Grid4DDataScalar< ScalarT > T_new_;     ///< Output: \f$T^{n+1}\f$.
+    grid::Grid4DDataScalar< ScalarT > T_L_;      ///< \f$T^L\f$: low-order predictor.
+    grid::Grid5DDataScalar< ScalarT > antidiff_; ///< \f$\tilde{f}_{ij}\f$: pre-scaled antidiff fluxes.
+    grid::Grid4DDataScalar< ScalarT > R_plus_;   ///< \f$R^+\f$ correction factor (ghost layers filled).
+    grid::Grid4DDataScalar< ScalarT > R_minus_;  ///< \f$R^-\f$ correction factor (ghost layers filled).
+    grid::Grid4DDataScalar< ScalarT > T_new_;    ///< Output: \f$T^{n+1}\f$.
 
     KOKKOS_INLINE_FUNCTION
     void operator()( const int id, const int x, const int y, const int r ) const
     {
+        constexpr int cell_offset_x[num_neighbors] = { -1, 1, 0, 0, 0, 0 };
+        constexpr int cell_offset_y[num_neighbors] = { 0, 0, -1, 1, 0, 0 };
+        constexpr int cell_offset_r[num_neighbors] = { 0, 0, 0, 0, -1, 1 };
+
         ScalarT correction = ScalarT( 0 );
 
         const ScalarT R_plus_i  = R_plus_( id, x, y, r );
@@ -615,9 +632,9 @@ struct FCTCorrectionKernel
             const int jy = y + GH::cell_offset_y( n );
             const int jr = r + GH::cell_offset_r( n );
 
-            const ScalarT f_ij       = antidiff_( id, x, y, r, n );
-            const ScalarT R_plus_j   = R_plus_( id, jx, jy, jr );
-            const ScalarT R_minus_j  = R_minus_( id, jx, jy, jr );
+            const ScalarT f_ij      = antidiff_( id, x, y, r, n );
+            const ScalarT R_plus_j  = R_plus_( id, jx, jy, jr );
+            const ScalarT R_minus_j = R_minus_( id, jx, jy, jr );
 
             ScalarT alpha;
             if ( f_ij > ScalarT( 0 ) )
@@ -660,9 +677,7 @@ void fct_correction(
     {
         util::Timer timer_kernel( "fct_correction_kernel" );
         Kokkos::parallel_for(
-            "fct_correction",
-            grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ),
-            kernel );
+            "fct_correction", grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ), kernel );
         Kokkos::fence();
     }
 }
@@ -729,7 +744,7 @@ void fct_explicit_step(
     if ( boundary_mask.extent( 0 ) > 0 )
         apply_dirichlet_bcs( bufs.T_L, boundary_mask, bcs, domain );
 
-    fct_limiter   ( domain, bufs );
+    fct_limiter( domain, bufs );
     fct_correction( domain, T, bufs );
 }
 
@@ -760,17 +775,17 @@ void fct_explicit_step(
 /// @param subtract_divergence  Subtract discrete divergence error (default `true`); see `fct_predictor`.
 template < typename ScalarT >
 void upwind_explicit_step(
-    const grid::shell::DistributedDomain&       domain,
-    linalg::VectorFVScalar< ScalarT >&          T,
-    const linalg::VectorQ1Vec< ScalarT, 3 >&    vel,
-    const grid::Grid4DDataVec< ScalarT, 3 >&    cell_centers,
-    const grid::Grid3DDataVec< ScalarT, 3 >&    grid,
-    const grid::Grid2DDataScalar< ScalarT >&    radii,
-    const ScalarT                               dt,
-    FVFCTBuffers< ScalarT >&                    bufs,
-    const ScalarT                               diffusivity         = ScalarT( 0 ),
-    const grid::Grid4DDataScalar< ScalarT >&    source              = {},
-    const bool                                  subtract_divergence = true )
+    const grid::shell::DistributedDomain&    domain,
+    linalg::VectorFVScalar< ScalarT >&       T,
+    const linalg::VectorQ1Vec< ScalarT, 3 >& vel,
+    const grid::Grid4DDataVec< ScalarT, 3 >& cell_centers,
+    const grid::Grid3DDataVec< ScalarT, 3 >& grid,
+    const grid::Grid2DDataScalar< ScalarT >& radii,
+    const ScalarT                            dt,
+    FVFCTBuffers< ScalarT >&                 bufs,
+    const ScalarT                            diffusivity         = ScalarT( 0 ),
+    const grid::Grid4DDataScalar< ScalarT >& source              = {},
+    const bool                               subtract_divergence = true )
 {
     util::Timer timer_upwind( "upwind_explicit_step" );
     fct_predictor( domain, T, vel, cell_centers, grid, radii, dt, bufs, diffusivity, source, subtract_divergence );
@@ -807,13 +822,13 @@ struct FCTAntidiffKernel
     grid::Grid4DDataVec< ScalarT, 3 > vel_grid_;
     grid::Grid4DDataScalar< ScalarT > T_old_;    ///< \f$T^n\f$ with ghost layers filled.
     grid::Grid5DDataScalar< ScalarT > antidiff_; ///< Output: \f$\tilde{f}_{ij}\f$, shape \f$[\ldots, 6]\f$.
-    ScalarT                           dt_;        ///< Time step \f$\Delta t\f$.
+    ScalarT                           dt_;       ///< Time step \f$\Delta t\f$.
 
     KOKKOS_INLINE_FUNCTION
     void operator()( const int id, const int x, const int y, const int r ) const
     {
-        ScalarT   beta[num_neighbors];
-        ScalarT   M_ii;
+        ScalarT           beta[num_neighbors];
+        ScalarT           M_ii;
         typename GH::Vec3 S_f[num_neighbors]; // not used here; required by shared compute_geometry
         GH::compute_geometry( grid_, radii_, cell_centers_, vel_grid_, id, x, y, r, beta, M_ii, S_f );
 
@@ -848,14 +863,14 @@ struct FCTAntidiffKernel
 /// @param bufs         FCT scratch arrays; only `antidiff` and `ghost_T` are written.
 template < typename ScalarT >
 void fct_antidiff(
-    const grid::shell::DistributedDomain&       domain,
-    const linalg::VectorFVScalar< ScalarT >&    T_old,
-    const linalg::VectorQ1Vec< ScalarT, 3 >&    vel,
-    const grid::Grid4DDataVec< ScalarT, 3 >&    cell_centers,
-    const grid::Grid3DDataVec< ScalarT, 3 >&    grid,
-    const grid::Grid2DDataScalar< ScalarT >&    radii,
-    const ScalarT                               dt,
-    FVFCTBuffers< ScalarT >&                    bufs )
+    const grid::shell::DistributedDomain&    domain,
+    const linalg::VectorFVScalar< ScalarT >& T_old,
+    const linalg::VectorQ1Vec< ScalarT, 3 >& vel,
+    const grid::Grid4DDataVec< ScalarT, 3 >& cell_centers,
+    const grid::Grid3DDataVec< ScalarT, 3 >& grid,
+    const grid::Grid2DDataScalar< ScalarT >& radii,
+    const ScalarT                            dt,
+    FVFCTBuffers< ScalarT >&                 bufs )
 {
     communication::shell::update_fv_ghost_layers( domain, T_old.grid_data(), bufs.ghost_T );
 
@@ -870,9 +885,7 @@ void fct_antidiff(
     };
 
     Kokkos::parallel_for(
-        "fct_antidiff",
-        grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ),
-        kernel );
+        "fct_antidiff", grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ), kernel );
     Kokkos::fence();
 }
 
@@ -913,15 +926,15 @@ void fct_antidiff(
 /// @param bufs         Pre-allocated FCT scratch arrays.
 template < typename ScalarT >
 void fct_semiimplicit_step(
-    const grid::shell::DistributedDomain&       domain,
-    linalg::VectorFVScalar< ScalarT >&          T,
-    const linalg::VectorFVScalar< ScalarT >&    T_L,
-    const linalg::VectorQ1Vec< ScalarT, 3 >&    vel,
-    const grid::Grid4DDataVec< ScalarT, 3 >&    cell_centers,
-    const grid::Grid3DDataVec< ScalarT, 3 >&    grid,
-    const grid::Grid2DDataScalar< ScalarT >&    radii,
-    const ScalarT                               dt,
-    FVFCTBuffers< ScalarT >&                    bufs )
+    const grid::shell::DistributedDomain&    domain,
+    linalg::VectorFVScalar< ScalarT >&       T,
+    const linalg::VectorFVScalar< ScalarT >& T_L,
+    const linalg::VectorQ1Vec< ScalarT, 3 >& vel,
+    const grid::Grid4DDataVec< ScalarT, 3 >& cell_centers,
+    const grid::Grid3DDataVec< ScalarT, 3 >& grid,
+    const grid::Grid2DDataScalar< ScalarT >& radii,
+    const ScalarT                            dt,
+    FVFCTBuffers< ScalarT >&                 bufs )
 {
     // Stage 1: antidiffusive fluxes from T^n.
     fct_antidiff( domain, T, vel, cell_centers, grid, radii, dt, bufs );

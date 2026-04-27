@@ -7,6 +7,7 @@
 #include "terra/linalg/solvers/solver.hpp"
 #include "terra/linalg/vector.hpp"
 #include "util/table.hpp"
+#include "util/timer.hpp"
 
 namespace terra::linalg::solvers {
 
@@ -107,9 +108,14 @@ class FGMRES
     /// @param b Right-hand side vector (input).
     void solve_impl( OperatorType& A, SolutionVectorType& x, const RHSVectorType& b )
     {
+        util::Timer timer_fgmres_solve( "fgmres_solve" );
+
         // Compute initial residual r = b - A*x
         auto& r = tmp_[0];
-        apply( A, x, r );
+        {
+            util::Timer t_mv( "fgmres_matvec" );
+            apply( A, x, r );
+        }
         lincomb( r, { 1.0, -1.0 }, { b, r } );
 
         ScalarType       beta0            = std::sqrt( dot( r, r ) );
@@ -175,7 +181,10 @@ class FGMRES
                 auto& vj = tmp_[offV + j];
                 auto& zj = tmp_[offZ + j];
                 assign( zj, 0 );
-                solve( preconditioner_, A, zj, vj );
+                {
+                    util::Timer t_pc( "fgmres_precondition" );
+                    solve( preconditioner_, A, zj, vj );
+                }
 
                 const bool preconditioner_result_contains_nan_or_inf = has_nan_or_inf( zj );
 
@@ -194,19 +203,25 @@ class FGMRES
 
                 // Apply operator: w = A * z_j
                 auto& w = tmp_[idxW];
-                apply( A, zj, w );
-
-                // Modified Gram-Schmidt orthogonalization against V_0..V_j
-                for ( int i = 0; i <= j; ++i )
                 {
-                    auto&            vi  = tmp_[offV + i];
-                    const ScalarType hij = dot( w, vi );
-                    H( i, j )            = hij;
-                    lincomb( w, { 1.0, -hij }, { w, vi } );
+                    util::Timer t_mv( "fgmres_matvec" );
+                    apply( A, zj, w );
                 }
 
-                // Compute h_{j+1,j} and normalize to get v_{j+1}
-                const ScalarType h_jp1j = std::sqrt( dot( w, w ) );
+                ScalarType h_jp1j;
+                {
+                    util::Timer t_gs( "fgmres_gram_schmidt" );
+                    // Modified Gram-Schmidt orthogonalization against V_0..V_j
+                    for ( int i = 0; i <= j; ++i )
+                    {
+                        auto&            vi  = tmp_[offV + i];
+                        const ScalarType hij = dot( w, vi );
+                        H( i, j )            = hij;
+                        lincomb( w, { 1.0, -hij }, { w, vi } );
+                    }
+                    // Compute h_{j+1,j} and normalize to get v_{j+1}
+                    h_jp1j = std::sqrt( dot( w, w ) );
+                }
 
                 // SAFE BREAK 1: Arnoldi Breakdown
                 if ( h_jp1j < std::numeric_limits< ScalarType >::epsilon() * initial_residual )
@@ -225,9 +240,12 @@ class FGMRES
 
                 if ( h_jp1j > ScalarType( 0 ) )
                 {
+                    util::Timer t_gs( "fgmres_gram_schmidt" );
                     auto& vjp1 = tmp_[offV + j + 1];
                     lincomb( vjp1, { 1.0 / h_jp1j }, { w } );
                 }
+
+                util::Timer t_hess( "fgmres_hessenberg" );
 
                 // Apply previous Givens rotations to column j of H
                 for ( int i = 0; i < j; ++i )
@@ -306,26 +324,35 @@ class FGMRES
             // Solve upper-triangular system R*y = g(0..inner_its-1) via back-substitution
             Eigen::Matrix< ScalarType, Eigen::Dynamic, 1 > y( inner_its );
             y.setZero();
-            for ( int row = inner_its - 1; row >= 0; --row )
             {
-                ScalarType sum = g( row );
-                for ( int col = row + 1; col < inner_its; ++col )
-                    sum -= H( row, col ) * y( col );
-                y( row ) = sum / H( row, row );
+                util::Timer t_bs( "fgmres_hessenberg" );
+                for ( int row = inner_its - 1; row >= 0; --row )
+                {
+                    ScalarType sum = g( row );
+                    for ( int col = row + 1; col < inner_its; ++col )
+                        sum -= H( row, col ) * y( col );
+                    y( row ) = sum / H( row, row );
+                }
             }
 
             // Update solution: x += sum_{i=0}^{inner_its-1} y_i * z_i
-            auto& acc = tmp_[idxAcc];
-            assign( acc, 0 );
-            for ( int i = 0; i < inner_its; ++i )
             {
-                auto& zi = tmp_[offZ + i];
-                lincomb( acc, { 1.0, y( i ) }, { acc, zi } );
+                util::Timer t_upd( "fgmres_restart_update" );
+                auto& acc = tmp_[idxAcc];
+                assign( acc, 0 );
+                for ( int i = 0; i < inner_its; ++i )
+                {
+                    auto& zi = tmp_[offZ + i];
+                    lincomb( acc, { 1.0, y( i ) }, { acc, zi } );
+                }
+                lincomb( x, { 1.0, 1.0 }, { x, acc } );
             }
-            lincomb( x, { 1.0, 1.0 }, { x, acc } );
 
             // Recompute residual r = b - A*x for next restart
-            apply( A, x, r );
+            {
+                util::Timer t_mv( "fgmres_matvec" );
+                apply( A, x, r );
+            }
             lincomb( r, { 1.0, -1.0 }, { b, r } );
             beta0 = std::sqrt( dot( r, r ) );
 

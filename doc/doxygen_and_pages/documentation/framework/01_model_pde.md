@@ -30,7 +30,7 @@ The momentum balance and mass conservation read
 \f[
     \begin{aligned}
     -\nabla \cdot \boldsymbol{\tau}(\mathbf{u}) + \nabla p &= \mathbf{f}, \\
-    \nabla \cdot \mathbf{u} &= g,
+    -\nabla \cdot \mathbf{u} &= g,
     \end{aligned}
 \f]
 

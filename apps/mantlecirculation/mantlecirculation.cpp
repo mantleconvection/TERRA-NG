@@ -13,7 +13,7 @@
 #include "fe/wedge/operators/shell/prolongation_constant.hpp"
 #include "fe/wedge/operators/shell/restriction_constant.hpp"
 #include "fe/wedge/operators/shell/stokes.hpp"
-#include "fe/wedge/operators/shell/unsteady_advection_diffusion_supg.hpp"
+#include "fe/wedge/operators/shell/unsteady_advection_diffusion_supg_kerngen.hpp"
 #include "fe/wedge/operators/shell/vector_mass.hpp"
 #include "fv/hex/conversion.hpp"
 #include "fv/hex/helpers.hpp"
@@ -110,20 +110,27 @@ Result<> run( const Parameters& prm )
     std::vector< Grid4DDataScalar< grid::NodeOwnershipFlag > >        ownership_mask_data;
     std::vector< Grid4DDataScalar< grid::shell::ShellBoundaryFlag > > boundary_mask_data;
 
+    const int lat_sdr = ( prm.mesh_parameters.lat_sdr >= 0 ) ? prm.mesh_parameters.lat_sdr
+                                                             : prm.mesh_parameters.refinement_level_subdomains;
+    const int rad_sdr = ( prm.mesh_parameters.rad_sdr >= 0 ) ? prm.mesh_parameters.rad_sdr
+                                                             : prm.mesh_parameters.refinement_level_subdomains;
+
     for ( int level = prm.mesh_parameters.refinement_level_mesh_min;
           level <= prm.mesh_parameters.refinement_level_mesh_max;
           level++ )
     {
-        const int idx = level - prm.mesh_parameters.refinement_level_mesh_min;
+        const int idx       = level - prm.mesh_parameters.refinement_level_mesh_min;
+        const int lat_level = level;
+        const int rad_level = level + prm.mesh_parameters.radial_extra_levels;
 
         domains.push_back(
             DistributedDomain::create_uniform(
-                level,
-                level,
+                lat_level,
+                rad_level,
                 prm.mesh_parameters.radius_min,
                 prm.mesh_parameters.radius_max,
-                prm.mesh_parameters.refinement_level_subdomains,
-                prm.mesh_parameters.refinement_level_subdomains ) );
+                lat_sdr,
+                rad_sdr ) );
         coords_shell.push_back( grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domains[idx] ) );
         coords_radii.push_back( grid::shell::subdomain_shell_radii< ScalarType >( domains[idx] ) );
         ownership_mask_data.push_back( grid::setup_node_ownership_mask_data( domains[idx] ) );
@@ -856,7 +863,7 @@ Result<> run( const Parameters& prm )
 
     // --- SUPG energy solver setup (only constructed if needed) ---
 
-    using AD = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPG< ScalarType >;
+    using AD = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPGKerngen< ScalarType >;
     using TempMass = fe::wedge::operators::shell::Mass< ScalarType >;
 
     const bool use_supg = ( prm.time_stepping_parameters.energy_solver == EnergySolverType::SUPG );
@@ -947,6 +954,8 @@ Result<> run( const Parameters& prm )
     for ( int timestep = timestep_initial + 1; timestep < prm.time_stepping_parameters.max_timesteps; timestep++ )
     {
         logroot << "\n### Timestep " << timestep << " ###" << std::endl;
+        util::Timer timer_timestep( "timestep" );
+
 
         const int num_picard = prm.time_stepping_parameters.picard_iterations;
 
@@ -1040,10 +1049,23 @@ Result<> run( const Parameters& prm )
                     static_cast< ScalarType >( num_dofs_pressure );
                 linalg::lincomb( u.block_2(), { 1.0 }, { u.block_2() }, -avg_pressure_approximation );
 
-                timer_stokes.stop();
-            };
+        // --- FCT explicit time-stepping ---
+        // Compute the exact stable dt from the actual face-normal velocity fluxes and cell
+        // volumes via a parallel reduce over all cells.  This is more accurate than the
+        // h_min / u_max estimate, which ignores smaller lateral cells near pentagon vertices
+        // of the icosahedral grid and diffusion stiffness on non-orthogonal faces.
+        const auto dt_stable = fv::hex::operators::compute_dt_stable(
+            domains[velocity_level],
+            u.block_1(),
+            fv_cell_centers.grid_data(),
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            prm.physics_parameters.diffusivity );
+        const auto dt = prm.time_stepping_parameters.dt_scaling * dt_stable;
 
-            solve_stokes_at_temperature( T, /*print_convergence=*/( picard == num_picard - 1 ) );
+        logroot << "Computing dt (FCT stable) ..." << std::endl;
+        logroot << "    dt_stable:                     " << dt_stable << std::endl;
+        logroot << "=>  dt (= dt_stable * dt_scaling): " << dt << std::endl;
 
             // --- Energy solve ---
 
@@ -1271,6 +1293,7 @@ Result<> run( const Parameters& prm )
 
         logroot << "Simulated time: " << simulated_time << " (stopping at " << prm.time_stepping_parameters.t_end
                 << ", we're at " << simulated_time / prm.time_stepping_parameters.t_end * 100.0 << "%)" << std::endl;
+        timer_timestep.stop();
 
         write_timer_tree( prm.io_parameters, timestep );
 

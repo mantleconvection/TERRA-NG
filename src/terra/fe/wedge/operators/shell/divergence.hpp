@@ -3,15 +3,16 @@
 
 #include "../../quadrature/quadrature.hpp"
 #include "communication/shell/communication.hpp"
+#include "communication/shell/communication_plan.hpp"
 #include "dense/vec.hpp"
 #include "fe/wedge/integrands.hpp"
 #include "fe/wedge/kernel_helpers.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
+#include "linalg/trafo/local_basis_trafo_normal_tangential.hpp"
 #include "linalg/vector.hpp"
 #include "linalg/vector_q1.hpp"
 #include "util/timer.hpp"
-#include "linalg/trafo/local_basis_trafo_normal_tangential.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -47,8 +48,8 @@ class Divergence
     linalg::OperatorApplyMode         operator_apply_mode_;
     linalg::OperatorCommunicationMode operator_communication_mode_;
 
-    communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT > send_buffers_;
-    communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT > recv_buffers_;
+    communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT >                        recv_buffers_;
+    terra::communication::shell::ShellBoundaryCommPlan< grid::Grid4DDataScalar< ScalarT > >    comm_plan_;
 
     grid::Grid4DDataVec< ScalarType, 3 > src_;
     grid::Grid4DDataScalar< ScalarType > dst_;
@@ -71,9 +72,8 @@ class Divergence
     , boundary_mask_fine_( boundary_mask_fine )
     , operator_apply_mode_( operator_apply_mode )
     , operator_communication_mode_( operator_communication_mode )
-    // TODO: we can reuse the send and recv buffers and pass in from the outside somehow
-    , send_buffers_( domain_coarse )
     , recv_buffers_( domain_coarse )
+    , comm_plan_( domain_coarse )
     {
         bcs_[0] = bcs[0];
         bcs_[1] = bcs[1];
@@ -107,10 +107,7 @@ class Divergence
         if ( operator_communication_mode_ == linalg::OperatorCommunicationMode::CommunicateAdditively )
         {
             util::Timer timer_comm( "divergence_comm" );
-
-            communication::shell::pack_send_and_recv_local_subdomain_boundaries(
-                domain_coarse_, dst_, send_buffers_, recv_buffers_ );
-            communication::shell::unpack_and_reduce_local_subdomain_boundaries( domain_coarse_, dst_, recv_buffers_ );
+            terra::communication::shell::send_recv_with_plan( comm_plan_, dst_, recv_buffers_ );
         }
     }
 
@@ -126,13 +123,13 @@ class Divergence
         const ScalarT r_2 = radii_( local_subdomain_id, r_cell + 1 );
 
         // Quadrature points.
-        constexpr auto num_quad_points = quadrature::quad_felippa_1x1_num_quad_points;
+        constexpr auto num_quad_points = quadrature::quad_felippa_3x2_num_quad_points;
 
         dense::Vec< ScalarT, 3 > quad_points[num_quad_points];
         ScalarT                  quad_weights[num_quad_points];
 
-        quadrature::quad_felippa_1x1_quad_points( quad_points );
-        quadrature::quad_felippa_1x1_quad_weights( quad_weights );
+        quadrature::quad_felippa_3x2_quad_points( quad_points );
+        quadrature::quad_felippa_3x2_quad_weights( quad_weights );
 
         const int fine_radial_wedge_index = r_cell % 2;
 
@@ -207,7 +204,7 @@ class Divergence
                     {
                         for ( int j = 0; j < num_nodes_per_wedge; j++ )
                         {
-                            if ( at_cmb && ( j < 3 ) || at_surface && ( j >= 3 ) )
+                            if ( ( at_cmb && ( j < 3 ) ) || ( at_surface && ( j >= 3 ) ) )
                             {
                                 boundary_mask( i, dimj * num_nodes_per_wedge + j ) = 0.0;
                             }
@@ -217,8 +214,7 @@ class Divergence
             }
             else if ( bcf == FREESLIP )
             {
-                
-                dense::Mat< ScalarT, 6, 18 > A_tmp[num_wedges_per_hex_cell] = { 0 };
+                dense::Mat< ScalarT, 6, 18 > A_tmp[num_wedges_per_hex_cell] = {};
 
                 // reorder source dofs for nodes instead of velocity dims in src vector and local matrix
                 for ( int wedge = 0; wedge < 2; ++wedge )
@@ -262,7 +258,6 @@ class Divergence
                             r_cell + ( at_cmb ? 0 : 1 ),
                             grid_fine_,
                             radii_ );
-                      
 
                         // compute rotation matrix for DoFs on current node
                         auto R_i = trafo_mat_cartesian_to_normal_tangential( normal );

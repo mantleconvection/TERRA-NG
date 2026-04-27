@@ -60,11 +60,14 @@ class ShellBoundaryCommPlan
 
         post_isends_();
 
-        wait_all_();
+        // Unpack local pairs from boundary_recv_buffers while MPI progresses.
+        unpack_local_( data, boundary_recv_buffers, reduction );
 
-        scatter_recvs_into_boundary_buffers_( boundary_recv_buffers );
+        // Waitany loop: for each remote recv as it lands, unpack its chunks
+        // directly from the flat per-rank recv buffer. Sends are drained at end.
+        wait_and_unpack_remote_( data, reduction );
 
-        unpack_and_reduce_( data, boundary_recv_buffers, reduction );
+        Kokkos::fence();
     }
 
     // Optional: if domain topology changes (rare), rebuild everything.
@@ -86,6 +89,11 @@ class ShellBoundaryCommPlan
         mpi::MPIRank               neighbor_rank;
         grid::shell::SubdomainInfo neighbor_subdomain;
         int                        neighbor_subdomain_boundary;
+
+        // Orientation for rotate step in unpack. direction_0 is used for edges
+        // and as the first component for faces; direction_1 only for faces.
+        grid::BoundaryDirection    direction_0 = grid::BoundaryDirection::FORWARD;
+        grid::BoundaryDirection    direction_1 = grid::BoundaryDirection::FORWARD;
     };
 
     struct ChunkInfo
@@ -162,7 +170,8 @@ class ShellBoundaryCommPlan
             {
                 for ( const auto& neighbor : neighbors )
                 {
-                    const auto& [neighbor_subdomain_info, neighbor_local_boundary, _, neighbor_rank] = neighbor;
+                    const auto& [neighbor_subdomain_info, neighbor_local_boundary, edge_direction, neighbor_rank] =
+                        neighbor;
                     send_recv_pairs_.push_back( SendRecvPair{
                         .boundary_type               = 1,
                         .local_rank                  = mpi::rank(),
@@ -171,13 +180,15 @@ class ShellBoundaryCommPlan
                         .local_subdomain_id          = local_subdomain_id,
                         .neighbor_rank               = neighbor_rank,
                         .neighbor_subdomain          = neighbor_subdomain_info,
-                        .neighbor_subdomain_boundary = static_cast< int >( neighbor_local_boundary ) } );
+                        .neighbor_subdomain_boundary = static_cast< int >( neighbor_local_boundary ),
+                        .direction_0                 = edge_direction } );
                 }
             }
 
             for ( const auto& [local_face_boundary, neighbor] : neighborhood.neighborhood_face() )
             {
-                const auto& [neighbor_subdomain_info, neighbor_local_boundary, _, neighbor_rank] = neighbor;
+                const auto& [neighbor_subdomain_info, neighbor_local_boundary, face_directions, neighbor_rank] =
+                    neighbor;
                 send_recv_pairs_.push_back( SendRecvPair{
                     .boundary_type               = 2,
                     .local_rank                  = mpi::rank(),
@@ -186,7 +197,9 @@ class ShellBoundaryCommPlan
                     .local_subdomain_id          = local_subdomain_id,
                     .neighbor_rank               = neighbor_rank,
                     .neighbor_subdomain          = neighbor_subdomain_info,
-                    .neighbor_subdomain_boundary = static_cast< int >( neighbor_local_boundary ) } );
+                    .neighbor_subdomain_boundary = static_cast< int >( neighbor_local_boundary ),
+                    .direction_0                 = std::get< 0 >( face_directions ),
+                    .direction_1                 = std::get< 1 >( face_directions ) } );
             }
         }
 
@@ -280,6 +293,7 @@ class ShellBoundaryCommPlan
 
         data_send_requests_.resize( send_rank_buffers_.size() );
         data_recv_requests_.resize( recv_rank_buffers_.size() );
+        recv_request_ranks_.resize( recv_rank_buffers_.size() );
     }
 
     // --------------------------
@@ -301,6 +315,7 @@ class ShellBoundaryCommPlan
                 MPI_TAG_BOUNDARY_DATA,
                 MPI_COMM_WORLD,
                 &data_recv_requests_[i] );
+            recv_request_ranks_[i] = rank;
             ++i;
         }
         recv_req_count_ = i;
@@ -450,150 +465,155 @@ class ShellBoundaryCommPlan
         send_req_count_ = i;
     }
 
-    void wait_all_() const
-    {
-        util::Timer timer( "ShellBoundaryCommPlan::waitall" );
-
-        if ( send_req_count_ > 0 )
-            MPI_Waitall( send_req_count_, data_send_requests_.data(), MPI_STATUSES_IGNORE );
-        if ( recv_req_count_ > 0 )
-            MPI_Waitall( recv_req_count_, data_recv_requests_.data(), MPI_STATUSES_IGNORE );
-    }
-
-    void scatter_recvs_into_boundary_buffers_(
-        SubdomainNeighborhoodSendRecvBuffer< ScalarType, VecDim >& boundary_recv_buffers ) const
-    {
-        util::Timer timer( "ShellBoundaryCommPlan::scatter_recvs" );
-
-        const auto& domain = *domain_;
-
-        for ( const auto& [rank, chunks] : recv_chunks_by_rank_ )
-        {
-            auto& rank_buf = recv_rank_buffers_.at( rank );
-
-            for ( const auto& ch : chunks )
-            {
-                const auto& p = ch.pair;
-                ScalarType* base_ptr = rank_buf.data() + ch.offset;
-
-                if ( p.boundary_type == 0 )
-                {
-                    using BufT = grid::Grid0DDataVec< ScalarType, VecDim >;
-                    auto unmanaged = detail::make_unmanaged_like< BufT >( base_ptr );
-
-                    auto& recv_buf = boundary_recv_buffers.buffer_vertex(
-                        p.local_subdomain,
-                        static_cast< grid::BoundaryVertex >( p.local_subdomain_boundary ),
-                        p.neighbor_subdomain,
-                        static_cast< grid::BoundaryVertex >( p.neighbor_subdomain_boundary ) );
-
-                    Kokkos::deep_copy( recv_buf, unmanaged );
-                }
-                else if ( p.boundary_type == 1 )
-                {
-                    using BufT = grid::Grid1DDataVec< ScalarType, VecDim >;
-
-                    const auto local_edge_boundary = static_cast< grid::BoundaryEdge >( p.local_subdomain_boundary );
-                    const int  n_nodes             = grid::is_edge_boundary_radial( local_edge_boundary ) ?
-                                                         domain.domain_info().subdomain_num_nodes_radially() :
-                                                         domain.domain_info().subdomain_num_nodes_per_side_laterally();
-
-                    auto unmanaged = detail::make_unmanaged_like< BufT >( base_ptr, n_nodes );
-
-                    auto& recv_buf = boundary_recv_buffers.buffer_edge(
-                        p.local_subdomain,
-                        static_cast< grid::BoundaryEdge >( p.local_subdomain_boundary ),
-                        p.neighbor_subdomain,
-                        static_cast< grid::BoundaryEdge >( p.neighbor_subdomain_boundary ) );
-
-                    Kokkos::deep_copy( recv_buf, unmanaged );
-                }
-                else if ( p.boundary_type == 2 )
-                {
-                    using BufT = grid::Grid2DDataVec< ScalarType, VecDim >;
-
-                    const auto local_face_boundary = static_cast< grid::BoundaryFace >( p.local_subdomain_boundary );
-                    const int  ni                  = domain.domain_info().subdomain_num_nodes_per_side_laterally();
-                    const int  nj                  = grid::is_face_boundary_normal_to_radial_direction( local_face_boundary ) ?
-                                                         domain.domain_info().subdomain_num_nodes_per_side_laterally() :
-                                                         domain.domain_info().subdomain_num_nodes_radially();
-
-                    auto unmanaged = detail::make_unmanaged_like< BufT >( base_ptr, ni, nj );
-
-                    auto& recv_buf = boundary_recv_buffers.buffer_face(
-                        p.local_subdomain,
-                        static_cast< grid::BoundaryFace >( p.local_subdomain_boundary ),
-                        p.neighbor_subdomain,
-                        static_cast< grid::BoundaryFace >( p.neighbor_subdomain_boundary ) );
-
-                    Kokkos::deep_copy( recv_buf, unmanaged );
-                }
-                else
-                {
-                    Kokkos::abort( "Unknown boundary type" );
-                }
-            }
-        }
-
-        Kokkos::fence( "scatter_rank_recv_buffers" );
-    }
-
-    void unpack_and_reduce_(
+    // Unpack the per-boundary recv buffers for local pairs (filled by
+    // local_comm_copy_into_recv_buffers_). Runs before the MPI wait so the
+    // host/GPU are not idle while remote messages are still in flight.
+    void unpack_local_(
         const GridDataType& data,
         SubdomainNeighborhoodSendRecvBuffer< ScalarType, VecDim >& boundary_recv_buffers,
         CommunicationReduction reduction ) const
     {
-        util::Timer timer( "ShellBoundaryCommPlan::unpack_and_reduce" );
+        util::Timer timer( "ShellBoundaryCommPlan::unpack_local" );
 
-        const auto& domain = *domain_;
-
-        for ( const auto& [local_subdomain_info, idx_and_neighborhood] : domain.subdomains() )
+        for ( const auto& p : local_pairs_ )
         {
-            const auto& [local_subdomain_id, neighborhood] = idx_and_neighborhood;
-
-            for ( const auto& [local_vertex_boundary, neighbors] : neighborhood.neighborhood_vertex() )
+            if ( p.boundary_type == 0 )
             {
-                for ( const auto& neighbor : neighbors )
-                {
-                    const auto& [neighbor_subdomain_info, neighbor_local_boundary, neighbor_rank] = neighbor;
-
-                    auto recv_buffer = boundary_recv_buffers.buffer_vertex(
-                        local_subdomain_info, local_vertex_boundary, neighbor_subdomain_info, neighbor_local_boundary );
-
-                    copy_from_buffer_rotate_and_reduce(
-                        recv_buffer, data, local_subdomain_id, local_vertex_boundary, reduction );
-                }
-            }
-
-            for ( const auto& [local_edge_boundary, neighbors] : neighborhood.neighborhood_edge() )
-            {
-                for ( const auto& neighbor : neighbors )
-                {
-                    const auto& [neighbor_subdomain_info, neighbor_local_boundary, boundary_direction, neighbor_rank] =
-                        neighbor;
-
-                    auto recv_buffer = boundary_recv_buffers.buffer_edge(
-                        local_subdomain_info, local_edge_boundary, neighbor_subdomain_info, neighbor_local_boundary );
-
-                    copy_from_buffer_rotate_and_reduce(
-                        recv_buffer, data, local_subdomain_id, local_edge_boundary, boundary_direction, reduction );
-                }
-            }
-
-            for ( const auto& [local_face_boundary, neighbor] : neighborhood.neighborhood_face() )
-            {
-                const auto& [neighbor_subdomain_info, neighbor_local_boundary, boundary_directions, neighbor_rank] =
-                    neighbor;
-
-                auto recv_buffer = boundary_recv_buffers.buffer_face(
-                    local_subdomain_info, local_face_boundary, neighbor_subdomain_info, neighbor_local_boundary );
-
+                const auto local_boundary    = static_cast< grid::BoundaryVertex >( p.local_subdomain_boundary );
+                const auto neighbor_boundary = static_cast< grid::BoundaryVertex >( p.neighbor_subdomain_boundary );
+                const auto& recv_buffer      = boundary_recv_buffers.buffer_vertex(
+                    p.local_subdomain, local_boundary, p.neighbor_subdomain, neighbor_boundary );
                 copy_from_buffer_rotate_and_reduce(
-                    recv_buffer, data, local_subdomain_id, local_face_boundary, boundary_directions, reduction );
+                    recv_buffer, data, p.local_subdomain_id, local_boundary, reduction );
+            }
+            else if ( p.boundary_type == 1 )
+            {
+                const auto local_boundary    = static_cast< grid::BoundaryEdge >( p.local_subdomain_boundary );
+                const auto neighbor_boundary = static_cast< grid::BoundaryEdge >( p.neighbor_subdomain_boundary );
+                const auto& recv_buffer      = boundary_recv_buffers.buffer_edge(
+                    p.local_subdomain, local_boundary, p.neighbor_subdomain, neighbor_boundary );
+                copy_from_buffer_rotate_and_reduce(
+                    recv_buffer, data, p.local_subdomain_id, local_boundary, p.direction_0, reduction );
+            }
+            else if ( p.boundary_type == 2 )
+            {
+                const auto local_boundary    = static_cast< grid::BoundaryFace >( p.local_subdomain_boundary );
+                const auto neighbor_boundary = static_cast< grid::BoundaryFace >( p.neighbor_subdomain_boundary );
+                const auto& recv_buffer      = boundary_recv_buffers.buffer_face(
+                    p.local_subdomain, local_boundary, p.neighbor_subdomain, neighbor_boundary );
+                copy_from_buffer_rotate_and_reduce(
+                    recv_buffer,
+                    data,
+                    p.local_subdomain_id,
+                    local_boundary,
+                    std::make_tuple( p.direction_0, p.direction_1 ),
+                    reduction );
+            }
+            else
+            {
+                Kokkos::abort( "Unknown boundary type" );
             }
         }
+    }
 
-        Kokkos::fence();
+    // Unpack all chunks received from one remote rank. Reads directly from the
+    // per-rank flat recv buffer via inline unmanaged views.
+    void unpack_remote_rank_(
+        const GridDataType&    data,
+        const mpi::MPIRank     rank,
+        CommunicationReduction reduction ) const
+    {
+        const auto& domain   = *domain_;
+        auto&       rank_buf = recv_rank_buffers_.at( rank );
+        const auto& chunks   = recv_chunks_by_rank_.at( rank );
+
+        for ( const auto& ch : chunks )
+        {
+            const auto& p        = ch.pair;
+            ScalarType* base_ptr = rank_buf.data() + ch.offset;
+
+            if ( p.boundary_type == 0 )
+            {
+                using BufT     = grid::Grid0DDataVec< ScalarType, VecDim >;
+                auto unmanaged = detail::make_unmanaged_like< BufT >( base_ptr );
+                copy_from_buffer_rotate_and_reduce(
+                    unmanaged,
+                    data,
+                    p.local_subdomain_id,
+                    static_cast< grid::BoundaryVertex >( p.local_subdomain_boundary ),
+                    reduction );
+            }
+            else if ( p.boundary_type == 1 )
+            {
+                using BufT             = grid::Grid1DDataVec< ScalarType, VecDim >;
+                const auto local_edge  = static_cast< grid::BoundaryEdge >( p.local_subdomain_boundary );
+                const int  n_nodes     = grid::is_edge_boundary_radial( local_edge ) ?
+                                             domain.domain_info().subdomain_num_nodes_radially() :
+                                             domain.domain_info().subdomain_num_nodes_per_side_laterally();
+                auto unmanaged         = detail::make_unmanaged_like< BufT >( base_ptr, n_nodes );
+                copy_from_buffer_rotate_and_reduce(
+                    unmanaged, data, p.local_subdomain_id, local_edge, p.direction_0, reduction );
+            }
+            else if ( p.boundary_type == 2 )
+            {
+                using BufT             = grid::Grid2DDataVec< ScalarType, VecDim >;
+                const auto local_face  = static_cast< grid::BoundaryFace >( p.local_subdomain_boundary );
+                const int  ni          = domain.domain_info().subdomain_num_nodes_per_side_laterally();
+                const int  nj          = grid::is_face_boundary_normal_to_radial_direction( local_face ) ?
+                                             domain.domain_info().subdomain_num_nodes_per_side_laterally() :
+                                             domain.domain_info().subdomain_num_nodes_radially();
+                auto unmanaged         = detail::make_unmanaged_like< BufT >( base_ptr, ni, nj );
+                copy_from_buffer_rotate_and_reduce(
+                    unmanaged,
+                    data,
+                    p.local_subdomain_id,
+                    local_face,
+                    std::make_tuple( p.direction_0, p.direction_1 ),
+                    reduction );
+            }
+            else
+            {
+                Kokkos::abort( "Unknown boundary type" );
+            }
+        }
+    }
+
+    // Wait for remote recvs, dispatching unpack_remote_rank_ as each message
+    // lands. Finally waits on pending sends.
+    //
+    // Sub-timers:
+    //   - mpi_waitany_first: time from start until the first recv completes.
+    //   - mpi_waitany_rest : per-call time for subsequent recv completions
+    //                        (count = (num_msgs - 1) * num_iters across runs).
+    // Comparing their aggregates tells us whether waitall is dominated by the
+    // initial handshake round-trip or by tail latency from stragglers.
+    void wait_and_unpack_remote_(
+        const GridDataType&    data,
+        CommunicationReduction reduction ) const
+    {
+        util::Timer timer( "ShellBoundaryCommPlan::waitall" );
+
+        for ( int completed = 0; completed < recv_req_count_; ++completed )
+        {
+            int idx = MPI_UNDEFINED;
+            if ( completed == 0 )
+            {
+                util::Timer t( "ShellBoundaryCommPlan::mpi_waitany_first" );
+                MPI_Waitany( recv_req_count_, data_recv_requests_.data(), &idx, MPI_STATUS_IGNORE );
+            }
+            else
+            {
+                util::Timer t( "ShellBoundaryCommPlan::mpi_waitany_rest" );
+                MPI_Waitany( recv_req_count_, data_recv_requests_.data(), &idx, MPI_STATUS_IGNORE );
+            }
+            unpack_remote_rank_( data, recv_request_ranks_[idx], reduction );
+        }
+
+        if ( send_req_count_ > 0 )
+        {
+            util::Timer t( "ShellBoundaryCommPlan::mpi_waitall_sends" );
+            MPI_Waitall( send_req_count_, data_send_requests_.data(), MPI_STATUSES_IGNORE );
+        }
     }
 
   private:
@@ -612,15 +632,17 @@ class ShellBoundaryCommPlan
     std::map< mpi::MPIRank, int >                      send_total_by_rank_;
     std::map< mpi::MPIRank, int >                      recv_total_by_rank_;
 
+
     // Reused rank buffers
     mutable std::map< mpi::MPIRank, rank_buffer_view > send_rank_buffers_;
     mutable std::map< mpi::MPIRank, rank_buffer_view > recv_rank_buffers_;
 
     // Reused request storage
-    mutable std::vector< MPI_Request > data_send_requests_;
-    mutable std::vector< MPI_Request > data_recv_requests_;
-    mutable int                        send_req_count_ = 0;
-    mutable int                        recv_req_count_ = 0;
+    mutable std::vector< MPI_Request >  data_send_requests_;
+    mutable std::vector< MPI_Request >  data_recv_requests_;
+    mutable std::vector< mpi::MPIRank > recv_request_ranks_;
+    mutable int                         send_req_count_ = 0;
+    mutable int                         recv_req_count_ = 0;
 };
 
 // --------------------------------------------------------------------------------------
