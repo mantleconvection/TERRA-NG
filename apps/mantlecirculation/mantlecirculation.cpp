@@ -230,7 +230,7 @@ Result<> run( const Parameters& prm )
     // Setting up the (adaptive) Galerkin coarse grid approximation (AGCA / GCA)
     // Determine AGCA elements.
     VectorQ1Scalar< ScalarType > GCAElements( "GCAElements", domains[0], ownership_mask_data[0] );
-    int                          gca = 0;
+    const int                    gca = prm.stokes_solver_parameters.gca;
     if ( gca == 2 )
     {
         linalg::assign( GCAElements, 0 );

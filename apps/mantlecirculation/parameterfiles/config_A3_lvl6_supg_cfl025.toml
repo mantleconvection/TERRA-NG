@@ -1,9 +1,9 @@
-## A3 benchmark - level 6, pseudo-cfl=0.25, tetrahedral IC, SUPG, Frank-Kamenetskii rmu=20
+## A3 benchmark - level 6, dt-scaling=0.25, tetrahedral IC, SUPG, Frank-Kamenetskii rmu=20
 radius-min=1.22
 radius-max=2.22
 refinement-level-mesh-min=2
 refinement-level-mesh-max=6
-refinement-level-subdomains=0
+refinement-level-subdomains=1
 
 ## Physics
 diffusivity=1
@@ -24,7 +24,7 @@ initial-temperature-sph-order=2
 initial-temperature-sph-epsilon=0.01
 
 ## Time discretization
-pseudo-cfl=0.25
+dt-scaling=0.25
 t-end=1.0
 max-timesteps=1000000
 energy-solver="supg"

@@ -44,6 +44,12 @@ struct BoundaryConditionsParameters
     double temperature_surface = 0.0;
 };
 
+/// Choice of viscosity law for the temperature-dependent viscosity field.
+///   CONSTANT          : eta(T) = const (taken from `reference_viscosity`, optionally
+///                       multiplied by a radial profile if `radial_profile_enabled`).
+///   FRANK_KAMENETSKII : eta(T) = 10^(rmu * (0.5 - T)).  T in [0,1].
+///                       rmu controls the (log10) viscosity contrast — see
+///                       `ViscosityParameters::rmu`.
 enum class ViscosityLaw
 {
     CONSTANT,
@@ -52,16 +58,43 @@ enum class ViscosityLaw
 
 struct ViscosityParameters
 {
+    /// Viscosity law selector — see ViscosityLaw above.
     ViscosityLaw law = ViscosityLaw::CONSTANT;
+
+    /// Exponent of the Frank-Kamenetskii viscosity law: eta = 10^(rmu * (0.5 - T)).
+    /// Equivalently, total cold/hot viscosity contrast = 10^rmu (rmu=0 → constant viscosity).
+    /// Ignored when `law == CONSTANT`.
     double       rmu = 1.0;
 
+    /// If true, multiply the temperature-dependent viscosity by a radial reference profile
+    /// eta_ref(r) read from CSV.  The on-disk file gives a 1D profile (radii column +
+    /// viscosity column); cell-wise viscosity is linearly interpolated to the cell radius
+    /// and *multiplied* into the temperature-dependent factor.  Useful for laterally
+    /// uniform but radially varying viscosity (e.g. realistic mantle profiles).
     bool        radial_profile_enabled       = false;
+
+    /// Path to the CSV file containing the radial viscosity profile.
     std::string radial_profile_csv_filename  = "radial_viscosity_profile.csv";
+    /// CSV column name for the radii (first column).  Radii must be in the same units
+    /// as `radius_min`/`radius_max` (i.e. non-dimensional shell radii).
     std::string radial_profile_radii_key     = "radii";
+    /// CSV column name for the viscosity values (second column), in units of
+    /// `reference_viscosity`.
     std::string radial_profile_viscosity_key = "viscosity";
+
+    /// Multiplicative reference viscosity scale.  Final viscosity is
+    /// `reference_viscosity * eta(T) * eta_ref(r)`.
+    /// When `law == CONSTANT` and `radial_profile_enabled == false`, this is just the
+    /// constant viscosity value.
     double      reference_viscosity          = 1.0;
 };
 
+/// Initial temperature distribution.
+///   POWER_LAW  : T_init from a radial power-law profile + small noise (legacy default).
+///   CONDUCTIVE : T_init = analytic conduction profile (r_min*r_max/r - r_min) / D, plus an
+///                optional spherical-harmonic perturbation Y_l^m (and an optional second
+///                harmonic) of amplitude `sph_epsilon`.  Use this for the standard mantle
+///                convection benchmarks (Zhong et al. 2008 A/C cases).
 enum class InitialTemperatureProfile
 {
     POWER_LAW,
@@ -70,16 +103,25 @@ enum class InitialTemperatureProfile
 
 struct InitialTemperatureParameters
 {
+    /// Selector for the initial-temperature distribution — see InitialTemperatureProfile.
     InitialTemperatureProfile profile = InitialTemperatureProfile::POWER_LAW;
+
+    /// Spherical-harmonic perturbation degree l of the first harmonic (l >= 0). Set 0 to
+    /// disable the SH perturbation entirely (then sph_epsilon is ignored).
     int                       sph_degree_l = 0;
+    /// Spherical-harmonic perturbation order m of the first harmonic (|m| <= l).
     int                       sph_order_m  = 0;
+    /// Amplitude of the perturbation: T = T_ref(r) + sph_epsilon * (Y_l1^m1 + factor_2 * Y_l2^m2).
+    /// Typical values are 0.01..0.1 for Zhong-style benchmarks.
     double                    sph_epsilon  = 0.0;
 
-    // Optional second spherical harmonic for combined modes (e.g. cubic symmetry
-    // T_perturb = Y_4^0 + (5/7) * Y_4^4). Set sph_degree_l_2 > 0 to enable.
-    // The total perturbation is eps * envelope(r) * (Y_l1^m1 + factor_2 * Y_l2^m2).
+    /// Optional second spherical harmonic for combined modes (e.g. cubic symmetry
+    /// T_perturb = Y_4^0 + (5/7) * Y_4^4).  Set sph_degree_l_2 > 0 to enable.
+    /// The total perturbation is sph_epsilon * (Y_l1^m1 + sph_factor_2 * Y_l2^m2).
     int                       sph_degree_l_2 = 0;
     int                       sph_order_m_2  = 0;
+    /// Relative amplitude of the second harmonic (typical values are O(1); e.g. 5/7 for
+    /// the Zhong C3 cubic-symmetry benchmark).
     double                    sph_factor_2   = 0.0;
 };
 
@@ -106,6 +148,18 @@ struct StokesSolverParameters
     int viscous_pc_chebyshev_order             = 2;
     int viscous_pc_num_smoothing_steps_prepost = 2;
     int viscous_pc_num_power_iterations        = 10;
+
+    /// Galerkin coarse-grid approximation mode for the multigrid preconditioner of the
+    /// viscous Stokes block.
+    ///   0 : disabled — coarse operators are re-discretised on every level (cheap setup,
+    ///       but coarse smoothers see a different operator than the fine one).  Default.
+    ///   1 : full GCA — store and assemble the full coarse-grid Galerkin matrices for
+    ///       every coarse level.  Most robust setup; usually faster overall at high
+    ///       viscosity contrast / variable viscosity.
+    ///   2 : adaptive GCA — only store/assemble the coarse-grid matrices for elements
+    ///       flagged by `GCAElementsCollector`, leaving the rest re-discretised.
+    ///       Uses less memory than mode 1 but slightly less robust.
+    int gca = 0;
 };
 
 struct EnergySolverParameters
@@ -116,6 +170,15 @@ struct EnergySolverParameters
     double krylov_absolute_tolerance = 1e-12;
 };
 
+/// Time-discretization scheme for the energy (temperature) equation.
+///   FCT  : explicit Flux-Corrected Transport on the FV mesh.  Low-order upwind
+///          predictor + Zalesak limiter (monotone, no over/undershoots).
+///          Stability bound: dt <= dt_stable (computed from advective + diffusive
+///          face fluxes).  Cheap per step but requires small dt at high velocity / Pe.
+///   SUPG : implicit SUPG-stabilised Galerkin advection-diffusion on the Q1 mesh,
+///          solved by FGMRES.  Unconditionally stable (dt only bounded by the
+///          *advection* CFL for accuracy), so allows much larger dt at moderate Pe.
+///          Linear-solver convergence degrades at high Pe (Ra >> 1e6).
 enum class EnergySolverType
 {
     FCT,
@@ -443,6 +506,14 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         "--stokes-viscous-pc-num-power-iterations",
         parameters.stokes_solver_parameters.viscous_pc_num_power_iterations )
         ->group( "Stokes Solver" );
+    add_option_with_default(
+        app, "--stokes-gca", parameters.stokes_solver_parameters.gca )
+        ->group( "Stokes Solver" )
+        ->description(
+            "Galerkin coarse-grid approximation mode for the viscous-block multigrid "
+            "preconditioner. 0 = disabled (default; coarse operators rediscretised), "
+            "1 = full GCA (more robust at variable viscosity), "
+            "2 = adaptive GCA (memory-saving, slightly less robust)." );
 
     /////////////////////
     /// Energy solver ///
