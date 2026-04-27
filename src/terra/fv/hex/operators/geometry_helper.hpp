@@ -338,9 +338,9 @@ struct GeometryHelper
             // Ensure S_f[neighbor] points outward from cell i toward cell j.
             // Neighbour cell centre is available in ghost layers after initialize_cell_centers;
             // on curved domains this is the symmetric, correct reference direction.
-            const int  nx = x_cell + cell_offset_x( neighbor );
-            const int  ny = y_cell + cell_offset_y( neighbor );
-            const int  nr = r_cell + cell_offset_r( neighbor );
+            const int  nx = x_cell + cell_offset_x[ neighbor ];
+            const int  ny = y_cell + cell_offset_y[ neighbor ];
+            const int  nr = r_cell + cell_offset_r[ neighbor ];
             const Vec3 neighbor_center{
                 cell_centers( local_subdomain_id, nx, ny, nr, 0 ),
                 cell_centers( local_subdomain_id, nx, ny, nr, 1 ),

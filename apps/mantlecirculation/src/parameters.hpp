@@ -382,8 +382,6 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
             "considerations. You can scale the computed dt using this value (e.g. set to 0.5 to half the estimated dt, "
             "set to 1.0 to just use the estimated dt)." )
         ->group( "Time Discretization" );
-    add_option_with_default( app, "--t-start", parameters.time_stepping_parameters.t_start )
-        ->group( "Time Discretization" );
     add_option_with_default( app, "--t-end", parameters.time_stepping_parameters.t_end )
         ->group( "Time Discretization" );
     add_option_with_default( app, "--max-timesteps", parameters.time_stepping_parameters.max_timesteps )

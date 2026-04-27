@@ -855,7 +855,7 @@ Result<> run( const Parameters& prm )
             timestep_initial );
     }
 
-    ScalarType simulated_time = prm.time_stepping_parameters.t_start;
+    ScalarType simulated_time = ScalarType( 0 );
 
     // We need some global h. Let's, for simplicity (does not need to be too accurate) just choose the smallest h in
     // radial direction.
@@ -969,11 +969,11 @@ Result<> run( const Parameters& prm )
             // SUPG: implicit diffusion, so dt is only constrained by advection CFL.
             const auto max_vel = kernels::common::max_vector_magnitude( u.block_1().grid_data() );
             const auto dt_advection = ( max_vel > 1e-12 ) ? ( h / max_vel ) : ScalarType( 1e-3 );
-            dt = prm.time_stepping_parameters.pseudo_cfl * dt_advection;
+            dt = prm.time_stepping_parameters.dt_scaling * dt_advection;
             logroot << "Computing dt (SUPG advection CFL) ..." << std::endl;
             logroot << "    max_vel:                       " << max_vel << std::endl;
             logroot << "    h:                             " << h << std::endl;
-            logroot << "=>  dt (= pseudo_cfl * h/v_max):   " << dt << std::endl;
+            logroot << "=>  dt (= dt_scaling * h/v_max):   " << dt << std::endl;
         }
         else
         {
@@ -984,10 +984,10 @@ Result<> run( const Parameters& prm )
                 coords_shell[velocity_level],
                 coords_radii[velocity_level],
                 prm.physics_parameters.diffusivity );
-            dt = prm.time_stepping_parameters.pseudo_cfl * dt_stable;
+            dt = prm.time_stepping_parameters.dt_scaling * dt_stable;
             logroot << "Computing dt (FCT stable) ..." << std::endl;
             logroot << "    dt_stable:                     " << dt_stable << std::endl;
-            logroot << "=>  dt (= dt_stable * pseudo_cfl): " << dt << std::endl;
+            logroot << "=>  dt (= dt_stable * dt_scaling): " << dt << std::endl;
         }
 
         for ( int picard = 0; picard < num_picard; picard++ )
@@ -1048,24 +1048,9 @@ Result<> run( const Parameters& prm )
                         u.block_2().grid_data(), u.block_2().mask_data(), grid::NodeOwnershipFlag::OWNED ) /
                     static_cast< ScalarType >( num_dofs_pressure );
                 linalg::lincomb( u.block_2(), { 1.0 }, { u.block_2() }, -avg_pressure_approximation );
+            };
 
-        // --- FCT explicit time-stepping ---
-        // Compute the exact stable dt from the actual face-normal velocity fluxes and cell
-        // volumes via a parallel reduce over all cells.  This is more accurate than the
-        // h_min / u_max estimate, which ignores smaller lateral cells near pentagon vertices
-        // of the icosahedral grid and diffusion stiffness on non-orthogonal faces.
-        const auto dt_stable = fv::hex::operators::compute_dt_stable(
-            domains[velocity_level],
-            u.block_1(),
-            fv_cell_centers.grid_data(),
-            coords_shell[velocity_level],
-            coords_radii[velocity_level],
-            prm.physics_parameters.diffusivity );
-        const auto dt = prm.time_stepping_parameters.dt_scaling * dt_stable;
-
-        logroot << "Computing dt (FCT stable) ..." << std::endl;
-        logroot << "    dt_stable:                     " << dt_stable << std::endl;
-        logroot << "=>  dt (= dt_stable * dt_scaling): " << dt << std::endl;
+            solve_stokes_at_temperature( T, /*print_convergence=*/( picard == num_picard - 1 ) );
 
             // --- Energy solve ---
 

@@ -422,12 +422,8 @@ void copy_from_buffer_rotate_and_reduce(
     const grid::BoundaryDirection boundary_direction,
     const CommunicationReduction  reduction )
 {
+    using ScalarType             = typename BufferView::value_type;
     constexpr bool is_scalar = std::is_same_v< ViewType, grid::Grid4DDataScalar< ScalarType > >;
-
-    if ( buffer.extent( 1 ) != VecDim )
-    {
-        Kokkos::abort( "The buffer VecDim should match its respective extent. This abort should not happen." );
-    }
 
     const auto boundary_position_x = grid::boundary_position_from_boundary_type_x( boundary_edge );
     const auto boundary_position_y = grid::boundary_position_from_boundary_type_y( boundary_edge );
