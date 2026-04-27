@@ -210,6 +210,122 @@ void l2_project_fv_to_fe(
     linalg::solvers::solve( solver, M, dst, b );
 }
 
+/// @brief Bound-preserving FV-to-FE transfer via a lumped mass matrix.
+///
+/// Computes, for every Q1 node \f$i\f$,
+/// \f[
+///     u_i^{FE} = \frac{b_i}{D_i},
+///     \quad
+///     b_i   = \sum_K u_K^{FV} \int_K \phi_i \, dx,
+///     \quad
+///     D_i   = \sum_K          \int_K \phi_i \, dx
+/// \f]
+/// where \f$\phi_i\f$ are the Q1 wedge shape functions.  Because every shape
+/// function is non-negative and the shape functions form a partition of unity,
+/// \f$u_i^{FE}\f$ is a convex combination of the surrounding FV cell values.
+/// Consequently this projection is **monotone**: if \f$u^{FV} \in [a, b]\f$
+/// then \f$u^{FE} \in [a, b]\f$, with no Gibbs-type over- or undershoots.
+///
+/// Compare with @ref l2_project_fv_to_fe which uses a consistent mass matrix
+/// and solves a global linear system.  The lumped variant is cheaper (no
+/// solver, no MPI reduction for convergence) but slightly less L2-accurate in
+/// smooth cases.  It is the preferred choice when bound-preservation matters
+/// (e.g.\ compositional fields, density anomalies that feed directly into
+/// buoyancy).
+///
+/// @param dst    [out] FE scalar field receiving the projected values.
+/// @param src    FV scalar field to project.
+/// @param domain Distributed domain (required for MPI ghost communication).
+/// @param coords_shell Lateral node coordinates of the unit-sphere surface.
+/// @param coords_radii Radial shell radii.
+/// @param tmps   At least 2 temporary Q1 vectors (used for \f$b\f$ and \f$D\f$).
+template < typename ScalarType, typename GridScalarType >
+void l2_project_fv_to_fe_lumped(
+    linalg::VectorQ1Scalar< ScalarType >&                dst,
+    const linalg::VectorFVScalar< ScalarType >&          src,
+    const grid::shell::DistributedDomain&                domain,
+    const grid::Grid3DDataVec< GridScalarType, 3 >&      coords_shell,
+    const grid::Grid2DDataScalar< GridScalarType >&      coords_radii,
+    std::vector< linalg::VectorQ1Scalar< ScalarType > >& tmps )
+{
+    if ( tmps.size() < 2 )
+    {
+        Kokkos::abort( "At least 2 tmp vectors required." );
+    }
+
+    auto b = tmps[0]; // numerator:   sum_K u_K * integral(phi_i, K)
+    auto D = tmps[1]; // denominator: sum_K       integral(phi_i, K)  (lumped diagonal)
+
+    linalg::assign( b, ScalarType( 0 ) );
+    linalg::assign( D, ScalarType( 0 ) );
+
+    grid::Grid4DDataScalar< ScalarType > fv_grid = src.grid_data();
+    grid::Grid4DDataScalar< ScalarType > b_grid  = b.grid_data();
+    grid::Grid4DDataScalar< ScalarType > d_grid  = D.grid_data();
+
+    Kokkos::parallel_for(
+        "l2_project_fv_to_fe_lumped_assembly",
+        Kokkos::MDRangePolicy(
+            { 0, 1, 1, 1 },
+            { fv_grid.extent( 0 ), fv_grid.extent( 1 ) - 1, fv_grid.extent( 2 ) - 1, fv_grid.extent( 3 ) - 1 } ),
+        KOKKOS_LAMBDA(
+            const int local_subdomain_id, const int hex_cell_x, const int hex_cell_y, const int hex_cell_r ) {
+            const auto hex_cell_x_no_gl = hex_cell_x - 1;
+            const auto hex_cell_y_no_gl = hex_cell_y - 1;
+            const auto hex_cell_r_no_gl = hex_cell_r - 1;
+
+            constexpr auto              num_quad_points = fe::wedge::quadrature::quad_felippa_3x2_num_quad_points;
+            dense::Vec< ScalarType, 3 > quad_points[num_quad_points];
+            ScalarType                  quad_weights[num_quad_points];
+            fe::wedge::quadrature::quad_felippa_3x2_quad_points( quad_points );
+            fe::wedge::quadrature::quad_felippa_3x2_quad_weights( quad_weights );
+
+            dense::Vec< ScalarType, 3 > wedge_phy_surf[fe::wedge::num_wedges_per_hex_cell]
+                                                      [fe::wedge::num_nodes_per_wedge_surface] = {};
+            fe::wedge::wedge_surface_physical_coords(
+                wedge_phy_surf, coords_shell, local_subdomain_id, hex_cell_x - 1, hex_cell_y - 1 );
+
+            const auto r_1 = coords_radii( local_subdomain_id, hex_cell_r - 1 );
+            const auto r_2 = coords_radii( local_subdomain_id, hex_cell_r );
+
+            const auto fv_value = fv_grid( local_subdomain_id, hex_cell_x, hex_cell_y, hex_cell_r );
+
+            // d_local accumulates integral(phi_i, K); b_local = fv_value * d_local
+            dense::Vec< ScalarType, 6 > b_local[fe::wedge::num_wedges_per_hex_cell] = {};
+            dense::Vec< ScalarType, 6 > d_local[fe::wedge::num_wedges_per_hex_cell] = {};
+
+            for ( int wedge = 0; wedge < fe::wedge::num_wedges_per_hex_cell; ++wedge )
+            {
+                for ( int i = 0; i < fe::wedge::num_nodes_per_wedge; ++i )
+                {
+                    for ( int q = 0; q < num_quad_points; ++q )
+                    {
+                        const auto J        = fe::wedge::jac( wedge_phy_surf[wedge], r_1, r_2, quad_points[q] );
+                        const auto abs_det  = Kokkos::abs( J.det() );
+                        const auto phi_i_Jw = fe::wedge::shape( i, quad_points[q] ) * abs_det * quad_weights[q];
+
+                        d_local[wedge]( i ) += phi_i_Jw;
+                    }
+
+                    b_local[wedge]( i ) = fv_value * d_local[wedge]( i );
+                }
+            }
+
+            fe::wedge::atomically_add_local_wedge_scalar_coefficients(
+                b_grid, local_subdomain_id, hex_cell_x_no_gl, hex_cell_y_no_gl, hex_cell_r_no_gl, b_local );
+            fe::wedge::atomically_add_local_wedge_scalar_coefficients(
+                d_grid, local_subdomain_id, hex_cell_x_no_gl, hex_cell_y_no_gl, hex_cell_r_no_gl, d_local );
+        } );
+
+    communication::shell::send_recv( domain, b_grid );
+    communication::shell::send_recv( domain, d_grid );
+
+    // dst = b / D  (element-wise)
+    linalg::assign( dst, b );
+    linalg::invert_entries( D );
+    linalg::scale_in_place( dst, D );
+}
+
 /// @brief L2 projection from a Q1 finite element function into a finite volume function.
 ///
 /// For each FV cell \f$K\f$ computes the exact volume-weighted cell average of the Q1 field:

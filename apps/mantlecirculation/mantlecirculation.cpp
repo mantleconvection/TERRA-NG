@@ -1049,10 +1049,23 @@ Result<> run( const Parameters& prm )
                     static_cast< ScalarType >( num_dofs_pressure );
                 linalg::lincomb( u.block_2(), { 1.0 }, { u.block_2() }, -avg_pressure_approximation );
 
-                timer_stokes.stop();
-            };
+        // --- FCT explicit time-stepping ---
+        // Compute the exact stable dt from the actual face-normal velocity fluxes and cell
+        // volumes via a parallel reduce over all cells.  This is more accurate than the
+        // h_min / u_max estimate, which ignores smaller lateral cells near pentagon vertices
+        // of the icosahedral grid and diffusion stiffness on non-orthogonal faces.
+        const auto dt_stable = fv::hex::operators::compute_dt_stable(
+            domains[velocity_level],
+            u.block_1(),
+            fv_cell_centers.grid_data(),
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            prm.physics_parameters.diffusivity );
+        const auto dt = prm.time_stepping_parameters.dt_scaling * dt_stable;
 
-            solve_stokes_at_temperature( T, /*print_convergence=*/( picard == num_picard - 1 ) );
+        logroot << "Computing dt (FCT stable) ..." << std::endl;
+        logroot << "    dt_stable:                     " << dt_stable << std::endl;
+        logroot << "=>  dt (= dt_stable * dt_scaling): " << dt << std::endl;
 
             // --- Energy solve ---
 

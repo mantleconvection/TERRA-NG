@@ -1,14 +1,44 @@
 
-// Modified Stokes test:
-//  - ALL output goes through util::logroot() (no std::cout).
-//  - Boundary interpolation uses boundary_mask_data (ShellBoundaryFlag::BOUNDARY) via util::has_flag.
-//  - Runs for all subdomain refinement levels 0..2.
-//  - Sanity check: for a fixed global level, L2 errors must match across level_subdomains (0..2).
+/// Simple manufactured solution convergence test for compressible Stokes using the PDA formulation.
+///
+/// For the PDA see documentation and/or Gassmöller et al. (2020).
+///
+/// The manufactured solution is very simple. This is really just a first smoke test.
+///
+/// Setup 1:
+///
+/// u = (x, y, z)
+/// p = 0
+/// f_momentum = 0
+/// f_continuity = -div(u) = -3
+///
+/// Therefore we set rho = 1 and drho/dt = -3 and apply the PDA linear forms.
+///
+/// Setup 2:
+///
+/// u = (x, y, z)
+/// p = 0
+/// f_momentum = 0
+/// f_continuity = -div(u) = -3
+///
+/// Therefore we set rho = r = sqrt(x^2 + y^2 + z^2) which gives us grad(rho) = (x, y, z) / r.
+/// Then we have (grad(rho)/rho . u) = 1. Now we need drho/dt = -4r such that (1/rho) * (drho/dt) = -4.
+
+#define SETUP 2
+
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <map>
+#include <tuple>
+#include <vector>
 
 #include "../src/terra/communication/shell/communication.hpp"
 #include "fe/strong_algebraic_dirichlet_enforcement.hpp"
 #include "fe/strong_algebraic_freeslip_enforcement.hpp"
 #include "fe/wedge/integrands.hpp"
+#include "fe/wedge/linearforms/shell/inv_rho_drho_dt.hpp"
+#include "fe/wedge/linearforms/shell/inv_rho_grad_rho_dot_u.hpp"
 #include "fe/wedge/operators/shell/epsilon_divdiv_stokes.hpp"
 #include "fe/wedge/operators/shell/identity.hpp"
 #include "fe/wedge/operators/shell/kmass.hpp"
@@ -47,18 +77,6 @@
 #include "util/info.hpp"
 #include "util/init.hpp"
 #include "util/table.hpp"
-// If util::logroot() is declared in a dedicated header in your tree,
-// include it here (some builds provide it via util/init.hpp):
-// #include "util/log.hpp"
-
-#include <algorithm>
-#include <cmath>
-#include <fstream>
-#include <map>
-#include <tuple>
-#include <vector>
-
-#include "util/cli11_helper.hpp"
 
 using namespace terra;
 
@@ -125,9 +143,9 @@ struct SolutionVelocityInterpolator
             const double cy = coords( 1 );
             const double cz = coords( 2 );
 
-            data_u_( local_subdomain_id, x, y, r, 0 ) = -4 * Kokkos::cos( 4 * cz );
-            data_u_( local_subdomain_id, x, y, r, 1 ) = 8 * Kokkos::cos( 8 * cx );
-            data_u_( local_subdomain_id, x, y, r, 2 ) = -2 * Kokkos::cos( 2 * cy );
+            data_u_( local_subdomain_id, x, y, r, 0 ) = cx;
+            data_u_( local_subdomain_id, x, y, r, 1 ) = cy;
+            data_u_( local_subdomain_id, x, y, r, 2 ) = cz;
         }
     }
 };
@@ -156,19 +174,12 @@ struct SolutionPressureInterpolator
     KOKKOS_INLINE_FUNCTION
     void operator()( const int local_subdomain_id, const int x, const int y, const int r ) const
     {
-        const dense::Vec< double, 3 > coords = grid::shell::coords( local_subdomain_id, x, y, r, grid_, radii_ );
-
         const bool on_boundary =
             util::has_flag( mask_( local_subdomain_id, x, y, r ), grid::shell::ShellBoundaryFlag::BOUNDARY );
 
         if ( !only_boundary_ || on_boundary )
         {
-            const double cx = coords( 0 );
-            const double cy = coords( 1 );
-            const double cz = coords( 2 );
-
-            data_p_( local_subdomain_id, x, y, r ) =
-                Kokkos::sin( 4 * cx ) * Kokkos::sin( 8 * cy ) * Kokkos::sin( 2 * cz );
+            data_p_( local_subdomain_id, x, y, r ) = 0.0;
         }
     }
 };
@@ -189,51 +200,75 @@ struct RHSVelocityInterpolator
     {}
 
     KOKKOS_INLINE_FUNCTION
-    void operator()( const int local_subdomain_id, const int x, const int y, const int r ) const
+    void operator()( const int local_subdomain_id, const int x_idx, const int y_idx, const int r_idx ) const
     {
-        const dense::Vec< double, 3 > coords = grid::shell::coords( local_subdomain_id, x, y, r, grid_, radii_ );
-        const real_t                  x0     = 4 * coords( 2 );
-
-        data_( local_subdomain_id, x, y, r, 0 ) =
-            -64.0 * ( Kokkos::sin( coords( 2 ) ) + 2 ) * Kokkos::cos( x0 ) -
-            16.0 * Kokkos::sin( x0 ) * Kokkos::cos( coords( 2 ) ) +
-            4 * Kokkos::sin( 8 * coords( 1 ) ) * Kokkos::sin( 2 * coords( 2 ) ) * Kokkos::cos( 4 * coords( 0 ) );
-
-        data_( local_subdomain_id, x, y, r, 1 ) =
-            512.0 * ( Kokkos::sin( coords( 2 ) ) + 2 ) * Kokkos::cos( 8 * coords( 0 ) ) +
-            8 * Kokkos::sin( 4 * coords( 0 ) ) * Kokkos::sin( 2 * coords( 2 ) ) * Kokkos::cos( 8 * coords( 1 ) ) -
-            4.0 * Kokkos::sin( 2 * coords( 1 ) ) * Kokkos::cos( coords( 2 ) );
-
-        data_( local_subdomain_id, x, y, r, 2 ) =
-            -8.0 * ( Kokkos::sin( coords( 2 ) ) + 2 ) * Kokkos::cos( 2 * coords( 1 ) ) +
-            2 * Kokkos::sin( 4 * coords( 0 ) ) * Kokkos::sin( 8 * coords( 1 ) ) * Kokkos::cos( 2 * coords( 2 ) );
+        data_( local_subdomain_id, x_idx, y_idx, r_idx, 0 ) = 0;
+        data_( local_subdomain_id, x_idx, y_idx, r_idx, 1 ) = 0;
+        data_( local_subdomain_id, x_idx, y_idx, r_idx, 2 ) = 0;
     }
 };
 
-struct KInterpolator
+struct RhoInterpolator
 {
     Grid3DDataVec< double, 3 > grid_;
     Grid2DDataScalar< double > radii_;
     Grid4DDataScalar< double > data_;
-    double                     kmax_;
 
-    KInterpolator(
+    RhoInterpolator(
         const Grid3DDataVec< double, 3 >& grid,
         const Grid2DDataScalar< double >& radii,
-        const Grid4DDataScalar< double >& data,
-        const double                      kmax )
+        const Grid4DDataScalar< double >& data )
     : grid_( grid )
     , radii_( radii )
     , data_( data )
-    , kmax_( kmax )
     {}
 
     KOKKOS_INLINE_FUNCTION
-    void operator()( const int local_subdomain_id, const int x, const int y, const int r ) const
+    void operator()( const int local_subdomain_id, const int x_idx, const int y_idx, const int r_idx ) const
     {
-        const dense::Vec< double, 3 > coords = grid::shell::coords( local_subdomain_id, x, y, r, grid_, radii_ );
-        const double                  value  = 2 + Kokkos::sin( coords( 2 ) );
-        data_( local_subdomain_id, x, y, r ) = value;
+        if ( SETUP == 1 )
+        {
+            data_( local_subdomain_id, x_idx, y_idx, r_idx ) = 1.0;
+        }
+        else
+        {
+            const dense::Vec< double, 3 > coords =
+                grid::shell::coords( local_subdomain_id, x_idx, y_idx, r_idx, grid_, radii_ );
+            const double r                                   = coords.norm();
+            data_( local_subdomain_id, x_idx, y_idx, r_idx ) = r;
+        }
+    }
+};
+
+struct DRhoDtInterpolator
+{
+    Grid3DDataVec< double, 3 > grid_;
+    Grid2DDataScalar< double > radii_;
+    Grid4DDataScalar< double > data_;
+
+    DRhoDtInterpolator(
+        const Grid3DDataVec< double, 3 >& grid,
+        const Grid2DDataScalar< double >& radii,
+        const Grid4DDataScalar< double >& data )
+    : grid_( grid )
+    , radii_( radii )
+    , data_( data )
+    {}
+
+    KOKKOS_INLINE_FUNCTION
+    void operator()( const int local_subdomain_id, const int x_idx, const int y_idx, const int r_idx ) const
+    {
+        if ( SETUP == 1 )
+        {
+            data_( local_subdomain_id, x_idx, y_idx, r_idx ) = -3.0;
+        }
+        else
+        {
+            const dense::Vec< double, 3 > coords =
+                grid::shell::coords( local_subdomain_id, x_idx, y_idx, r_idx, grid_, radii_ );
+            const double r                                   = coords.norm();
+            data_( local_subdomain_id, x_idx, y_idx, r_idx ) = -4.0 * r;
+        }
     }
 };
 
@@ -242,15 +277,7 @@ struct KInterpolator
 // -----------------------------------------------------------------------------
 
 std::tuple< double, double, int >
-test( double kmax,
-      int gca,
-      int min_level,
-      int max_level,
-      int level_subdomains,
-      int radial_extra_levels,
-      int lat_sdr_override,
-      int rad_sdr_override,
-      const std::shared_ptr< util::Table >& table )
+    test( int gca, int min_level, int max_level, int level_subdomains, const std::shared_ptr< util::Table >& table )
 {
     using ScalarType = double;
 
@@ -263,19 +290,13 @@ test( double kmax,
     ScalarType r_min = 0.5;
     ScalarType r_max = 1.0;
 
-    const int lat_sdr = ( lat_sdr_override >= 0 ) ? lat_sdr_override : level_subdomains;
-    const int rad_sdr = ( rad_sdr_override >= 0 ) ? rad_sdr_override : level_subdomains;
-
     util::logroot << "Allocating domains ...\n";
     for ( int level = min_level; level <= max_level; level++ )
     {
-        const int idx       = level - min_level;
-        const int lat_level = level;
-        const int rad_level = level + radial_extra_levels;
+        const int idx = level - min_level;
 
         domains.push_back(
-            DistributedDomain::create_uniform(
-                lat_level, rad_level, r_min, r_max, lat_sdr, rad_sdr ) );
+            DistributedDomain::create_uniform( level, level, r_min, r_max, level_subdomains, level_subdomains ) );
 
         coords_shell.push_back( grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domains[idx] ) );
         coords_radii.push_back( grid::shell::subdomain_shell_radii< ScalarType >( domains[idx] ) );
@@ -352,10 +373,7 @@ test( double kmax,
     VectorQ1Scalar< ScalarType > k( "k", domains[velocity_level], mask_data[velocity_level] );
 
     util::logroot << "Interpolating k ...\n";
-    Kokkos::parallel_for(
-        "coefficient interpolation",
-        local_domain_md_range_policy_nodes( domains[velocity_level] ),
-        KInterpolator( coords_shell[velocity_level], coords_radii[velocity_level], k.grid_data(), kmax ) );
+    linalg::assign( k, 1.0 );
 
     VectorQ1Scalar< ScalarType > GCAElements( "GCAElements", domains[0], mask_data[0] );
     if ( gca == 2 )
@@ -414,10 +432,7 @@ test( double kmax,
     for ( int level = 0; level < num_levels; level++ )
     {
         VectorQ1Scalar< ScalarType > k_c( "k_c", domains[level], mask_data[level] );
-        Kokkos::parallel_for(
-            "coefficient interpolation (mg)",
-            local_domain_md_range_policy_nodes( domains[level] ),
-            KInterpolator( coords_shell[level], coords_radii[level], k_c.grid_data(), kmax ) );
+        linalg::assign( k_c, 1.0 );
 
         A_diag.emplace_back(
             domains[level],
@@ -482,6 +497,64 @@ test( double kmax,
             coords_shell[velocity_level], coords_radii[velocity_level], stok_vecs["tmp_1"].block_1().grid_data() ) );
 
     linalg::apply( M, stok_vecs["tmp_1"].block_1(), stok_vecs["f"].block_1() );
+
+    // RHS of mass conservation (PDA/TALA stuff) -------
+
+    auto& rho     = stok_vecs["tmp_3"].block_2();
+    auto& drho_dt = stok_vecs["tmp_4"].block_2();
+
+    VectorQ1Vec< double, 3 > pressure_level_velocity(
+        "pressure_level_velocity", domains[pressure_level], mask_data[pressure_level] );
+
+    Kokkos::parallel_for(
+        "rho interpolation",
+        local_domain_md_range_policy_nodes( domains[pressure_level] ),
+        RhoInterpolator( coords_shell[pressure_level], coords_radii[pressure_level], rho.grid_data() ) );
+
+    Kokkos::parallel_for(
+        "drho/dt interpolation",
+        local_domain_md_range_policy_nodes( domains[pressure_level] ),
+        DRhoDtInterpolator( coords_shell[pressure_level], coords_radii[pressure_level], drho_dt.grid_data() ) );
+
+    Kokkos::parallel_for(
+        "solution interpolation (velocity into pressure level)",
+        local_domain_md_range_policy_nodes( domains[pressure_level] ),
+        SolutionVelocityInterpolator(
+            coords_shell[pressure_level],
+            coords_radii[pressure_level],
+            pressure_level_velocity.grid_data(),
+            boundary_mask_data[pressure_level],
+            false ) );
+
+    auto& tala_term           = stok_vecs["tmp_1"].block_2();
+    auto& pda_additional_term = stok_vecs["tmp_2"].block_2();
+
+    using InvRhoGradRhoDotUForm = fe::wedge::linearforms::shell::InvRhoGradRhoDotU< double >;
+
+    InvRhoGradRhoDotUForm inv_rho_grad_rho_dot_u_form(
+        domains[pressure_level],
+        coords_shell[pressure_level],
+        coords_radii[pressure_level],
+        rho,
+        pressure_level_velocity );
+
+    linalg::apply( inv_rho_grad_rho_dot_u_form, tala_term );
+
+    using InvRhoDrhoDtForm = fe::wedge::linearforms::shell::InvRhoDrhoDt< double >;
+
+    InvRhoDrhoDtForm inv_rho_drho_dt_form(
+        domains[pressure_level], coords_shell[pressure_level], coords_radii[pressure_level], rho, drho_dt );
+
+    linalg::apply( inv_rho_drho_dt_form, pda_additional_term );
+
+    linalg::lincomb( stok_vecs["f"].block_2(), { 1.0, 1.0 }, { tala_term, pda_additional_term } );
+
+    linalg::assign( rho, 0.0 );
+    linalg::assign( drho_dt, 0.0 );
+    linalg::assign( tala_term, 0.0 );
+    linalg::assign( pda_additional_term, 0.0 );
+
+    // -------------------------------------------------
 
     Kokkos::parallel_for(
         "boundary interpolation (velocity)",
@@ -619,7 +692,7 @@ test( double kmax,
 
     PrecStokes prec_stokes( K.block_11(), pmass, K.block_12(), triangular_prec_tmp, prec_11, inv_lumped_pmass );
 
-    const int iters = 500;
+    const int iters = 20;
 
     constexpr auto                               num_tmps_fgmres = iters;
     std::vector< VectorQ1IsoQ2Q1< ScalarType > > tmp_fgmres;
@@ -643,6 +716,7 @@ test( double kmax,
 
     util::logroot << "Solve ...\n";
     assign( u, 0 );
+
     linalg::solvers::solve( fgmres, K, u, f );
 
     solver_table->query_rows_equals( "tag", "fgmres_solver" )
@@ -673,6 +747,8 @@ test( double kmax,
     const auto l2_error_pressure =
         std::sqrt( dot( error.block_2(), error.block_2() ) / static_cast< double >( num_dofs_pressure ) );
 
+    table->clear();
+
     table->add_row(
         { { "level", max_level },
           { "level_subdomains", level_subdomains },
@@ -685,9 +761,13 @@ test( double kmax,
           { "h_vel", ( r_max - r_min ) / std::pow( 2, velocity_level ) },
           { "h_p", ( r_max - r_min ) / std::pow( 2, pressure_level ) } } );
 
-    // Keep file outputs as-is (not "cout" related)
+    table->print_pretty();
+
     io::XDMFOutput xdmf(
-        "out_eps", domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level] );
+        "test_epsilon_divdiv_stokes_compressible_simple_out",
+        domains[velocity_level],
+        coords_shell[velocity_level],
+        coords_radii[velocity_level] );
     xdmf.add( k.grid_data() );
     xdmf.add( u.block_1().grid_data() );
     xdmf.add( solution.block_1().grid_data() );
@@ -722,32 +802,10 @@ int main( int argc, char** argv )
     MPI_Init( &argc, &argv );
     Kokkos::ScopeGuard scope_guard( argc, argv );
 
-    // --- Anisotropy CLI ---
-    // Default: isotropic (existing behaviour). radial_extra_levels > 0 runs Path-B.1
-    // anisotropy: radial diamond level at each MG level L becomes L + radial_extra_levels.
-    int max_level           = 6;
-    int radial_extra_levels = 0;
-    int lat_sdr             = -1;
-    int rad_sdr             = -1;
-    {
-        CLI::App app{ "test_epsilon_divdiv_stokes" };
-        util::add_option_with_default( app, "--max-level", max_level, "Finest lateral diamond refinement level." );
-        util::add_option_with_default(
-            app,
-            "--radial-extra-levels",
-            radial_extra_levels,
-            "Offset added to the radial diamond level at every MG level (default 0 = isotropic)." );
-        util::add_option_with_default(
-            app, "--lat-sdr", lat_sdr, "Override lateral subdomain refinement level (default: use level_subdomains)." );
-        util::add_option_with_default(
-            app, "--rad-sdr", rad_sdr, "Override radial subdomain refinement level (default: use level_subdomains)." );
-        CLI11_PARSE( app, argc, argv );
-    }
+    const int max_level = 6;
+    auto      table     = std::make_shared< util::Table >();
 
-    auto table = std::make_shared< util::Table >();
-
-    std::vector< int > kmaxs = { 1 };
-    std::vector< int > gcas  = { 0 };
+    std::vector< int > gcas = { 0 };
 
     auto table_dca  = std::make_shared< util::Table >();
     auto table_gca  = std::make_shared< util::Table >();
@@ -763,95 +821,91 @@ int main( int argc, char** argv )
 
         for ( int gca : gcas )
         {
-            for ( int kmax : kmaxs )
+            // reset error storage for this configuration
+            err_vel.clear();
+            err_pre.clear();
+
+            // Loop levels outer, so we can compare subdomain refinements on each fixed level.
+            for ( int level = minlevel + 1; level <= max_level; ++level )
             {
-                // reset error storage for this configuration
-                err_vel.clear();
-                err_pre.clear();
+                // convergence orders (computed against previous level, using subdomain=0)
+                static bool   have_prev_level = false;
+                static double prev_l2_vel     = 1.0;
+                static double prev_l2_pre     = 1.0;
 
-                // Loop levels outer, so we can compare subdomain refinements on each fixed level.
-                for ( int level = minlevel + 1; level <= max_level; ++level )
+                for ( int level_subdomains = 0; level_subdomains <= 0; ++level_subdomains )
                 {
-                    // convergence orders (computed against previous level, using subdomain=0)
-                    static bool   have_prev_level = false;
-                    static double prev_l2_vel     = 1.0;
-                    static double prev_l2_pre     = 1.0;
+                    util::logroot << "  level_subdomains = " << level_subdomains << "\n";
 
-                    for ( int level_subdomains = 0; level_subdomains <= 0; ++level_subdomains )
+                    Kokkos::Timer timer;
+                    timer.reset();
+
+                    const auto [l2_error_vel, l2_error_pre, iterations] =
+                        test( gca, minlevel, level, level_subdomains, table );
+
+                    const auto time_total = timer.seconds();
+
+                    table->add_row(
+                        { { "level", level },
+                          { "level_subdomains", level_subdomains },
+                          { "time_total", time_total } } );
+
+                    util::logroot << "  errors: vel=" << l2_error_vel << " pre=" << l2_error_pre
+                                  << " iters=" << iterations << " time_total=" << time_total << "\n";
+
+                    // store and sanity-check invariance across subdomain refinements at fixed level
+                    err_vel[level][level_subdomains] = l2_error_vel;
+                    err_pre[level][level_subdomains] = l2_error_pre;
+
+                    if ( level_subdomains > 0 )
                     {
-                        util::logroot << "  level_subdomains = " << level_subdomains << "\n";
+                        const double dv =
+                            std::abs( err_vel[level][level_subdomains] - err_vel[level][level_subdomains - 1] );
+                        const double dp =
+                            std::abs( err_pre[level][level_subdomains] - err_pre[level][level_subdomains - 1] );
 
-                        Kokkos::Timer timer;
-                        timer.reset();
-
-                        const auto [l2_error_vel, l2_error_pre, iterations] = test(
-                            kmax, gca, minlevel, level, level_subdomains, radial_extra_levels, lat_sdr, rad_sdr, table );
-
-                        const auto time_total = timer.seconds();
-
-                        table->add_row(
-                            { { "level", level },
-                              { "level_subdomains", level_subdomains },
-                              { "time_total", time_total } } );
-
-                        util::logroot << "  errors: vel=" << l2_error_vel << " pre=" << l2_error_pre
-                                      << " iters=" << iterations << " time_total=" << time_total << "\n";
-
-                        // store and sanity-check invariance across subdomain refinements at fixed level
-                        err_vel[level][level_subdomains] = l2_error_vel;
-                        err_pre[level][level_subdomains] = l2_error_pre;
-
-                        if ( level_subdomains > 0 )
+                        // same spirit as your working test
+                        if ( dv > 1e-3 || dp > 1e-3 )
                         {
-                            const double dv =
-                                std::abs( err_vel[level][level_subdomains] - err_vel[level][level_subdomains - 1] );
-                            const double dp =
-                                std::abs( err_pre[level][level_subdomains] - err_pre[level][level_subdomains - 1] );
-
-                            // same spirit as your working test
-                            if ( dv > 1e-3 || dp > 1e-3 )
-                            {
-                                util::logroot
-                                    << "ERROR: Same global level should have same error regardless of subdomains.\n"
-                                    << "  level=" << level << " vel_diff=" << dv << " pre_diff=" << dp << "\n";
-                                Kokkos::abort( "Error invariance w.r.t. subdomain refinement violated." );
-                            }
+                            util::logroot
+                                << "ERROR: Same global level should have same error regardless of subdomains.\n"
+                                << "  level=" << level << " vel_diff=" << dv << " pre_diff=" << dp << "\n";
+                            Kokkos::abort( "Error invariance w.r.t. subdomain refinement violated." );
                         }
-
-                        terra::util::Table::Row cycles;
-                        cycles[std::string( "k_max=" ) + std::to_string( kmax )] = iterations;
-
-                        if ( gca == 1 )
-                            table_gca->add_row( cycles );
-                        else if ( gca == 2 )
-                            table_agca->add_row( cycles );
-                        else
-                            table_dca->add_row( cycles );
                     }
 
-                    // compute per-level order using subdomain refinement 0 (arbitrary choice; all match)
-                    const double curr_l2_vel = err_vel[level][0];
-                    const double curr_l2_pre = err_pre[level][0];
+                    terra::util::Table::Row cycles;
 
-                    if ( have_prev_level )
-                    {
-                        const double order_vel = prev_l2_vel / curr_l2_vel;
-                        const double order_pre = prev_l2_pre / curr_l2_pre;
-
-                        util::logroot << "Level " << level << ": order_vel=" << order_vel << " order_pre=" << order_pre
-                                      << " (using level_subdomains=0)\n";
-
-                        table->add_row(
-                            { { "level", level },
-                              { "level_subdomains", 0 },
-                              { "order_vel", order_vel },
-                              { "order_pre", order_pre } } );
-                    }
-
-                    prev_l2_vel     = curr_l2_vel;
-                    prev_l2_pre     = curr_l2_pre;
-                    have_prev_level = true;
+                    if ( gca == 1 )
+                        table_gca->add_row( cycles );
+                    else if ( gca == 2 )
+                        table_agca->add_row( cycles );
+                    else
+                        table_dca->add_row( cycles );
                 }
+
+                // compute per-level order using subdomain refinement 0 (arbitrary choice; all match)
+                const double curr_l2_vel = err_vel[level][0];
+                const double curr_l2_pre = err_pre[level][0];
+
+                if ( have_prev_level )
+                {
+                    const double order_vel = prev_l2_vel / curr_l2_vel;
+                    const double order_pre = prev_l2_pre / curr_l2_pre;
+
+                    util::logroot << "Level " << level << ": order_vel=" << order_vel << " order_pre=" << order_pre
+                                  << " (using level_subdomains=0)\n";
+
+                    table->add_row(
+                        { { "level", level },
+                          { "level_subdomains", 0 },
+                          { "order_vel", order_vel },
+                          { "order_pre", order_pre } } );
+                }
+
+                prev_l2_vel     = curr_l2_vel;
+                prev_l2_pre     = curr_l2_pre;
+                have_prev_level = true;
             }
         }
 

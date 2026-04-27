@@ -67,7 +67,7 @@ class TwoGridGCA
     /// @param level_range: max_level - min_level range used in the app: required check whether a certain element
     ///                     is a child of a GCA element.
     /// @param GCAElements: map of coarsest-grid elements, on which GCA should be used. Using this and level_range,
-    ///                     the GCA can check for a certain element whether it is a child of a marked coarsest-grid 
+    ///                     the GCA can check for a certain element whether it is a child of a marked coarsest-grid
     ///                     element. If that is the case, GCA is applied to it.
     explicit TwoGridGCA(
         Operator                             fine_op,
@@ -82,9 +82,9 @@ class TwoGridGCA
     , grid_fine_( fine_op.get_grid() )
     , radii_fine_( fine_op.get_radii() )
     , radii_coarse_( coarse_op.get_radii() )
-    , GCAElements_( GCAElements )
-    , level_range_( level_range )
     , treat_boundary_( treat_boundary )
+    , level_range_( level_range )
+    , GCAElements_( GCAElements )
     , interpolation_mode_( interpolation_mode )
     {
         // assert( coarse_op_.get_stored_matrix_mode() != linalg::OperatorStoredMatrixMode::Off );
@@ -388,7 +388,7 @@ class TwoGridGCA
 
                     // core part: assemble local gca matrix by mapping from coarse wedge to current fine wedge,
                     // applying the corresponding local operator and mapping back.
-                    dense::Mat< ScalarT, Operator::LocalMatrixDim, Operator::LocalMatrixDim > P_vec = { 0 };
+                    dense::Mat< ScalarT, Operator::LocalMatrixDim, Operator::LocalMatrixDim > P_vec = {};
                     if constexpr ( Operator::LocalMatrixDim == 18 )
                     {
                         // in a vectorial operator we need to setup a vectorial interpolation
