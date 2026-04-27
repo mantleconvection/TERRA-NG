@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <vector>
@@ -128,35 +129,34 @@ Result<> run( const Parameters& prm )
     // (eta, A_c, smoothers, inverse_diagonals, coarse_grid_solver, tmp_mg_*)
     // automatically live on the correct communicator.
     // -------------------------------------------------------------------------
-    const auto& agglom_factors = prm.stokes_solver_parameters.viscous_pc_agglom_factors;
-    const int   num_mg_levels  = prm.mesh_parameters.refinement_level_mesh_max
-                                 - prm.mesh_parameters.refinement_level_mesh_min + 1;
-    if ( !agglom_factors.empty() && static_cast< int >( agglom_factors.size() ) != num_mg_levels - 1 )
+    const int num_mg_levels = prm.mesh_parameters.refinement_level_mesh_max
+                              - prm.mesh_parameters.refinement_level_mesh_min + 1;
+
+    // Default to identity factors (all 1s, no shrinking) when the user didn't
+    // specify any. This routes the run through the agglomeration code path even
+    // without an actual rank consolidation, which keeps the runtime structure
+    // uniform across configurations.
+    auto agglom_factors = prm.stokes_solver_parameters.viscous_pc_agglom_factors;
+    if ( agglom_factors.empty() )
+        agglom_factors.assign( num_mg_levels - 1, 1 );
+
+    if ( static_cast< int >( agglom_factors.size() ) != num_mg_levels - 1 )
     {
         throw std::runtime_error(
             "viscous_pc_agglom_factors length (" + std::to_string( agglom_factors.size() ) +
             ") must equal num_mg_levels - 1 (" + std::to_string( num_mg_levels - 1 ) + ")" );
     }
 
-    std::vector< MPI_Comm > agglom_level_comms;  // index 0 = finest (= MPI_COMM_WORLD)
-    std::vector< int >      agglom_cum_factors;  // cumulative factor per rung
-    if ( agglom_factors.empty() )
-    {
-        agglom_level_comms.assign( num_mg_levels, MPI_COMM_WORLD );
-        agglom_cum_factors.assign( num_mg_levels, 1 );
-    }
-    else
-    {
-        agglom_level_comms = mpi::build_level_comms( MPI_COMM_WORLD, agglom_factors );
-        agglom_cum_factors.push_back( 1 );
-        for ( int f : agglom_factors )
-            agglom_cum_factors.push_back( agglom_cum_factors.back() * f );
+    std::vector< MPI_Comm > agglom_level_comms = mpi::build_level_comms( MPI_COMM_WORLD, agglom_factors );
+    std::vector< int >      agglom_cum_factors;
+    agglom_cum_factors.push_back( 1 );
+    for ( int f : agglom_factors )
+        agglom_cum_factors.push_back( agglom_cum_factors.back() * f );
 
-        logroot << "MG agglomeration enabled with factors = {";
-        for ( size_t i = 0; i < agglom_factors.size(); ++i )
-            logroot << ( i ? ", " : "" ) << agglom_factors[i];
-        logroot << "}" << std::endl;
-    }
+    logroot << "MG agglomeration factors = {";
+    for ( size_t i = 0; i < agglom_factors.size(); ++i )
+        logroot << ( i ? ", " : "" ) << agglom_factors[i];
+    logroot << "}" << std::endl;
 
     // Map MG level (0 = coarsest, num_mg_levels-1 = finest) to its sub-comm +
     // cumulative-factor entry in the ladder above.
@@ -288,7 +288,7 @@ Result<> run( const Parameters& prm )
     VectorQ1Scalar< ScalarType > GCAElements( "GCAElements", domains[0], ownership_mask_data[0] );
     const int                    gca = prm.stokes_solver_parameters.gca;
 
-    if ( gca > 0 && !prm.stokes_solver_parameters.viscous_pc_agglom_factors.empty() )
+    if ( gca > 0 && std::any_of( agglom_factors.begin(), agglom_factors.end(), []( int f ) { return f > 1; } ) )
     {
         throw std::runtime_error(
             "MG agglomeration (--stokes-viscous-pc-agglom-factors) is not yet compatible with GCA (gca > 0). "

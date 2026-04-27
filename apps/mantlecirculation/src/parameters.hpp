@@ -527,7 +527,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
            "Per-descent agglomeration factors for the viscous MG preconditioner. "
            "Space-separated list of length num_mg_levels-1. Example: \"2 2 1 1\". "
            "Empty (default) = classical MG with all levels on MPI_COMM_WORLD." )
-        ->group( "Stokes Solver" );
+        ->group( "Stokes Solver" )
+        ->expected( 0, -1 );
 
     /////////////////////
     /// Energy solver ///
