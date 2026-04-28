@@ -100,40 +100,37 @@ constexpr int
 
 namespace detail_view_constraints {
 
-template <class T>
-struct is_kokkos_view : std::false_type {};
+template < class T >
+struct is_kokkos_view : std::false_type
+{};
 
-template <class... Args>
-struct is_kokkos_view<Kokkos::View<Args...>> : std::true_type {};
+template < class... Args >
+struct is_kokkos_view< Kokkos::View< Args... > > : std::true_type
+{};
 
-template <class V>
-constexpr bool is_kokkos_view_v = is_kokkos_view<std::decay_t<V>>::value;
+template < class V >
+constexpr bool is_kokkos_view_v = is_kokkos_view< std::decay_t< V > >::value;
 
 } // namespace detail_view_constraints
-
 
 // ---------------------------
 // Generic 0D copy_to_buffer
 // buffer: rank-1 view of length VecDim
 // ---------------------------
 template < int VecDim, typename BufferView, typename ViewType >
-std::enable_if_t<
-    detail_view_constraints::is_kokkos_view_v<BufferView> &&
-    (std::decay_t<BufferView>::rank == 1)
->
-copy_to_buffer(
-    const BufferView&            buffer,
-    const ViewType&              data,
-    const int                    local_subdomain_id,
-    const grid::BoundaryVertex   boundary_vertex )
+std::enable_if_t< detail_view_constraints::is_kokkos_view_v< BufferView > && ( std::decay_t< BufferView >::rank == 1 ) >
+    copy_to_buffer(
+        const BufferView&          buffer,
+        const ViewType&            data,
+        const int                  local_subdomain_id,
+        const grid::BoundaryVertex boundary_vertex )
 {
-    using ScalarType = typename std::decay_t<BufferView>::value_type;
-
     // Heuristic: scalar grid data is rank-4 (sd,x,y,r), vector-valued is rank-5 (sd,x,y,r,d)
-    static_assert( std::decay_t<ViewType>::rank == 4 || std::decay_t<ViewType>::rank == 5,
-                   "copy_to_buffer expects ViewType rank 4 (scalar) or 5 (vector-valued)." );
+    static_assert(
+        std::decay_t< ViewType >::rank == 4 || std::decay_t< ViewType >::rank == 5,
+        "copy_to_buffer expects ViewType rank 4 (scalar) or 5 (vector-valued)." );
 
-    constexpr bool is_scalar = (std::decay_t<ViewType>::rank == 4);
+    constexpr bool is_scalar = ( std::decay_t< ViewType >::rank == 4 );
 
     if ( buffer.extent( 0 ) != VecDim )
         Kokkos::abort( "The buffer VecDim should match its respective extent. This abort should not happen." );
@@ -147,9 +144,7 @@ copy_to_buffer(
     const auto size_r = data.extent( 3 );
 
     Kokkos::parallel_for(
-        "copy_to_buffer_0D",
-        Kokkos::RangePolicy( 0, buffer.extent( 0 ) ),
-        KOKKOS_LAMBDA( const int d ) {
+        "copy_to_buffer_0D", Kokkos::RangePolicy( 0, buffer.extent( 0 ) ), KOKKOS_LAMBDA( const int d ) {
             auto x      = detail::idx( 0, size_x, boundary_position_x, grid::BoundaryDirection::FORWARD );
             auto y      = detail::idx( 0, size_y, boundary_position_y, grid::BoundaryDirection::FORWARD );
             auto r      = detail::idx( 0, size_r, boundary_position_r, grid::BoundaryDirection::FORWARD );
@@ -157,28 +152,23 @@ copy_to_buffer(
         } );
 }
 
-
 // ---------------------------
 // Generic 1D copy_to_buffer
 // buffer: rank-2 view of shape (N, VecDim)
 // ---------------------------
 template < int VecDim, typename BufferView, typename ViewType >
-std::enable_if_t<
-    detail_view_constraints::is_kokkos_view_v<BufferView> &&
-    (std::decay_t<BufferView>::rank == 2)
->
-copy_to_buffer(
-    const BufferView&          buffer,
-    const ViewType&            data,
-    const int                  local_subdomain_id,
-    const grid::BoundaryEdge   boundary_edge )
+std::enable_if_t< detail_view_constraints::is_kokkos_view_v< BufferView > && ( std::decay_t< BufferView >::rank == 2 ) >
+    copy_to_buffer(
+        const BufferView&        buffer,
+        const ViewType&          data,
+        const int                local_subdomain_id,
+        const grid::BoundaryEdge boundary_edge )
 {
-    using ScalarType = typename std::decay_t<BufferView>::value_type;
+    static_assert(
+        std::decay_t< ViewType >::rank == 4 || std::decay_t< ViewType >::rank == 5,
+        "copy_to_buffer expects ViewType rank 4 (scalar) or 5 (vector-valued)." );
 
-    static_assert( std::decay_t<ViewType>::rank == 4 || std::decay_t<ViewType>::rank == 5,
-                   "copy_to_buffer expects ViewType rank 4 (scalar) or 5 (vector-valued)." );
-
-    constexpr bool is_scalar = (std::decay_t<ViewType>::rank == 4);
+    constexpr bool is_scalar = ( std::decay_t< ViewType >::rank == 4 );
 
     if ( buffer.extent( 1 ) != VecDim )
         Kokkos::abort( "The buffer VecDim should match its respective extent. This abort should not happen." );
@@ -202,28 +192,23 @@ copy_to_buffer(
         } );
 }
 
-
 // ---------------------------
 // Generic 2D copy_to_buffer
 // buffer: rank-3 view of shape (Ni, Nj, VecDim)
 // ---------------------------
 template < int VecDim, typename BufferView, typename ViewType >
-std::enable_if_t<
-    detail_view_constraints::is_kokkos_view_v<BufferView> &&
-    (std::decay_t<BufferView>::rank == 3)
->
-copy_to_buffer(
-    const BufferView&          buffer,
-    const ViewType&            data,
-    const int                  local_subdomain_id,
-    const grid::BoundaryFace   boundary_face )
+std::enable_if_t< detail_view_constraints::is_kokkos_view_v< BufferView > && ( std::decay_t< BufferView >::rank == 3 ) >
+    copy_to_buffer(
+        const BufferView&        buffer,
+        const ViewType&          data,
+        const int                local_subdomain_id,
+        const grid::BoundaryFace boundary_face )
 {
-    using ScalarType = typename std::decay_t<BufferView>::value_type;
+    static_assert(
+        std::decay_t< ViewType >::rank == 4 || std::decay_t< ViewType >::rank == 5,
+        "copy_to_buffer expects ViewType rank 4 (scalar) or 5 (vector-valued)." );
 
-    static_assert( std::decay_t<ViewType>::rank == 4 || std::decay_t<ViewType>::rank == 5,
-                   "copy_to_buffer expects ViewType rank 4 (scalar) or 5 (vector-valued)." );
-
-    constexpr bool is_scalar = (std::decay_t<ViewType>::rank == 4);
+    constexpr bool is_scalar = ( std::decay_t< ViewType >::rank == 4 );
 
     if ( buffer.extent( 2 ) != VecDim )
         Kokkos::abort( "The buffer VecDim should match its respective extent. This abort should not happen." );

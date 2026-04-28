@@ -30,9 +30,9 @@ class EpsilonDivDiv
 
     grid::shell::DistributedDomain domain_;
 
-    grid::Grid3DDataVec< ScalarT, 3 >    grid_;
-    grid::Grid2DDataScalar< ScalarT >    radii_;
-    grid::Grid4DDataScalar< ScalarType > k_;
+    grid::Grid3DDataVec< ScalarT, 3 >                        grid_;
+    grid::Grid2DDataScalar< ScalarT >                        radii_;
+    grid::Grid4DDataScalar< ScalarType >                     k_;
     grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag > mask_;
 
     bool treat_boundary_;
@@ -56,15 +56,15 @@ class EpsilonDivDiv
 
   public:
     EpsilonDivDiv(
-        const grid::shell::DistributedDomain&    domain,
-        const grid::Grid3DDataVec< ScalarT, 3 >& grid,
-        const grid::Grid2DDataScalar< ScalarT >& radii,
+        const grid::shell::DistributedDomain&                           domain,
+        const grid::Grid3DDataVec< ScalarT, 3 >&                        grid,
+        const grid::Grid2DDataScalar< ScalarT >&                        radii,
         const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& mask,
-        const grid::Grid4DDataScalar< ScalarT >& k,
-        bool                                     treat_boundary,
-        bool                                     diagonal,
-        linalg::OperatorApplyMode                operator_apply_mode = linalg::OperatorApplyMode::Replace,
-        linalg::OperatorCommunicationMode        operator_communication_mode =
+        const grid::Grid4DDataScalar< ScalarT >&                        k,
+        bool                                                            treat_boundary,
+        bool                                                            diagonal,
+        linalg::OperatorApplyMode         operator_apply_mode = linalg::OperatorApplyMode::Replace,
+        linalg::OperatorCommunicationMode operator_communication_mode =
             linalg::OperatorCommunicationMode::CommunicateAdditively,
         linalg::OperatorStoredMatrixMode operator_stored_matrix_mode = linalg::OperatorStoredMatrixMode::Off )
     : domain_( domain )
@@ -116,14 +116,13 @@ class EpsilonDivDiv
         const int                      y_cell,
         const int                      r_cell,
         grid::shell::ShellBoundaryFlag flag ) const
-    {
-        return util::has_flag( mask_( local_subdomain_id, x_cell, y_cell, r_cell ), flag );
-    }
+    { return util::has_flag( mask_( local_subdomain_id, x_cell, y_cell, r_cell ), flag ); }
+
     /// @brief allocates memory for the local matrices
     void set_stored_matrix_mode(
-        linalg::OperatorStoredMatrixMode                      operator_stored_matrix_mode,
-        std::optional< int >                                  level_range,
-        std::optional< grid::Grid4DDataScalar< ScalarType > > GCAElements )
+        linalg::OperatorStoredMatrixMode     operator_stored_matrix_mode,
+        int                                  level_range,
+        grid::Grid4DDataScalar< ScalarType > GCAElements )
     {
         operator_stored_matrix_mode_ = operator_stored_matrix_mode;
 

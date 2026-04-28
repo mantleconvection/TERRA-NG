@@ -1,9 +1,12 @@
-## A3 benchmark - level 6, pseudo-cfl=0.25, tetrahedral IC, SUPG, Frank-Kamenetskii rmu=20
+## A3 benchmark - level 6, dt-scaling=0.25, tetrahedral IC, SUPG, Frank-Kamenetskii rmu=20
+## Lateral-only subdomain refinement: lat-sdr=1, rad-sdr=0 → 40 subdomains.
 radius-min=1.22
 radius-max=2.22
 refinement-level-mesh-min=2
 refinement-level-mesh-max=6
-refinement-level-subdomains=0
+refinement-level-subdomains=1
+lat-sdr=1
+rad-sdr=0
 
 ## Physics
 diffusivity=1
@@ -24,7 +27,7 @@ initial-temperature-sph-order=2
 initial-temperature-sph-epsilon=0.01
 
 ## Time discretization
-pseudo-cfl=0.25
+dt-scaling=0.25
 t-end=1.0
 max-timesteps=1000000
 energy-solver="supg"
@@ -39,12 +42,9 @@ stokes-viscous-pc-num-vcycles=1
 stokes-viscous-pc-cheby-order=2
 stokes-viscous-pc-num-smoothing-steps-prepost=3
 stokes-viscous-pc-num-power-iterations=10
-# Per-descent MG preconditioner agglomeration factors. Length must equal
-# num_mg_levels - 1. Empty list (default) = classical V-cycle, no agglomeration.
-# Example: stokes-viscous-pc-agglom-factors=[2, 2, 1, 1] for 5 MG levels.
 stokes-viscous-pc-agglom-factors=[]
 
 ## I/O
-outdir="./output_A3_lvl6_supg_cfl025"
+outdir="./output_A3_lvl6_supg_cfl025_latonly"
 outdir-overwrite=1
 output-frequency=100

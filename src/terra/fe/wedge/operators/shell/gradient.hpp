@@ -121,13 +121,13 @@ class Gradient
         const ScalarT r_2 = radii_( local_subdomain_id, r_cell + 1 );
 
         // Quadrature points.
-        constexpr auto num_quad_points = quadrature::quad_felippa_1x1_num_quad_points;
+        constexpr auto num_quad_points = quadrature::quad_felippa_3x2_num_quad_points;
 
         dense::Vec< ScalarT, 3 > quad_points[num_quad_points];
         ScalarT                  quad_weights[num_quad_points];
 
-        quadrature::quad_felippa_1x1_quad_points( quad_points );
-        quadrature::quad_felippa_1x1_quad_weights( quad_weights );
+        quadrature::quad_felippa_3x2_quad_points( quad_points );
+        quadrature::quad_felippa_3x2_quad_weights( quad_weights );
 
         const int fine_radial_wedge_index = r_cell % 2;
 
@@ -192,7 +192,7 @@ class Gradient
                     {
                         for ( int j = 0; j < num_nodes_per_wedge; j++ )
                         {
-                            if ( at_cmb && ( i < 3 ) || at_surface && ( i >= 3 ) )
+                            if ( ( at_cmb && ( i < 3 ) ) || ( at_surface && ( i >= 3 ) ) )
                             {
                                 boundary_mask( dimi * num_nodes_per_wedge + i, j ) = 0.0;
                             }
@@ -202,9 +202,8 @@ class Gradient
             }
             else if ( bcf == FREESLIP )
             {
-                
                 freeslip_reorder                                            = true;
-                dense::Mat< ScalarT, 18, 6 > A_tmp[num_wedges_per_hex_cell] = { 0 };
+                dense::Mat< ScalarT, 18, 6 > A_tmp[num_wedges_per_hex_cell] = {};
 
                 // reorder source dofs for nodes instead of velocity dims in src vector and local matrix
                 for ( int wedge = 0; wedge < 2; ++wedge )
@@ -247,7 +246,6 @@ class Gradient
                             r_cell + ( at_cmb ? 0 : 1 ),
                             grid_fine_,
                             radii_ );
-                        
 
                         // compute rotation matrix for DoFs on current node
                         auto R_i = trafo_mat_cartesian_to_normal_tangential( normal );
@@ -282,7 +280,6 @@ class Gradient
                         }
                     }
                 }
-                
             }
             else if ( bcf == NEUMANN ) {}
         }
@@ -300,7 +297,6 @@ class Gradient
 
         if ( freeslip_reorder )
         {
-            
             // transform dst back from nt space
             dense::Vec< ScalarT, 18 > dst_tmp[num_wedges_per_hex_cell];
             dst_tmp[0] = R[0].transposed() * dst[0];
@@ -314,7 +310,6 @@ class Gradient
             // reorder to dimensionwise ordering
             reorder_local_dofs( DoFOrdering::NODEWISE, DoFOrdering::DIMENSIONWISE, dst[0] );
             reorder_local_dofs( DoFOrdering::NODEWISE, DoFOrdering::DIMENSIONWISE, dst[1] );
-            
         }
 
         for ( int d = 0; d < 3; d++ )

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""C1 benchmark, level 6, pseudo-cfl=1.5. JUWELS Booster. Outputs go to $SCRATCH_walberlamovinggeo."""
+"""C1 benchmark, level 8, pseudo-cfl=1.5. JUWELS Booster. Outputs go to $SCRATCH_walberlamovinggeo."""
 import os
 import subprocess
 from pathlib import Path
@@ -20,17 +20,22 @@ work_base.mkdir(parents=True, exist_ok=True)
 # -----------------------
 # Configuration
 # -----------------------
-job_name      = "mc_C1_lvl6_cfl15"
-nodes         = 2
+job_name      = "mc_C1_lvl8_cfl15"
+#
+# Perfect weak scaling from lvl7 (10 nodes x 4 GPUs = 40 ranks):
+# one refinement level multiplies DoFs by 8 in 3-D, so multiply ranks by 8.
+# -> lvl8 needs 80 nodes x 4 GPUs = 320 ranks (constant DoFs/rank wrt lvl7).
+#
+nodes         = 80
 gpus_per_node = 4
 time_limit    = "24:00:00"
 partition     = "booster"
 account       = "walberlamovinggeo"
 
 binary = "./mantlecirculation"
-config = "./config_C1_lvl6_cfl15.toml"
+config = "./config_C1_lvl8_cfl15.toml"
 
-outdir = work_base / "output_C1_lvl6_cfl15"
+outdir = work_base / "output_C1_lvl8_cfl15"
 log_o  = work_base / f"{job_name}.o%j"
 log_e  = work_base / f"{job_name}.e%j"
 

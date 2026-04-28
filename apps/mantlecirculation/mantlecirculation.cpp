@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <vector>
@@ -128,35 +129,34 @@ Result<> run( const Parameters& prm )
     // (eta, A_c, smoothers, inverse_diagonals, coarse_grid_solver, tmp_mg_*)
     // automatically live on the correct communicator.
     // -------------------------------------------------------------------------
-    const auto& agglom_factors = prm.stokes_solver_parameters.viscous_pc_agglom_factors;
-    const int   num_mg_levels  = prm.mesh_parameters.refinement_level_mesh_max
-                                 - prm.mesh_parameters.refinement_level_mesh_min + 1;
-    if ( !agglom_factors.empty() && static_cast< int >( agglom_factors.size() ) != num_mg_levels - 1 )
+    const int num_mg_levels = prm.mesh_parameters.refinement_level_mesh_max
+                              - prm.mesh_parameters.refinement_level_mesh_min + 1;
+
+    // Default to identity factors (all 1s, no shrinking) when the user didn't
+    // specify any. This routes the run through the agglomeration code path even
+    // without an actual rank consolidation, which keeps the runtime structure
+    // uniform across configurations.
+    auto agglom_factors = prm.stokes_solver_parameters.viscous_pc_agglom_factors;
+    if ( agglom_factors.empty() )
+        agglom_factors.assign( num_mg_levels - 1, 1 );
+
+    if ( static_cast< int >( agglom_factors.size() ) != num_mg_levels - 1 )
     {
         throw std::runtime_error(
             "viscous_pc_agglom_factors length (" + std::to_string( agglom_factors.size() ) +
             ") must equal num_mg_levels - 1 (" + std::to_string( num_mg_levels - 1 ) + ")" );
     }
 
-    std::vector< MPI_Comm > agglom_level_comms;  // index 0 = finest (= MPI_COMM_WORLD)
-    std::vector< int >      agglom_cum_factors;  // cumulative factor per rung
-    if ( agglom_factors.empty() )
-    {
-        agglom_level_comms.assign( num_mg_levels, MPI_COMM_WORLD );
-        agglom_cum_factors.assign( num_mg_levels, 1 );
-    }
-    else
-    {
-        agglom_level_comms = mpi::build_level_comms( MPI_COMM_WORLD, agglom_factors );
-        agglom_cum_factors.push_back( 1 );
-        for ( int f : agglom_factors )
-            agglom_cum_factors.push_back( agglom_cum_factors.back() * f );
+    std::vector< MPI_Comm > agglom_level_comms = mpi::build_level_comms( MPI_COMM_WORLD, agglom_factors );
+    std::vector< int >      agglom_cum_factors;
+    agglom_cum_factors.push_back( 1 );
+    for ( int f : agglom_factors )
+        agglom_cum_factors.push_back( agglom_cum_factors.back() * f );
 
-        logroot << "MG agglomeration enabled with factors = {";
-        for ( size_t i = 0; i < agglom_factors.size(); ++i )
-            logroot << ( i ? ", " : "" ) << agglom_factors[i];
-        logroot << "}" << std::endl;
-    }
+    logroot << "MG agglomeration factors = {";
+    for ( size_t i = 0; i < agglom_factors.size(); ++i )
+        logroot << ( i ? ", " : "" ) << agglom_factors[i];
+    logroot << "}" << std::endl;
 
     // Map MG level (0 = coarsest, num_mg_levels-1 = finest) to its sub-comm +
     // cumulative-factor entry in the ladder above.
@@ -286,14 +286,9 @@ Result<> run( const Parameters& prm )
     // Setting up the (adaptive) Galerkin coarse grid approximation (AGCA / GCA)
     // Determine AGCA elements.
     VectorQ1Scalar< ScalarType > GCAElements( "GCAElements", domains[0], ownership_mask_data[0] );
-    int                          gca = 0;
+    const int                    gca = prm.stokes_solver_parameters.gca;
 
-    // GCA is not compatible with MG agglomeration yet: TwoGridGCA transfers
-    // element matrices between A_c[level+1] and A_c[level], which under
-    // agglomeration live on different sub-communicators. The current GCA
-    // implementation assumes the two ends share a comm, so enabling both would
-    // silently produce wrong coarse operators. Abort early with a clear error.
-    if ( gca > 0 && !prm.stokes_solver_parameters.viscous_pc_agglom_factors.empty() )
+    if ( gca > 0 && std::any_of( agglom_factors.begin(), agglom_factors.end(), []( int f ) { return f > 1; } ) )
     {
         throw std::runtime_error(
             "MG agglomeration (--stokes-viscous-pc-agglom-factors) is not yet compatible with GCA (gca > 0). "
@@ -898,9 +893,18 @@ Result<> run( const Parameters& prm )
     fv::hex::apply_dirichlet_bcs( T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
     communication::shell::update_fv_ghost_layers( domains[velocity_level], T_fct.grid_data() );
 
+    // Reconstruct boundary cells with face-Dirichlet interpretation so the FV→Q1
+    // projection produces the correct gradient at the surface boundary layer.
+    fv::hex::reconstruct_boundary_cells_for_projection(
+        T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
+
     // Project T_fct to Q1 T via L2 projection for use as Stokes RHS and output.
     fv::hex::l2_project_fv_to_fe(
         T, T_fct, domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level], l2_proj_tmps );
+
+    // Restore the FCT-consistent boundary cell value for the next time step.
+    fv::hex::apply_dirichlet_bcs( T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
+    communication::shell::update_fv_ghost_layers( domains[velocity_level], T_fct.grid_data() );
 
     // If temperature-dependent viscosity is enabled, compute the initial viscosity from the initial T.
     if ( prm.physics_parameters.viscosity_parameters.law != ViscosityLaw::CONSTANT )
@@ -1037,7 +1041,7 @@ Result<> run( const Parameters& prm )
             timestep_initial );
     }
 
-    ScalarType simulated_time = prm.time_stepping_parameters.t_start;
+    ScalarType simulated_time = ScalarType( 0 );
 
     // We need some global h. Let's, for simplicity (does not need to be too accurate) just choose the smallest h in
     // radial direction.
@@ -1122,16 +1126,13 @@ Result<> run( const Parameters& prm )
         const auto Nu_top_0 = compute_nusselt(
             domains[velocity_level], T, T_ref, coords_shell[velocity_level], coords_radii[velocity_level], boundary_mask_data[velocity_level], ownership_mask_data[velocity_level], true );
         const auto Nu_top_fv_0 = compute_nusselt_fv(
-            domains[velocity_level], T_fct, boundary_mask_data[velocity_level],
+            domains[velocity_level], T_fct, coords_radii[velocity_level], boundary_mask_data[velocity_level],
             prm.boundary_conditions_parameters.temperature_surface,
             prm.boundary_conditions_parameters.temperature_cmb,
             prm.mesh_parameters.radius_min, prm.mesh_parameters.radius_max, true );
         logroot << "Nu_top (Q1) = " << Nu_top_0 << ", Nu_top (FV) = " << Nu_top_fv_0
                 << "  [timestep 0, before time stepping]" << std::endl;
     }
-
-    // Backup of FV temperature for Picard iteration (re-do energy from same starting point).
-    linalg::VectorFVScalar< ScalarType > T_fct_backup( "T_fct_backup", domains[velocity_level] );
 
     for ( int timestep = timestep_initial + 1; timestep < prm.time_stepping_parameters.max_timesteps; timestep++ )
     {
@@ -1141,9 +1142,6 @@ Result<> run( const Parameters& prm )
 
         const int num_picard = prm.time_stepping_parameters.picard_iterations;
 
-        // Save T_fct at the start of the timestep so we can restore it for each Picard iteration.
-        Kokkos::deep_copy( T_fct_backup.grid_data(), T_fct.grid_data() );
-
         // Compute dt once from current velocity (before Picard loop).
         ScalarType dt;
         if ( use_supg )
@@ -1151,11 +1149,11 @@ Result<> run( const Parameters& prm )
             // SUPG: implicit diffusion, so dt is only constrained by advection CFL.
             const auto max_vel = kernels::common::max_vector_magnitude( u.block_1().grid_data() );
             const auto dt_advection = ( max_vel > 1e-12 ) ? ( h / max_vel ) : ScalarType( 1e-3 );
-            dt = prm.time_stepping_parameters.pseudo_cfl * dt_advection;
+            dt = prm.time_stepping_parameters.dt_scaling * dt_advection;
             logroot << "Computing dt (SUPG advection CFL) ..." << std::endl;
             logroot << "    max_vel:                       " << max_vel << std::endl;
             logroot << "    h:                             " << h << std::endl;
-            logroot << "=>  dt (= pseudo_cfl * h/v_max):   " << dt << std::endl;
+            logroot << "=>  dt (= dt_scaling * h/v_max):   " << dt << std::endl;
         }
         else
         {
@@ -1166,22 +1164,16 @@ Result<> run( const Parameters& prm )
                 coords_shell[velocity_level],
                 coords_radii[velocity_level],
                 prm.physics_parameters.diffusivity );
-            dt = prm.time_stepping_parameters.pseudo_cfl * dt_stable;
+            dt = prm.time_stepping_parameters.dt_scaling * dt_stable;
             logroot << "Computing dt (FCT stable) ..." << std::endl;
             logroot << "    dt_stable:                     " << dt_stable << std::endl;
-            logroot << "=>  dt (= dt_stable * pseudo_cfl): " << dt << std::endl;
+            logroot << "=>  dt (= dt_stable * dt_scaling): " << dt << std::endl;
         }
 
         for ( int picard = 0; picard < num_picard; picard++ )
         {
             if ( num_picard > 1 )
                 logroot << "--- Picard iteration " << picard << " / " << num_picard << " ---" << std::endl;
-
-            // Restore T_fct to start-of-timestep state (iterations > 0 redo energy from the same starting point).
-            if ( picard > 0 )
-            {
-                Kokkos::deep_copy( T_fct.grid_data(), T_fct_backup.grid_data() );
-            }
 
             // --- Stokes solve ---
             const auto solve_stokes_at_temperature = [&]( const VectorQ1Scalar< ScalarType >& T_for_buoyancy,
@@ -1230,8 +1222,6 @@ Result<> run( const Parameters& prm )
                         u.block_2().grid_data(), u.block_2().mask_data(), grid::NodeOwnershipFlag::OWNED ) /
                     static_cast< ScalarType >( num_dofs_pressure );
                 linalg::lincomb( u.block_2(), { 1.0 }, { u.block_2() }, -avg_pressure_approximation );
-
-                timer_stokes.stop();
             };
 
             solve_stokes_at_temperature( T, /*print_convergence=*/( picard == num_picard - 1 ) );
@@ -1355,6 +1345,12 @@ Result<> run( const Parameters& prm )
                 // Project T_fct → Q1 T once after all substeps.
                 {
                     util::Timer timer_fct_projection( "fct_l2_projection" );
+
+                    // Reconstruct boundary cells with face-Dirichlet interpretation so the
+                    // FV→Q1 projection produces the correct gradient at the boundary layer.
+                    fv::hex::reconstruct_boundary_cells_for_projection(
+                        T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
+
                     fv::hex::l2_project_fv_to_fe(
                         T,
                         T_fct,
@@ -1362,6 +1358,12 @@ Result<> run( const Parameters& prm )
                         coords_shell[velocity_level],
                         coords_radii[velocity_level],
                         l2_proj_tmps );
+
+                    // Restore the FCT-consistent boundary cell value for the next time step.
+                    fv::hex::apply_dirichlet_bcs(
+                        T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
+                    communication::shell::update_fv_ghost_layers(
+                        domains[velocity_level], T_fct.grid_data() );
 
                     // Enforce Dirichlet BCs on the Q1 temperature field after the L2 projection.
                     {
@@ -1449,6 +1451,7 @@ Result<> run( const Parameters& prm )
             const auto Nu_top_fv = compute_nusselt_fv(
                 domains[velocity_level],
                 T_fct,
+                coords_radii[velocity_level],
                 boundary_mask_data[velocity_level],
                 prm.boundary_conditions_parameters.temperature_surface,
                 prm.boundary_conditions_parameters.temperature_cmb,
