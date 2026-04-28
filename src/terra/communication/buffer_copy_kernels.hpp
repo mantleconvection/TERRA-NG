@@ -382,20 +382,16 @@ void copy_to_buffer(
         } );
 }
 
-template < typename ScalarType, int VecDim, typename ViewType >
+template < typename BufferView, typename ViewType >
 void copy_from_buffer_rotate_and_reduce(
-    const grid::Grid0DDataVec< ScalarType, VecDim >& buffer,
-    const ViewType&                                  data,
-    const int                                        local_subdomain_id,
-    const grid::BoundaryVertex                       boundary_vertex,
-    const CommunicationReduction                     reduction )
+    const BufferView&            buffer,
+    const ViewType&              data,
+    const int                    local_subdomain_id,
+    const grid::BoundaryVertex   boundary_vertex,
+    const CommunicationReduction reduction )
 {
+    using ScalarType             = typename BufferView::value_type;
     constexpr bool is_scalar = std::is_same_v< ViewType, grid::Grid4DDataScalar< ScalarType > >;
-
-    if ( buffer.extent( 0 ) != VecDim )
-    {
-        Kokkos::abort( "The buffer VecDim should match its respective extent. This abort should not happen." );
-    }
 
     const auto boundary_position_x = grid::boundary_position_from_boundary_type_x( boundary_vertex );
     const auto boundary_position_y = grid::boundary_position_from_boundary_type_y( boundary_vertex );
@@ -417,21 +413,17 @@ void copy_from_buffer_rotate_and_reduce(
         } );
 }
 
-template < typename ScalarType, int VecDim, typename ViewType >
+template < typename BufferView, typename ViewType >
 void copy_from_buffer_rotate_and_reduce(
-    const grid::Grid1DDataVec< ScalarType, VecDim >& buffer,
-    const ViewType&                                  data,
-    const int                                        local_subdomain_id,
-    const grid::BoundaryEdge                         boundary_edge,
-    const grid::BoundaryDirection                    boundary_direction,
-    const CommunicationReduction                     reduction )
+    const BufferView&             buffer,
+    const ViewType&               data,
+    const int                     local_subdomain_id,
+    const grid::BoundaryEdge      boundary_edge,
+    const grid::BoundaryDirection boundary_direction,
+    const CommunicationReduction  reduction )
 {
+    using ScalarType             = typename BufferView::value_type;
     constexpr bool is_scalar = std::is_same_v< ViewType, grid::Grid4DDataScalar< ScalarType > >;
-
-    if ( buffer.extent( 1 ) != VecDim )
-    {
-        Kokkos::abort( "The buffer VecDim should match its respective extent. This abort should not happen." );
-    }
 
     const auto boundary_position_x = grid::boundary_position_from_boundary_type_x( boundary_edge );
     const auto boundary_position_y = grid::boundary_position_from_boundary_type_y( boundary_edge );
@@ -455,21 +447,17 @@ void copy_from_buffer_rotate_and_reduce(
         } );
 }
 
-template < typename ScalarType, int VecDim, typename ViewType >
+template < typename BufferView, typename ViewType >
 void copy_from_buffer_rotate_and_reduce(
-    const grid::Grid2DDataVec< ScalarType, VecDim >&                     buffer,
+    const BufferView&                                                    buffer,
     const ViewType&                                                      data,
     const int                                                            local_subdomain_id,
     const grid::BoundaryFace                                             boundary_face,
     const std::tuple< grid::BoundaryDirection, grid::BoundaryDirection > boundary_directions,
     const CommunicationReduction                                         reduction )
 {
+    using ScalarType             = typename BufferView::value_type;
     constexpr bool is_scalar = std::is_same_v< ViewType, grid::Grid4DDataScalar< ScalarType > >;
-
-    if ( buffer.extent( 2 ) != VecDim )
-    {
-        Kokkos::abort( "The buffer VecDim should match its respective extent. This abort should not happen." );
-    }
 
     const auto boundary_position_x = grid::boundary_position_from_boundary_type_x( boundary_face );
     const auto boundary_position_y = grid::boundary_position_from_boundary_type_y( boundary_face );

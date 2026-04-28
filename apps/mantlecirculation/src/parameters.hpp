@@ -9,6 +9,8 @@
 
 namespace terra::mantlecirculation {
 
+using ScalarType = double;
+
 struct MeshParameters
 {
     int refinement_level_mesh_min   = 1;
@@ -17,6 +19,14 @@ struct MeshParameters
 
     double radius_min = 0.5;
     double radius_max = 1.0;
+
+    // Anisotropic refinement (Path B.1): radial diamond level is set to
+    // (refinement_level_mesh_* + radial_extra_levels) at every MG level, so the
+    // full hierarchy stays consistent (both axes halve per step). lat_sdr/rad_sdr
+    // override refinement_level_subdomains per axis when >= 0.
+    int radial_extra_levels = 0;
+    int lat_sdr             = -1;
+    int rad_sdr             = -1;
 };
 
 struct BoundaryConditionsParameters
@@ -34,13 +44,85 @@ struct BoundaryConditionsParameters
     double temperature_surface = 0.0;
 };
 
+/// Choice of viscosity law for the temperature-dependent viscosity field.
+///   CONSTANT          : eta(T) = const (taken from `reference_viscosity`, optionally
+///                       multiplied by a radial profile if `radial_profile_enabled`).
+///   FRANK_KAMENETSKII : eta(T) = 10^(rmu * (0.5 - T)).  T in [0,1].
+///                       rmu controls the (log10) viscosity contrast — see
+///                       `ViscosityParameters::rmu`.
+enum class ViscosityLaw
+{
+    CONSTANT,
+    FRANK_KAMENETSKII,
+};
+
 struct ViscosityParameters
 {
+    /// Viscosity law selector — see ViscosityLaw above.
+    ViscosityLaw law = ViscosityLaw::CONSTANT;
+
+    /// Exponent of the Frank-Kamenetskii viscosity law: eta = 10^(rmu * (0.5 - T)).
+    /// Equivalently, total cold/hot viscosity contrast = 10^rmu (rmu=0 → constant viscosity).
+    /// Ignored when `law == CONSTANT`.
+    double       rmu = 1.0;
+
+    /// If true, multiply the temperature-dependent viscosity by a radial reference profile
+    /// eta_ref(r) read from CSV.  The on-disk file gives a 1D profile (radii column +
+    /// viscosity column); cell-wise viscosity is linearly interpolated to the cell radius
+    /// and *multiplied* into the temperature-dependent factor.  Useful for laterally
+    /// uniform but radially varying viscosity (e.g. realistic mantle profiles).
     bool        radial_profile_enabled       = false;
+
+    /// Path to the CSV file containing the radial viscosity profile.
     std::string radial_profile_csv_filename  = "radial_viscosity_profile.csv";
+    /// CSV column name for the radii (first column).  Radii must be in the same units
+    /// as `radius_min`/`radius_max` (i.e. non-dimensional shell radii).
     std::string radial_profile_radii_key     = "radii";
+    /// CSV column name for the viscosity values (second column), in units of
+    /// `reference_viscosity`.
     std::string radial_profile_viscosity_key = "viscosity";
+
+    /// Multiplicative reference viscosity scale.  Final viscosity is
+    /// `reference_viscosity * eta(T) * eta_ref(r)`.
+    /// When `law == CONSTANT` and `radial_profile_enabled == false`, this is just the
+    /// constant viscosity value.
     double      reference_viscosity          = 1.0;
+};
+
+/// Initial temperature distribution.
+///   POWER_LAW  : T_init from a radial power-law profile + small noise (legacy default).
+///   CONDUCTIVE : T_init = analytic conduction profile (r_min*r_max/r - r_min) / D, plus an
+///                optional spherical-harmonic perturbation Y_l^m (and an optional second
+///                harmonic) of amplitude `sph_epsilon`.  Use this for the standard mantle
+///                convection benchmarks (Zhong et al. 2008 A/C cases).
+enum class InitialTemperatureProfile
+{
+    POWER_LAW,
+    CONDUCTIVE,
+};
+
+struct InitialTemperatureParameters
+{
+    /// Selector for the initial-temperature distribution — see InitialTemperatureProfile.
+    InitialTemperatureProfile profile = InitialTemperatureProfile::POWER_LAW;
+
+    /// Spherical-harmonic perturbation degree l of the first harmonic (l >= 0). Set 0 to
+    /// disable the SH perturbation entirely (then sph_epsilon is ignored).
+    int                       sph_degree_l = 0;
+    /// Spherical-harmonic perturbation order m of the first harmonic (|m| <= l).
+    int                       sph_order_m  = 0;
+    /// Amplitude of the perturbation: T = T_ref(r) + sph_epsilon * (Y_l1^m1 + factor_2 * Y_l2^m2).
+    /// Typical values are 0.01..0.1 for Zhong-style benchmarks.
+    double                    sph_epsilon  = 0.0;
+
+    /// Optional second spherical harmonic for combined modes (e.g. cubic symmetry
+    /// T_perturb = Y_4^0 + (5/7) * Y_4^4).  Set sph_degree_l_2 > 0 to enable.
+    /// The total perturbation is sph_epsilon * (Y_l1^m1 + sph_factor_2 * Y_l2^m2).
+    int                       sph_degree_l_2 = 0;
+    int                       sph_order_m_2  = 0;
+    /// Relative amplitude of the second harmonic (typical values are O(1); e.g. 5/7 for
+    /// the Zhong C3 cubic-symmetry benchmark).
+    double                    sph_factor_2   = 0.0;
 };
 
 struct PhysicsParameters
@@ -48,7 +130,8 @@ struct PhysicsParameters
     double diffusivity     = 1.0;
     double rayleigh_number = 1e5;
 
-    ViscosityParameters viscosity_parameters{};
+    ViscosityParameters          viscosity_parameters{};
+    InitialTemperatureParameters initial_temperature{};
 
     bool   constant_internal_heating       = false;
     double constant_internal_heating_value = 1.0;
@@ -65,6 +148,25 @@ struct StokesSolverParameters
     int viscous_pc_chebyshev_order             = 2;
     int viscous_pc_num_smoothing_steps_prepost = 2;
     int viscous_pc_num_power_iterations        = 10;
+
+    /// Galerkin coarse-grid approximation mode for the multigrid preconditioner of the
+    /// viscous Stokes block.
+    ///   0 : disabled — coarse operators are re-discretised on every level (cheap setup,
+    ///       but coarse smoothers see a different operator than the fine one).  Default.
+    ///   1 : full GCA — store and assemble the full coarse-grid Galerkin matrices for
+    ///       every coarse level.  Most robust setup; usually faster overall at high
+    ///       viscosity contrast / variable viscosity.
+    ///   2 : adaptive GCA — only store/assemble the coarse-grid matrices for elements
+    ///       flagged by `GCAElementsCollector`, leaving the rest re-discretised.
+    ///       Uses less memory than mode 1 but slightly less robust.
+    int gca = 0;
+
+    /// Per-descent agglomeration factors for the viscous MG preconditioner.
+    /// Length must equal num_mg_levels - 1 (one factor per coarse descent step).
+    /// Empty = classical MG, all levels on MPI_COMM_WORLD.
+    /// Factor f > 1 at descent i means the comm shrinks by f ranks going from
+    /// MG level max-i-1 to level max-i-2. Factor 1 = identity (no shrink).
+    std::vector< int > viscous_pc_agglom_factors = {};
 };
 
 struct EnergySolverParameters
@@ -75,6 +177,21 @@ struct EnergySolverParameters
     double krylov_absolute_tolerance = 1e-12;
 };
 
+/// Time-discretization scheme for the energy (temperature) equation.
+///   FCT  : explicit Flux-Corrected Transport on the FV mesh.  Low-order upwind
+///          predictor + Zalesak limiter (monotone, no over/undershoots).
+///          Stability bound: dt <= dt_stable (computed from advective + diffusive
+///          face fluxes).  Cheap per step but requires small dt at high velocity / Pe.
+///   SUPG : implicit SUPG-stabilised Galerkin advection-diffusion on the Q1 mesh,
+///          solved by FGMRES.  Unconditionally stable (dt only bounded by the
+///          *advection* CFL for accuracy), so allows much larger dt at moderate Pe.
+///          Linear-solver convergence degrades at high Pe (Ra >> 1e6).
+enum class EnergySolverType
+{
+    FCT,
+    SUPG,
+};
+
 struct TimeSteppingParameters
 {
     double dt_scaling = 0.5;
@@ -82,7 +199,10 @@ struct TimeSteppingParameters
 
     int max_timesteps = 10;
 
-    int energy_substeps = 1;
+    int energy_substeps    = 1;
+    int picard_iterations  = 1;
+
+    EnergySolverType energy_solver = EnergySolverType::FCT;
 };
 
 struct IOParameters
@@ -95,7 +215,13 @@ struct IOParameters
     std::string timer_trees_dir         = "timer_trees";
 
     std::string checkpoint_dir;
-    int         checkpoint_step = -1;
+    int         checkpoint_step     = -1;
+    int         checkpoint_timestep = -1;
+
+    int output_frequency = 1;
+
+    bool no_xdmf = false;
+    bool no_radial_profiles = false;
 };
 
 struct Parameters
@@ -154,6 +280,24 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     add_option_with_default( app, "--radius-min", parameters.mesh_parameters.radius_min )->group( "Domain" );
     add_option_with_default( app, "--radius-max", parameters.mesh_parameters.radius_max )->group( "Domain" );
 
+    add_option_with_default(
+        app, "--radial-extra-levels", parameters.mesh_parameters.radial_extra_levels )
+        ->group( "Domain" )
+        ->description(
+            "Per-MG-level offset added to the radial diamond refinement level relative to the "
+            "lateral one. Radial level at each MG level L becomes L + radial_extra_levels, so the "
+            "hierarchy coarsens uniformly in both axes. Default 0 = isotropic." );
+    add_option_with_default(
+        app, "--lat-sdr", parameters.mesh_parameters.lat_sdr )
+        ->group( "Domain" )
+        ->description(
+            "Override the lateral subdomain refinement level (otherwise --refinement-level-subdomains is used)." );
+    add_option_with_default(
+        app, "--rad-sdr", parameters.mesh_parameters.rad_sdr )
+        ->group( "Domain" )
+        ->description(
+            "Override the radial subdomain refinement level (otherwise --refinement-level-subdomains is used)." );
+
     ///////////////////////////
     /// Boundary conditions ///
     ///////////////////////////
@@ -194,6 +338,23 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     add_option_with_default( app, "--diffusivity", parameters.physics_parameters.diffusivity );
     add_option_with_default( app, "--rayleigh-number", parameters.physics_parameters.rayleigh_number );
 
+    std::map< std::string, ViscosityLaw > viscosity_law_map{
+        { "constant", ViscosityLaw::CONSTANT },
+        { "frank-kamenetskii", ViscosityLaw::FRANK_KAMENETSKII },
+    };
+
+    add_option_with_default( app, "--viscosity-law", parameters.physics_parameters.viscosity_parameters.law )
+        ->transform( CLI::CheckedTransformer( viscosity_law_map, CLI::ignore_case ) )
+        ->default_val( "constant" )
+        ->group( "Viscosity" )
+        ->description(
+            "Viscosity law to use. 'constant' uses a constant or radial profile. "
+            "'frank-kamenetskii' computes eta = 10^(rmu * (0.5 - T))." );
+
+    add_option_with_default( app, "--viscosity-rmu", parameters.physics_parameters.viscosity_parameters.rmu )
+        ->group( "Viscosity" )
+        ->description( "Exponent for Frank-Kamenetskii viscosity law: eta = 10^(rmu * (0.5 - T))." );
+
     const auto radial_profile_enabled =
         add_flag_with_default(
             app,
@@ -232,6 +393,54 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     add_option_with_default(
         app, "--constant-internal-heating-value", parameters.physics_parameters.constant_internal_heating_value );
 
+    ///////////////////////////////
+    /// Initial temperature      ///
+    ///////////////////////////////
+
+    std::map< std::string, InitialTemperatureProfile > init_temp_profile_map{
+        { "power-law", InitialTemperatureProfile::POWER_LAW },
+        { "conductive", InitialTemperatureProfile::CONDUCTIVE },
+    };
+
+    add_option_with_default(
+        app, "--initial-temperature-profile", parameters.physics_parameters.initial_temperature.profile )
+        ->transform( CLI::CheckedTransformer( init_temp_profile_map, CLI::ignore_case ) )
+        ->default_val( "power-law" )
+        ->group( "Initial Temperature" )
+        ->description(
+            "'power-law': T = ((r_max-r)/(r_max-r_min))^5 + random noise (default). "
+            "'conductive': T_ref = (r_min*r_max/r - r_min)/(r_max - r_min), with optional spherical harmonic perturbation." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-degree", parameters.physics_parameters.initial_temperature.sph_degree_l )
+        ->group( "Initial Temperature" )
+        ->description( "Spherical harmonic degree l for initial temperature perturbation (0 = none)." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-order", parameters.physics_parameters.initial_temperature.sph_order_m )
+        ->group( "Initial Temperature" )
+        ->description( "Spherical harmonic order m for initial temperature perturbation." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-epsilon", parameters.physics_parameters.initial_temperature.sph_epsilon )
+        ->group( "Initial Temperature" )
+        ->description( "Perturbation amplitude epsilon: T = T_ref + eps * Y_l^m." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-degree-2", parameters.physics_parameters.initial_temperature.sph_degree_l_2 )
+        ->group( "Initial Temperature" )
+        ->description( "Optional second spherical harmonic degree l2 (0 = none). For combined modes." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-order-2", parameters.physics_parameters.initial_temperature.sph_order_m_2 )
+        ->group( "Initial Temperature" )
+        ->description( "Optional second spherical harmonic order m2." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-factor-2", parameters.physics_parameters.initial_temperature.sph_factor_2 )
+        ->group( "Initial Temperature" )
+        ->description( "Weight factor for second spherical harmonic: T += eps * envelope * (Y_l1^m1 + factor_2 * Y_l2^m2)." );
+
     ///////////////////////////
     /// Time discretization ///
     ///////////////////////////
@@ -253,6 +462,25 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
             "This means the number of time steps executed might be smaller than what is passed in here." );
     add_option_with_default( app, "--energy-substeps", parameters.time_stepping_parameters.energy_substeps )
         ->group( "Time Discretization" );
+    add_option_with_default( app, "--picard-iterations", parameters.time_stepping_parameters.picard_iterations )
+        ->group( "Time Discretization" )
+        ->description(
+            "Number of Picard (fixed-point) iterations per timestep. "
+            "Each iteration re-solves Stokes and energy from the same starting temperature. "
+            "Default: 1 (no iteration, current behavior)." );
+
+    std::map< std::string, EnergySolverType > energy_solver_map{
+        { "fct", EnergySolverType::FCT },
+        { "supg", EnergySolverType::SUPG },
+    };
+
+    add_option_with_default( app, "--energy-solver", parameters.time_stepping_parameters.energy_solver )
+        ->transform( CLI::CheckedTransformer( energy_solver_map, CLI::ignore_case ) )
+        ->default_val( "fct" )
+        ->group( "Time Discretization" )
+        ->description(
+            "'fct': Explicit FCT advection-diffusion (default). "
+            "'supg': Implicit SUPG advection-diffusion with FGMRES solver." );
 
     /////////////////////
     /// Stokes solver ///
@@ -285,6 +513,22 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         "--stokes-viscous-pc-num-power-iterations",
         parameters.stokes_solver_parameters.viscous_pc_num_power_iterations )
         ->group( "Stokes Solver" );
+    add_option_with_default(
+        app, "--stokes-gca", parameters.stokes_solver_parameters.gca )
+        ->group( "Stokes Solver" )
+        ->description(
+            "Galerkin coarse-grid approximation mode for the viscous-block multigrid "
+            "preconditioner. 0 = disabled (default; coarse operators rediscretised), "
+            "1 = full GCA (more robust at variable viscosity), "
+            "2 = adaptive GCA (memory-saving, slightly less robust)." );
+    app.add_option(
+           "--stokes-viscous-pc-agglom-factors",
+           parameters.stokes_solver_parameters.viscous_pc_agglom_factors,
+           "Per-descent agglomeration factors for the viscous MG preconditioner. "
+           "Space-separated list of length num_mg_levels-1. Example: \"2 2 1 1\". "
+           "Empty (default) = classical MG with all levels on MPI_COMM_WORLD." )
+        ->group( "Stokes Solver" )
+        ->expected( 0, -1 );
 
     /////////////////////
     /// Energy solver ///
@@ -311,6 +555,19 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
 
     add_option_with_default( app, "--checkpoint-dir", parameters.io_parameters.checkpoint_dir )->group( "I/O" );
     add_option_with_default( app, "--checkpoint-step", parameters.io_parameters.checkpoint_step )->group( "I/O" );
+    add_option_with_default( app, "--checkpoint-timestep", parameters.io_parameters.checkpoint_timestep )->group( "I/O" );
+
+    add_option_with_default( app, "--output-frequency", parameters.io_parameters.output_frequency )
+        ->group( "I/O" )
+        ->description( "Write XDMF and radial profile output every N timesteps. Default: 1 (every timestep)." );
+
+    add_flag_with_default( app, "--no-xdmf", parameters.io_parameters.no_xdmf )
+        ->group( "I/O" )
+        ->description( "Disable XDMF output." );
+
+    add_flag_with_default( app, "--no-radial-profiles", parameters.io_parameters.no_radial_profiles )
+        ->group( "I/O" )
+        ->description( "Disable radial profile output." );
 
     try
     {

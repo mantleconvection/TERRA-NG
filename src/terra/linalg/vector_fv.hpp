@@ -32,6 +32,7 @@ class VectorFVScalar
     /// @param label Name for the vector.
     /// @param distributed_domain Distributed shell domain.
     VectorFVScalar( const std::string& label, const grid::shell::DistributedDomain& distributed_domain )
+    : comm_( distributed_domain.comm() )
     {
         grid::Grid4DDataScalar< ScalarType > grid_data(
             label,
@@ -92,7 +93,8 @@ class VectorFVScalar
                 static_cast< int >( grid_data_.extent( 0 ) ),
                 static_cast< int >( grid_data_.extent( 1 ) - 1 ),
                 static_cast< int >( grid_data_.extent( 2 ) - 1 ),
-                static_cast< int >( grid_data_.extent( 3 ) - 1 ) } );
+                static_cast< int >( grid_data_.extent( 3 ) - 1 ) },
+            comm_ );
     }
 
     /// @brief Invert entries implementation for VectorLike concept.
@@ -121,26 +123,35 @@ class VectorFVScalar
                 grid_data_.extent( 0 ),
                 grid_data_.extent( 1 ) - 1,
                 grid_data_.extent( 2 ) - 1,
-                grid_data_.extent( 3 ) - 1 } );
+                grid_data_.extent( 3 ) - 1 },
+            comm_ );
     }
 
     /// @brief NaN/Inf check implementation for VectorLike concept.
     /// Returns true if any entry of grid_data is NaN or inf.
     /// @return True if NaN or inf is present.
-    bool has_nan_or_inf_impl() const { return kernels::common::has_nan_or_inf( grid_data_ ); }
+    bool has_nan_or_inf_impl() const { return kernels::common::has_nan_or_inf( grid_data_, comm_ ); }
 
     /// @brief Swap implementation for VectorLike concept.
     /// Exchanges grid_data and mask_data with another vector.
     /// @param other Other vector.
-    void swap_impl( VectorFVScalar& other ) { std::swap( grid_data_, other.grid_data_ ); }
+    void swap_impl( VectorFVScalar& other )
+    {
+        std::swap( grid_data_, other.grid_data_ );
+        std::swap( comm_, other.comm_ );
+    }
 
     /// @brief Get const reference to grid data.
     const grid::Grid4DDataScalar< ScalarType >& grid_data() const { return grid_data_; }
     /// @brief Get mutable reference to grid data.
     grid::Grid4DDataScalar< ScalarType >& grid_data() { return grid_data_; }
 
+    /// @brief MPI communicator this vector's reductions run on.
+    MPI_Comm comm() const { return comm_; }
+
   private:
     grid::Grid4DDataScalar< ScalarType > grid_data_;
+    MPI_Comm                             comm_ = MPI_COMM_WORLD;
 };
 
 /// @brief Static assertion: VectorQ1Scalar satisfies VectorLike concept.
@@ -168,6 +179,7 @@ class VectorFVVec
     /// @param label Name for the vector.
     /// @param distributed_domain Distributed shell domain.
     VectorFVVec( const std::string& label, const grid::shell::DistributedDomain& distributed_domain )
+    : comm_( distributed_domain.comm() )
     {
         grid::Grid4DDataVec< ScalarType, VecDim > grid_data(
             label,
@@ -265,20 +277,28 @@ class VectorFVVec
     /// @brief NaN/Inf check implementation for VectorLike concept.
     /// Returns true if any entry of grid_data is NaN or inf.
     /// @return True if NaN or inf is present.
-    bool has_nan_or_inf_impl() const { return kernels::common::has_nan_or_inf( grid_data_ ); }
+    bool has_nan_or_inf_impl() const { return kernels::common::has_nan_or_inf( grid_data_, comm_ ); }
 
     /// @brief Swap implementation for VectorLike concept.
     /// Exchanges grid_data and mask_data with another vector.
     /// @param other Other vector.
-    void swap_impl( VectorFVVec& other ) { std::swap( grid_data_, other.grid_data_ ); }
+    void swap_impl( VectorFVVec& other )
+    {
+        std::swap( grid_data_, other.grid_data_ );
+        std::swap( comm_, other.comm_ );
+    }
 
     /// @brief Get const reference to grid data.
     const grid::Grid4DDataVec< ScalarType, VecDim >& grid_data() const { return grid_data_; }
     /// @brief Get mutable reference to grid data.
     grid::Grid4DDataVec< ScalarType, VecDim >& grid_data() { return grid_data_; }
 
+    /// @brief MPI communicator this vector's reductions run on.
+    MPI_Comm comm() const { return comm_; }
+
   private:
     grid::Grid4DDataVec< ScalarType, VecDim > grid_data_;
+    MPI_Comm                                  comm_ = MPI_COMM_WORLD;
 };
 
 /// @brief Static assertion: VectorQ1Scalar satisfies VectorLike concept.

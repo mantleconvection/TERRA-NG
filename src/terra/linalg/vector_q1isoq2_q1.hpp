@@ -144,6 +144,9 @@ class VectorQ1IsoQ2Q1
     /// @brief Get mutable reference to block 2 (scalar field).
     Block2Type& block_2() { return p_; }
 
+    /// @brief MPI communicator the blocks are distributed over (same on both).
+    MPI_Comm comm() const { return u_.comm(); }
+
   private:
     Block1Type u_; ///< Vector block (velocity, etc.)
     Block2Type p_; ///< Scalar block (pressure, etc.)

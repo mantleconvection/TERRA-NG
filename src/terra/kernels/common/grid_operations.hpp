@@ -11,34 +11,19 @@ namespace terra::kernels::common {
 template < typename ScalarType >
 void set_constant( const grid::Grid2DDataScalar< ScalarType >& x, ScalarType value )
 {
-    Kokkos::parallel_for(
-        "set_constant (Grid2DDataScalar)",
-        Kokkos::MDRangePolicy( { 0, 0 }, { x.extent( 0 ), x.extent( 1 ) } ),
-        KOKKOS_LAMBDA( int i, int j ) { x( i, j ) = value; } );
-
-    Kokkos::fence();
+    Kokkos::deep_copy( x, value );
 }
 
 template < typename ScalarType >
 void set_constant( const grid::Grid3DDataScalar< ScalarType >& x, ScalarType value )
 {
-    Kokkos::parallel_for(
-        "set_constant (Grid3DDataScalar)",
-        Kokkos::MDRangePolicy( { 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ) } ),
-        KOKKOS_LAMBDA( int i, int j, int k ) { x( i, j, k ) = value; } );
-
-    Kokkos::fence();
+    Kokkos::deep_copy( x, value );
 }
 
 template < typename ScalarType >
 void set_constant( const grid::Grid4DDataScalar< ScalarType >& x, ScalarType value )
 {
-    Kokkos::parallel_for(
-        "set_constant (Grid4DDataScalar)",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
-        KOKKOS_LAMBDA( int subdomain, int i, int j, int k ) { x( subdomain, i, j, k ) = value; } );
-
-    Kokkos::fence();
+    Kokkos::deep_copy( x, value );
 }
 
 template < typename ScalarType, int VecDim >
@@ -51,13 +36,7 @@ void set_constant( const grid::Grid4DDataVec< ScalarType, VecDim >& x, ScalarTyp
 template < typename ScalarType >
 void set_constant( const grid::Grid5DDataScalar< ScalarType >& x, ScalarType value )
 {
-    Kokkos::parallel_for(
-        "set_constant (Grid5DDataScalar)",
-        Kokkos::MDRangePolicy(
-            { 0, 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ), x.extent( 4 ) } ),
-        KOKKOS_LAMBDA( int subdomain, int i, int j, int k, int w ) { x( subdomain, i, j, k, w ) = value; } );
-
-    Kokkos::fence();
+    Kokkos::deep_copy( x, value );
 }
 
 template < typename ScalarType >
@@ -294,7 +273,7 @@ void mult_elementwise_inplace(
 }
 
 template < typename ScalarType >
-ScalarType min_entry( const grid::Grid4DDataScalar< ScalarType >& x )
+ScalarType min_entry( const grid::Grid4DDataScalar< ScalarType >& x, MPI_Comm comm = MPI_COMM_WORLD )
 {
     ScalarType min_val = 0.0;
     Kokkos::parallel_reduce(
@@ -308,13 +287,13 @@ ScalarType min_entry( const grid::Grid4DDataScalar< ScalarType >& x )
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &min_val, 1, mpi::mpi_datatype< ScalarType >(), MPI_MIN, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &min_val, 1, mpi::mpi_datatype< ScalarType >(), MPI_MIN, comm );
 
     return min_val;
 }
 
 template < typename ScalarType >
-ScalarType min_abs_entry( const grid::Grid4DDataScalar< ScalarType >& x )
+ScalarType min_abs_entry( const grid::Grid4DDataScalar< ScalarType >& x, MPI_Comm comm = MPI_COMM_WORLD )
 {
     ScalarType min_mag = 0.0;
     Kokkos::parallel_reduce(
@@ -328,13 +307,13 @@ ScalarType min_abs_entry( const grid::Grid4DDataScalar< ScalarType >& x )
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &min_mag, 1, mpi::mpi_datatype< ScalarType >(), MPI_MIN, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &min_mag, 1, mpi::mpi_datatype< ScalarType >(), MPI_MIN, comm );
 
     return min_mag;
 }
 
 template < typename ScalarType >
-ScalarType max_abs_entry( const grid::Grid4DDataScalar< ScalarType >& x )
+ScalarType max_abs_entry( const grid::Grid4DDataScalar< ScalarType >& x, MPI_Comm comm = MPI_COMM_WORLD )
 {
     ScalarType max_mag = 0.0;
     Kokkos::parallel_reduce(
@@ -348,20 +327,20 @@ ScalarType max_abs_entry( const grid::Grid4DDataScalar< ScalarType >& x )
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &max_mag, 1, mpi::mpi_datatype< ScalarType >(), MPI_MAX, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &max_mag, 1, mpi::mpi_datatype< ScalarType >(), MPI_MAX, comm );
 
     return max_mag;
 }
 
 template < typename ScalarType, int VecDim >
-ScalarType max_abs_entry( const grid::Grid4DDataVec< ScalarType, VecDim >& x )
+ScalarType max_abs_entry( const grid::Grid4DDataVec< ScalarType, VecDim >& x, MPI_Comm comm = MPI_COMM_WORLD )
 {
     ScalarType max_mag = 0.0;
     for ( int d = 0; d < VecDim; ++d )
     {
         // max_abs_entry for scalar internally does MPI_Allreduce,
         // so we call per-component and take the max on the host.
-        ScalarType comp_max = max_abs_entry( x.comp_[d] );
+        ScalarType comp_max = max_abs_entry( x.comp_[d], comm );
         max_mag             = std::max( max_mag, comp_max );
     }
     return max_mag;
@@ -371,7 +350,8 @@ template < typename ScalarType, util::FlagLike FlagType >
 ScalarType max_abs_entry(
     const grid::Grid4DDataScalar< ScalarType >& x,
     const grid::Grid4DDataScalar< FlagType >&   mask,
-    const FlagType&                             mask_value )
+    const FlagType&                             mask_value,
+    MPI_Comm                                    comm = MPI_COMM_WORLD )
 {
     ScalarType max_mag = 0.0;
     Kokkos::parallel_reduce(
@@ -388,7 +368,7 @@ ScalarType max_abs_entry(
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &max_mag, 1, mpi::mpi_datatype< ScalarType >(), MPI_MAX, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &max_mag, 1, mpi::mpi_datatype< ScalarType >(), MPI_MAX, comm );
 
     return max_mag;
 }
@@ -397,7 +377,8 @@ template < typename ScalarType >
 ScalarType max_abs_entry_subset(
     const grid::Grid4DDataScalar< ScalarType >& x,
     dense::Vec< int, 4 >                        start,
-    dense::Vec< int, 4 >                        end_excl )
+    dense::Vec< int, 4 >                        end_excl,
+    MPI_Comm                                    comm = MPI_COMM_WORLD )
 {
     ScalarType max_mag = 0.0;
     Kokkos::parallel_reduce(
@@ -413,13 +394,13 @@ ScalarType max_abs_entry_subset(
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &max_mag, 1, mpi::mpi_datatype< ScalarType >(), MPI_MAX, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &max_mag, 1, mpi::mpi_datatype< ScalarType >(), MPI_MAX, comm );
 
     return max_mag;
 }
 
 template < typename ScalarType, int VecDim >
-ScalarType max_vector_magnitude( const grid::Grid4DDataVec< ScalarType, VecDim >& x )
+ScalarType max_vector_magnitude( const grid::Grid4DDataVec< ScalarType, VecDim >& x, MPI_Comm comm = MPI_COMM_WORLD )
 {
     ScalarType max_mag = 0.0;
     Kokkos::parallel_reduce(
@@ -438,7 +419,7 @@ ScalarType max_vector_magnitude( const grid::Grid4DDataVec< ScalarType, VecDim >
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &max_mag, 1, mpi::mpi_datatype< ScalarType >(), MPI_MAX, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &max_mag, 1, mpi::mpi_datatype< ScalarType >(), MPI_MAX, comm );
 
     return max_mag;
 }
@@ -522,7 +503,7 @@ void set_vector_component(
 }
 
 template < typename ScalarType >
-ScalarType sum_of_absolutes( const grid::Grid4DDataScalar< ScalarType >& x )
+ScalarType sum_of_absolutes( const grid::Grid4DDataScalar< ScalarType >& x, MPI_Comm comm = MPI_COMM_WORLD )
 {
     ScalarType sum_abs = 0.0;
     Kokkos::parallel_reduce(
@@ -536,13 +517,15 @@ ScalarType sum_of_absolutes( const grid::Grid4DDataScalar< ScalarType >& x )
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &sum_abs, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &sum_abs, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, comm );
 
     return sum_abs;
 }
 
 template < typename ScalarType, util::FlagLike FlagType >
-ScalarType count_masked( const grid::Grid4DDataScalar< FlagType >& mask, const FlagType& mask_value )
+ScalarType count_masked( const grid::Grid4DDataScalar< FlagType >& mask,
+                         const FlagType&                           mask_value,
+                         MPI_Comm                                  comm = MPI_COMM_WORLD )
 {
     auto count = static_cast< ScalarType >( 0 );
 
@@ -560,7 +543,7 @@ ScalarType count_masked( const grid::Grid4DDataScalar< FlagType >& mask, const F
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &count, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &count, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, comm );
 
     return count;
 }
@@ -569,7 +552,8 @@ template < typename ScalarType, util::FlagLike FlagType >
 ScalarType masked_sum(
     const grid::Grid4DDataScalar< ScalarType >& x,
     const grid::Grid4DDataScalar< FlagType >&   mask,
-    const FlagType&                             mask_value )
+    const FlagType&                             mask_value,
+    MPI_Comm                                    comm = MPI_COMM_WORLD )
 {
     ScalarType sum = 0.0;
 
@@ -585,7 +569,7 @@ ScalarType masked_sum(
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &sum, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &sum, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, comm );
 
     return sum;
 }
@@ -596,7 +580,8 @@ ScalarType masked_sum(
     const grid::Grid4DDataScalar< FlagType0 >&  mask0,
     const grid::Grid4DDataScalar< FlagType1 >&  mask1,
     const FlagType0&                            mask0_value,
-    const FlagType1&                            mask1_value )
+    const FlagType1&                            mask1_value,
+    MPI_Comm                                    comm = MPI_COMM_WORLD )
 {
     ScalarType sum = 0.0;
 
@@ -614,13 +599,15 @@ ScalarType masked_sum(
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &sum, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &sum, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, comm );
 
     return sum;
 }
 
 template < typename ScalarType >
-ScalarType dot_product( const grid::Grid4DDataScalar< ScalarType >& x, const grid::Grid4DDataScalar< ScalarType >& y )
+ScalarType dot_product( const grid::Grid4DDataScalar< ScalarType >& x,
+                        const grid::Grid4DDataScalar< ScalarType >& y,
+                        MPI_Comm                                    comm = MPI_COMM_WORLD )
 {
     ScalarType dot_prod = 0.0;
 
@@ -635,7 +622,7 @@ ScalarType dot_product( const grid::Grid4DDataScalar< ScalarType >& x, const gri
 
     Kokkos::fence( "dot_product" );
 
-    MPI_Allreduce( MPI_IN_PLACE, &dot_prod, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &dot_prod, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, comm );
 
     return dot_prod;
 }
@@ -645,7 +632,8 @@ ScalarType masked_dot_product(
     const grid::Grid4DDataScalar< ScalarType >& x,
     const grid::Grid4DDataScalar< ScalarType >& y,
     const grid::Grid4DDataScalar< FlagType >&   mask,
-    const FlagType&                             mask_value )
+    const FlagType&                             mask_value,
+    MPI_Comm                                    comm = MPI_COMM_WORLD )
 {
     ScalarType dot_prod = 0.0;
 
@@ -661,7 +649,7 @@ ScalarType masked_dot_product(
 
     Kokkos::fence( "masked_dot_product" );
 
-    MPI_Allreduce( MPI_IN_PLACE, &dot_prod, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &dot_prod, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, comm );
 
     return dot_prod;
 }
@@ -671,14 +659,15 @@ ScalarType masked_dot_product(
     const grid::Grid4DDataVec< ScalarType, VecDim >& x,
     const grid::Grid4DDataVec< ScalarType, VecDim >& y,
     const grid::Grid4DDataScalar< FlagType >&        mask,
-    const FlagType&                                  mask_value )
+    const FlagType&                                  mask_value,
+    MPI_Comm                                         comm = MPI_COMM_WORLD )
 {
     ScalarType dot_prod = 0.0;
     for ( int d = 0; d < VecDim; ++d )
     {
         // masked_dot_product for scalar internally does MPI_Allreduce,
         // so we accumulate the per-component results.
-        dot_prod += masked_dot_product( x.comp_[d], y.comp_[d], mask, mask_value );
+        dot_prod += masked_dot_product( x.comp_[d], y.comp_[d], mask, mask_value, comm );
     }
     return dot_prod;
 }
@@ -688,7 +677,8 @@ ScalarType dot_product_subset(
     const grid::Grid4DDataScalar< ScalarType >& x,
     const grid::Grid4DDataScalar< ScalarType >& y,
     dense::Vec< int, 4 >                        start,
-    dense::Vec< int, 4 >                        end_excl )
+    dense::Vec< int, 4 >                        end_excl,
+    MPI_Comm                                    comm = MPI_COMM_WORLD )
 {
     ScalarType dot_prod = 0.0;
 
@@ -705,13 +695,13 @@ ScalarType dot_product_subset(
 
     Kokkos::fence( "masked_dot_product" );
 
-    MPI_Allreduce( MPI_IN_PLACE, &dot_prod, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &dot_prod, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, comm );
 
     return dot_prod;
 }
 
 template < typename ScalarType >
-bool has_nan_or_inf( const grid::Grid4DDataScalar< ScalarType >& x )
+bool has_nan_or_inf( const grid::Grid4DDataScalar< ScalarType >& x, MPI_Comm comm = MPI_COMM_WORLD )
 {
     bool has_nan_or_inf = false;
 
@@ -726,17 +716,17 @@ bool has_nan_or_inf( const grid::Grid4DDataScalar< ScalarType >& x )
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &has_nan_or_inf, 1, mpi::mpi_datatype< bool >(), MPI_LOR, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &has_nan_or_inf, 1, mpi::mpi_datatype< bool >(), MPI_LOR, comm );
 
     return has_nan_or_inf;
 }
 
 template < typename ScalarType, int VecDim >
-bool has_nan_or_inf( const grid::Grid4DDataVec< ScalarType, VecDim >& x )
+bool has_nan_or_inf( const grid::Grid4DDataVec< ScalarType, VecDim >& x, MPI_Comm comm = MPI_COMM_WORLD )
 {
     for ( int d = 0; d < VecDim; ++d )
     {
-        if ( has_nan_or_inf( x.comp_[d] ) )
+        if ( has_nan_or_inf( x.comp_[d], comm ) )
             return true;
     }
     return false;

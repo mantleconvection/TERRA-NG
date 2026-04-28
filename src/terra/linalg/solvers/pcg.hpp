@@ -7,6 +7,9 @@
 #include "terra/linalg/vector.hpp"
 #include "util/table.hpp"
 
+#include <cmath>
+#include <limits>
+
 namespace terra::linalg::solvers {
 
 /// @brief Preconditioned Conjugate Gradient (PCG) iterative solver for symmetric positive definite linear systems.
@@ -114,6 +117,13 @@ class PCG
             apply( A, p_, ap_ );
             const ScalarType alpha_den = dot( ap_, p_ );
 
+            if ( std::abs( alpha_den ) < std::numeric_limits< ScalarType >::min() )
+            {
+                // Search direction is in or near the null space of A.
+                // Cannot make progress — break to avoid inf/NaN.
+                return;
+            }
+
             const ScalarType alpha = alpha_num / alpha_den;
 
             lincomb( x, { 1.0, alpha }, { x, p_ } );
@@ -146,7 +156,13 @@ class PCG
             solve( preconditioner_, A, z_, r_ );
 
             const ScalarType beta_num = dot( z_, r_ );
-            const ScalarType beta     = beta_num / alpha_num;
+
+            if ( std::abs( alpha_num ) < std::numeric_limits< ScalarType >::min() )
+            {
+                return;
+            }
+
+            const ScalarType beta = beta_num / alpha_num;
 
             lincomb( p_, { 1.0, beta }, { z_, p_ } );
         }

@@ -1,0 +1,50 @@
+## A3 benchmark - level 6, dt-scaling=0.25, tetrahedral IC, SUPG, Frank-Kamenetskii rmu=20
+radius-min=1.22
+radius-max=2.22
+refinement-level-mesh-min=2
+refinement-level-mesh-max=6
+refinement-level-subdomains=1
+
+## Physics
+diffusivity=1
+rayleigh-number=7e3
+viscosity-law="frank-kamenetskii"
+viscosity-rmu=20
+
+## Boundary conditions
+velocity-bc-cmb="freeslip"
+velocity-bc-surface="freeslip"
+temperature-bc-value-cmb=1.0
+temperature-bc-value-surface=0.0
+
+## Initial temperature - tetrahedral symmetry: T_perturb = Y_3^2
+initial-temperature-profile="conductive"
+initial-temperature-sph-degree=3
+initial-temperature-sph-order=2
+initial-temperature-sph-epsilon=0.01
+
+## Time discretization
+dt-scaling=0.25
+t-end=1.0
+max-timesteps=1000000
+energy-solver="supg"
+energy-substeps=1
+
+## Stokes solver
+stokes-krylov-restart=10
+stokes-krylov-max-iterations=10
+stokes-krylov-relative-tolerance=1e-06
+stokes-krylov-absolute-tolerance=1e-12
+stokes-viscous-pc-num-vcycles=1
+stokes-viscous-pc-cheby-order=2
+stokes-viscous-pc-num-smoothing-steps-prepost=3
+stokes-viscous-pc-num-power-iterations=10
+# Per-descent MG preconditioner agglomeration factors. Length must equal
+# num_mg_levels - 1. Empty list (default) = classical V-cycle, no agglomeration.
+# Example: stokes-viscous-pc-agglom-factors=[2, 2, 1, 1] for 5 MG levels.
+stokes-viscous-pc-agglom-factors=[]
+
+## I/O
+outdir="./output_A3_lvl6_supg_cfl025"
+outdir-overwrite=1
+output-frequency=100

@@ -315,6 +315,7 @@ grid::Grid3DDataScalar< ScalarTypeCoeff > spherical_harmonics_coefficients_grid(
 
     auto sph_coeffs_host = Kokkos::create_mirror_view( Kokkos::HostSpace{}, sph_coeffs );
     auto coords_shell_host = Kokkos::create_mirror_view( Kokkos::HostSpace{}, coords_shell );
+    Kokkos::deep_copy( coords_shell_host, coords_shell );
 
     SphericalHarmonicsTool sph_tool( degree_l );
 

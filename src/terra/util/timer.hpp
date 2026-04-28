@@ -5,9 +5,14 @@
 #include <memory>
 #include <mpi.h>
 #include <mutex>
+#include <ranges>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
+#ifdef TERRANEO_USE_NESMIK
+#include <nesmik/nesmik.hpp>
+#endif
 
 namespace terra::util {
 
@@ -214,7 +219,15 @@ class TimerTree
     void aggregate_mpi() { aggregate_node( &root, MPI_COMM_WORLD ); }
 
   private:
-    /// @brief Recursively aggregate a node's timings across MPI ranks
+    /// @brief Recursively aggregate a node's timings across MPI ranks.
+    ///
+    /// Uses a union-of-children walk: each rank broadcasts its local child
+    /// names, all ranks agree on the union (in the same deterministic order),
+    /// and then walk that union. For a child that a given rank hasn't seen
+    /// locally, we contribute a zero timing so the collective remains
+    /// well-formed on every rank. This is required for agglomerated multigrid,
+    /// where different ranks legitimately have different sub-trees (e.g.
+    /// ranks not on the coarse sub-comm never record mg_coarse_solve).
     void aggregate_node( TimerNode* node, MPI_Comm comm )
     {
         double local_time = node->total_time;
@@ -234,10 +247,69 @@ class TimerTree
         node->max_time  = max_time;
         node->avg_time  = sum_time / size;
 
-        for ( auto& child : node->children | std::ranges::views::values )
+        // Union of child names across all ranks on `comm`.
+        const auto union_children = gather_union_child_names( node, comm );
+
+        // Walk the union in sorted (= deterministic) order. For children the
+        // local rank hasn't seen, create a zero-timing stub so recursion stays
+        // in lockstep and the output tree contains every timer.
+        for ( const auto& name : union_children )
         {
-            aggregate_node( child.get(), comm );
+            auto it = node->children.find( name );
+            if ( it == node->children.end() )
+            {
+                node->children[name] = std::make_shared< TimerNode >( name, node );
+                it = node->children.find( name );
+            }
+            aggregate_node( it->second.get(), comm );
         }
+    }
+
+    /// @brief Gather the set-union of child keys of `node` across all ranks on `comm`.
+    ///
+    /// Each rank packs its own children names into a length-prefixed byte buffer,
+    /// MPI_Allgatherv concatenates them, and every rank reconstructs the same
+    /// sorted set.
+    std::set< std::string > gather_union_child_names( const TimerNode* node, MPI_Comm comm )
+    {
+        int rank = 0, size = 0;
+        MPI_Comm_rank( comm, &rank );
+        MPI_Comm_size( comm, &size );
+
+        // Pack local names as "len:name|len:name|..." — simpler than
+        // variable-stride Alltoallv and plenty fast for the ~few-hundred-node
+        // timer trees we emit.
+        std::string local;
+        local.reserve( 256 );
+        for ( const auto& name : node->children | std::ranges::views::keys )
+        {
+            local.append( std::to_string( name.size() ) );
+            local.push_back( ':' );
+            local.append( name );
+            local.push_back( '|' );
+        }
+
+        int local_bytes = static_cast< int >( local.size() );
+        std::vector< int > counts( size ), displs( size );
+        MPI_Allgather( &local_bytes, 1, MPI_INT, counts.data(), 1, MPI_INT, comm );
+        int total = 0;
+        for ( int r = 0; r < size; ++r ) { displs[r] = total; total += counts[r]; }
+
+        std::string all( total, '\0' );
+        MPI_Allgatherv( local.data(), local_bytes, MPI_CHAR,
+                         all.data(), counts.data(), displs.data(), MPI_CHAR, comm );
+
+        std::set< std::string > names;
+        size_t i = 0;
+        while ( i < all.size() )
+        {
+            size_t colon = all.find( ':', i );
+            if ( colon == std::string::npos ) break;
+            const int nlen = std::stoi( all.substr( i, colon - i ) );
+            names.insert( all.substr( colon + 1, nlen ) );
+            i = colon + 1 + nlen + 1; // skip name + trailing '|'
+        }
+        return names;
     }
 };
 
@@ -279,6 +351,9 @@ class Timer
     : name( n )
     {
         TimerTree::instance().enter_scope( name );
+        #ifdef TERRANEO_USE_NESMIK
+        nesmik::region_start( name );
+        #endif
         timer.reset();
         running = true;
     }
@@ -292,6 +367,9 @@ class Timer
         {
             double elapsed = timer.seconds();
             TimerTree::instance().exit_scope( elapsed );
+            #ifdef TERRANEO_USE_NESMIK
+            nesmik::region_stop( name );
+            #endif
             running = false;
         }
     }

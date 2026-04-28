@@ -5,6 +5,8 @@
 #include "power_iteration.hpp"
 #include "solver.hpp"
 
+#include <cmath>
+
 namespace terra::linalg::solvers {
 
 /// @brief Chebyshev accelerated Jacobi iterative solver for linear systems.
@@ -107,6 +109,12 @@ class Chebyshev
 
         auto& d = tmps_[0];
         auto& z = tmps_[1];
+
+        // Guard against degenerate eigenvalue estimates (e.g. from near-singular operators).
+        if ( !std::isfinite( max_ev_estimate_ ) || max_ev_estimate_ <= ScalarType( 0 ) )
+        {
+            max_ev_estimate_ = ScalarType( 1 );
+        }
 
         const auto lambda_max = 1.5 * max_ev_estimate_;
         const auto lambda_min = 0.1 * max_ev_estimate_;

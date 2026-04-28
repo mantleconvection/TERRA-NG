@@ -121,7 +121,7 @@ double test( int level, int level_subdomains, const std::shared_ptr< util::Table
     const auto coords_shell = terra::grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto coords_radii = terra::grid::shell::subdomain_shell_radii< ScalarType >( domain );
 
-    using Laplace = fe::wedge::operators::shell::LaplaceSimple< ScalarType >;
+    using Laplace = fe::wedge::operators::shell::Laplace< ScalarType >;
 
     Laplace A( domain, coords_shell, coords_radii, boundary_mask_data, true, false );
     Laplace A_neumann( domain, coords_shell, coords_radii, boundary_mask_data, false, false );

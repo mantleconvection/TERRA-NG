@@ -33,11 +33,22 @@ struct GeometryHelper
     using Vec3 = dense::Vec< ScalarT, 3 >;
 
     static constexpr int num_neighbors = 6;
-#if 0
-    static constexpr int cell_offset_x[num_neighbors] = { -1, 1, 0, 0, 0, 0 };
-    static constexpr int cell_offset_y[num_neighbors] = { 0, 0, -1, 1, 0, 0 };
-    static constexpr int cell_offset_r[num_neighbors] = { 0, 0, 0, 0, -1, 1 };
-#endif
+
+    KOKKOS_INLINE_FUNCTION static constexpr int cell_offset_x( int n )
+    {
+        constexpr int v[num_neighbors] = { -1, 1, 0, 0, 0, 0 };
+        return v[n];
+    }
+    KOKKOS_INLINE_FUNCTION static constexpr int cell_offset_y( int n )
+    {
+        constexpr int v[num_neighbors] = { 0, 0, -1, 1, 0, 0 };
+        return v[n];
+    }
+    KOKKOS_INLINE_FUNCTION static constexpr int cell_offset_r( int n )
+    {
+        constexpr int v[num_neighbors] = { 0, 0, 0, 0, -1, 1 };
+        return v[n];
+    }
 
     enum class WedgeContribution : int
     {
@@ -327,9 +338,9 @@ struct GeometryHelper
             // Ensure S_f[neighbor] points outward from cell i toward cell j.
             // Neighbour cell centre is available in ghost layers after initialize_cell_centers;
             // on curved domains this is the symmetric, correct reference direction.
-            const int  nx = x_cell + cell_offset_x[neighbor];
-            const int  ny = y_cell + cell_offset_y[neighbor];
-            const int  nr = r_cell + cell_offset_r[neighbor];
+            const int  nx = x_cell + cell_offset_x[ neighbor ];
+            const int  ny = y_cell + cell_offset_y[ neighbor ];
+            const int  nr = r_cell + cell_offset_r[ neighbor ];
             const Vec3 neighbor_center{
                 cell_centers( local_subdomain_id, nx, ny, nr, 0 ),
                 cell_centers( local_subdomain_id, nx, ny, nr, 1 ),

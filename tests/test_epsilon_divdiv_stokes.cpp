@@ -58,6 +58,8 @@
 #include <tuple>
 #include <vector>
 
+#include "util/cli11_helper.hpp"
+
 using namespace terra;
 
 using grid::Grid2DDataScalar;
@@ -239,13 +241,16 @@ struct KInterpolator
 // Test
 // -----------------------------------------------------------------------------
 
-std::tuple< double, double, int > test(
-    double                                kmax,
-    int                                   gca,
-    int                                   min_level,
-    int                                   max_level,
-    int                                   level_subdomains,
-    const std::shared_ptr< util::Table >& table )
+std::tuple< double, double, int >
+test( double kmax,
+      int gca,
+      int min_level,
+      int max_level,
+      int level_subdomains,
+      int radial_extra_levels,
+      int lat_sdr_override,
+      int rad_sdr_override,
+      const std::shared_ptr< util::Table >& table )
 {
     using ScalarType = double;
 
@@ -258,13 +263,19 @@ std::tuple< double, double, int > test(
     ScalarType r_min = 0.5;
     ScalarType r_max = 1.0;
 
+    const int lat_sdr = ( lat_sdr_override >= 0 ) ? lat_sdr_override : level_subdomains;
+    const int rad_sdr = ( rad_sdr_override >= 0 ) ? rad_sdr_override : level_subdomains;
+
     util::logroot << "Allocating domains ...\n";
     for ( int level = min_level; level <= max_level; level++ )
     {
-        const int idx = level - min_level;
+        const int idx       = level - min_level;
+        const int lat_level = level;
+        const int rad_level = level + radial_extra_levels;
 
         domains.push_back(
-            DistributedDomain::create_uniform( level, level, r_min, r_max, level_subdomains, level_subdomains ) );
+            DistributedDomain::create_uniform(
+                lat_level, rad_level, r_min, r_max, lat_sdr, rad_sdr ) );
 
         coords_shell.push_back( grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domains[idx] ) );
         coords_radii.push_back( grid::shell::subdomain_shell_radii< ScalarType >( domains[idx] ) );
@@ -711,8 +722,29 @@ int main( int argc, char** argv )
     MPI_Init( &argc, &argv );
     Kokkos::ScopeGuard scope_guard( argc, argv );
 
-    const int max_level = 6;
-    auto      table     = std::make_shared< util::Table >();
+    // --- Anisotropy CLI ---
+    // Default: isotropic (existing behaviour). radial_extra_levels > 0 runs Path-B.1
+    // anisotropy: radial diamond level at each MG level L becomes L + radial_extra_levels.
+    int max_level           = 6;
+    int radial_extra_levels = 0;
+    int lat_sdr             = -1;
+    int rad_sdr             = -1;
+    {
+        CLI::App app{ "test_epsilon_divdiv_stokes" };
+        util::add_option_with_default( app, "--max-level", max_level, "Finest lateral diamond refinement level." );
+        util::add_option_with_default(
+            app,
+            "--radial-extra-levels",
+            radial_extra_levels,
+            "Offset added to the radial diamond level at every MG level (default 0 = isotropic)." );
+        util::add_option_with_default(
+            app, "--lat-sdr", lat_sdr, "Override lateral subdomain refinement level (default: use level_subdomains)." );
+        util::add_option_with_default(
+            app, "--rad-sdr", rad_sdr, "Override radial subdomain refinement level (default: use level_subdomains)." );
+        CLI11_PARSE( app, argc, argv );
+    }
+
+    auto table = std::make_shared< util::Table >();
 
     std::vector< int > kmaxs = { 1 };
     std::vector< int > gcas  = { 0 };
@@ -752,8 +784,8 @@ int main( int argc, char** argv )
                         Kokkos::Timer timer;
                         timer.reset();
 
-                        const auto [l2_error_vel, l2_error_pre, iterations] =
-                            test( kmax, gca, minlevel, level, level_subdomains, table );
+                        const auto [l2_error_vel, l2_error_pre, iterations] = test(
+                            kmax, gca, minlevel, level, level_subdomains, radial_extra_levels, lat_sdr, rad_sdr, table );
 
                         const auto time_total = timer.seconds();
 
