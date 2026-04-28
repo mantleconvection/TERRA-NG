@@ -108,68 +108,6 @@ void apply_dirichlet_bcs(
     apply_dirichlet_bcs( T.grid_data(), boundary_mask, bcs, domain );
 }
 
-/// @brief Reconstruct Dirichlet'd FV boundary cells with a face-consistent cell average.
-///
-/// The FCT scheme stores the prescribed Dirichlet value `T_bc` directly in the boundary
-/// cell (centered at `r_face ∓ h/2`), which represents Dirichlet at the cell center, not
-/// at the face.  When this field is projected onto the Q1 FE space via L2 projection, the
-/// near-boundary Q1 node averages `T_bc` with the first free cell value, halving the
-/// surface gradient and producing a Nusselt diagnostic that is ~50% of the SUPG value.
-///
-/// This routine overwrites the boundary cell with a linearly-extrapolated cell average
-/// consistent with `T(r_face) = T_bc`:
-/// \f[
-///   T_{\mathrm{recon}}^{\mathrm{boundary}} = \tfrac{1}{3}\, T^{\mathrm{first\ free}} + \tfrac{2}{3}\, T_{\mathrm{bc}}.
-/// \f]
-/// After the L2 projection, call `apply_dirichlet_bcs` again to restore the FCT-consistent
-/// boundary value for the next time step.
-template < typename ScalarT >
-void reconstruct_boundary_cells_for_projection(
-    grid::Grid4DDataScalar< ScalarT >                               data,
-    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
-    const DirichletBCs< ScalarT >&                                  bcs,
-    const grid::shell::DistributedDomain&                           domain )
-{
-    using Flag = grid::shell::ShellBoundaryFlag;
-
-    const int fv_r_last   = static_cast< int >( data.extent( 3 ) ) - 2;
-    const int mask_r_last = static_cast< int >( boundary_mask.extent( 3 ) ) - 1;
-
-    const ScalarT T_cmb   = bcs.T_cmb;
-    const ScalarT T_surf  = bcs.T_surface;
-    const bool    do_cmb  = bcs.apply_cmb;
-    const bool    do_surf = bcs.apply_surface;
-
-    Kokkos::parallel_for(
-        "reconstruct_boundary_cells_for_projection",
-        grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ),
-        KOKKOS_LAMBDA( const int id, const int x, const int y, const int r ) {
-            if ( do_cmb && r == 1 && util::has_flag( boundary_mask( id, 0, 0, 0 ), Flag::CMB ) )
-            {
-                const ScalarT T_first_free = data( id, x, y, 2 );
-                data( id, x, y, 1 )        = ( T_first_free + ScalarT( 2 ) * T_cmb ) / ScalarT( 3 );
-            }
-            if ( do_surf && r == fv_r_last
-                 && util::has_flag( boundary_mask( id, 0, 0, mask_r_last ), Flag::SURFACE ) )
-            {
-                const ScalarT T_first_free = data( id, x, y, fv_r_last - 1 );
-                data( id, x, y, fv_r_last ) = ( T_first_free + ScalarT( 2 ) * T_surf ) / ScalarT( 3 );
-            }
-        } );
-
-    Kokkos::fence();
-}
-
-template < typename ScalarT >
-void reconstruct_boundary_cells_for_projection(
-    linalg::VectorFVScalar< ScalarT >&                              T,
-    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
-    const DirichletBCs< ScalarT >&                                  bcs,
-    const grid::shell::DistributedDomain&                           domain )
-{
-    reconstruct_boundary_cells_for_projection( T.grid_data(), boundary_mask, bcs, domain );
-}
-
 /// @brief Computes cell centers and writes to a vector valued finite volume function.
 ///
 ///

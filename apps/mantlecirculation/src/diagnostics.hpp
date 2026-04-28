@@ -25,7 +25,6 @@ namespace terra::mantlecirculation {
 inline ScalarType compute_nusselt_fv(
     const grid::shell::DistributedDomain&                             domain,
     const linalg::VectorFVScalar< ScalarType >&                       T_fct,
-    const grid::Grid2DDataScalar< ScalarType >&                       coords_radii,
     const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >&   boundary_mask,
     const ScalarType                                                  T_bc_surface,
     const ScalarType                                                  T_bc_cmb,
@@ -56,14 +55,14 @@ inline ScalarType compute_nusselt_fv(
     // For CMB: boundary cell = 1 (set to T_bc), first free cell = 2.
     const int r_cell_fv = at_surface ? ( nr_fv - 3 ) : 2;
 
-    // Per-subdomain Q1 node indices of the lower/upper faces of the FV "first free" cell.
-    // FV cell at FV-index k corresponds to the Q1 cell at index (k - 1), whose face
-    // radii are coords_radii(sd, k - 1) and coords_radii(sd, k).
-    const int r_node_lo = r_cell_fv - 1;
-    const int r_node_hi = r_cell_fv;
-
     // The face radius is exactly at the boundary.
     const ScalarType r_face = at_surface ? r_max : r_min;
+
+    // For a uniform radial mesh with nr_interior cells, the cell width is (r_max - r_min) / nr_interior.
+    const int nr_interior = nr_fv - 2; // subtract 2 ghost layers
+    const ScalarType dr_cell = ( r_max - r_min ) / nr_interior;
+    // The cell center of the first free cell (the one we're reading).
+    const ScalarType r_center = at_surface ? ( r_face - ScalarType( 1.5 ) * dr_cell ) : ( r_face + ScalarType( 1.5 ) * dr_cell );
     const ScalarType T_bc = at_surface ? T_bc_surface : T_bc_cmb;
     const ScalarType normal_sign = at_surface ? ScalarType( 1 ) : ScalarType( -1 );
 
@@ -82,10 +81,6 @@ inline ScalarType compute_nusselt_fv(
             if ( boundary_mask( sd, 1, 1, r_boundary_node ) != expected_flag )
                 return;
             const ScalarType T_cell = fv_grid( sd, x, y, r_cell_fv );
-            // Use the actual per-subdomain cell geometry (handles radial subdomain decomposition correctly).
-            const ScalarType r_lo = coords_radii( sd, r_node_lo );
-            const ScalarType r_hi = coords_radii( sd, r_node_hi );
-            const ScalarType r_center = ScalarType( 0.5 ) * ( r_lo + r_hi );
             const ScalarType dTdr = normal_sign * ( T_bc - T_cell ) / ( r_face - r_center );
             sum += dTdr;
         },
