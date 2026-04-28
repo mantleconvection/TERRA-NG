@@ -893,9 +893,18 @@ Result<> run( const Parameters& prm )
     fv::hex::apply_dirichlet_bcs( T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
     communication::shell::update_fv_ghost_layers( domains[velocity_level], T_fct.grid_data() );
 
+    // Reconstruct boundary cells with face-Dirichlet interpretation so the FV→Q1
+    // projection produces the correct gradient at the surface boundary layer.
+    fv::hex::reconstruct_boundary_cells_for_projection(
+        T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
+
     // Project T_fct to Q1 T via L2 projection for use as Stokes RHS and output.
     fv::hex::l2_project_fv_to_fe(
         T, T_fct, domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level], l2_proj_tmps );
+
+    // Restore the FCT-consistent boundary cell value for the next time step.
+    fv::hex::apply_dirichlet_bcs( T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
+    communication::shell::update_fv_ghost_layers( domains[velocity_level], T_fct.grid_data() );
 
     // If temperature-dependent viscosity is enabled, compute the initial viscosity from the initial T.
     if ( prm.physics_parameters.viscosity_parameters.law != ViscosityLaw::CONSTANT )
@@ -1117,16 +1126,13 @@ Result<> run( const Parameters& prm )
         const auto Nu_top_0 = compute_nusselt(
             domains[velocity_level], T, T_ref, coords_shell[velocity_level], coords_radii[velocity_level], boundary_mask_data[velocity_level], ownership_mask_data[velocity_level], true );
         const auto Nu_top_fv_0 = compute_nusselt_fv(
-            domains[velocity_level], T_fct, boundary_mask_data[velocity_level],
+            domains[velocity_level], T_fct, coords_radii[velocity_level], boundary_mask_data[velocity_level],
             prm.boundary_conditions_parameters.temperature_surface,
             prm.boundary_conditions_parameters.temperature_cmb,
             prm.mesh_parameters.radius_min, prm.mesh_parameters.radius_max, true );
         logroot << "Nu_top (Q1) = " << Nu_top_0 << ", Nu_top (FV) = " << Nu_top_fv_0
                 << "  [timestep 0, before time stepping]" << std::endl;
     }
-
-    // Backup of FV temperature for Picard iteration (re-do energy from same starting point).
-    linalg::VectorFVScalar< ScalarType > T_fct_backup( "T_fct_backup", domains[velocity_level] );
 
     for ( int timestep = timestep_initial + 1; timestep < prm.time_stepping_parameters.max_timesteps; timestep++ )
     {
@@ -1135,9 +1141,6 @@ Result<> run( const Parameters& prm )
 
 
         const int num_picard = prm.time_stepping_parameters.picard_iterations;
-
-        // Save T_fct at the start of the timestep so we can restore it for each Picard iteration.
-        Kokkos::deep_copy( T_fct_backup.grid_data(), T_fct.grid_data() );
 
         // Compute dt once from current velocity (before Picard loop).
         ScalarType dt;
@@ -1171,12 +1174,6 @@ Result<> run( const Parameters& prm )
         {
             if ( num_picard > 1 )
                 logroot << "--- Picard iteration " << picard << " / " << num_picard << " ---" << std::endl;
-
-            // Restore T_fct to start-of-timestep state (iterations > 0 redo energy from the same starting point).
-            if ( picard > 0 )
-            {
-                Kokkos::deep_copy( T_fct.grid_data(), T_fct_backup.grid_data() );
-            }
 
             // --- Stokes solve ---
             const auto solve_stokes_at_temperature = [&]( const VectorQ1Scalar< ScalarType >& T_for_buoyancy,
@@ -1348,6 +1345,12 @@ Result<> run( const Parameters& prm )
                 // Project T_fct → Q1 T once after all substeps.
                 {
                     util::Timer timer_fct_projection( "fct_l2_projection" );
+
+                    // Reconstruct boundary cells with face-Dirichlet interpretation so the
+                    // FV→Q1 projection produces the correct gradient at the boundary layer.
+                    fv::hex::reconstruct_boundary_cells_for_projection(
+                        T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
+
                     fv::hex::l2_project_fv_to_fe(
                         T,
                         T_fct,
@@ -1355,6 +1358,12 @@ Result<> run( const Parameters& prm )
                         coords_shell[velocity_level],
                         coords_radii[velocity_level],
                         l2_proj_tmps );
+
+                    // Restore the FCT-consistent boundary cell value for the next time step.
+                    fv::hex::apply_dirichlet_bcs(
+                        T_fct, boundary_mask_data[velocity_level], fct_bcs, domains[velocity_level] );
+                    communication::shell::update_fv_ghost_layers(
+                        domains[velocity_level], T_fct.grid_data() );
 
                     // Enforce Dirichlet BCs on the Q1 temperature field after the L2 projection.
                     {
@@ -1442,6 +1451,7 @@ Result<> run( const Parameters& prm )
             const auto Nu_top_fv = compute_nusselt_fv(
                 domains[velocity_level],
                 T_fct,
+                coords_radii[velocity_level],
                 boundary_mask_data[velocity_level],
                 prm.boundary_conditions_parameters.temperature_surface,
                 prm.boundary_conditions_parameters.temperature_cmb,
