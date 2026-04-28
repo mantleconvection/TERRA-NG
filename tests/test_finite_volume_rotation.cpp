@@ -1,6 +1,8 @@
 
 #include <cmath>
+#include <iomanip>
 #include <iostream>
+#include <limits>
 #include <mpi.h>
 #include <string>
 
@@ -153,6 +155,38 @@ ScalarType compute_l2_relative_error(
     return std::sqrt( global_num / global_den );
 }
 
+// Min / signed-max of an FV cell field, skipping ghost layers, with MPI reduction.
+// Used to diagnose over/undershoot of T (exact range [0, 1]).
+ScalarType fv_min_cells( const DistributedDomain& domain, const Grid4DDataScalar< ScalarType >& T )
+{
+    ScalarType mn = std::numeric_limits< ScalarType >::max();
+    Kokkos::parallel_reduce(
+        "fv_min_cells",
+        grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ),
+        KOKKOS_LAMBDA( int id, int x, int y, int r, ScalarType& lmn ) {
+            lmn = Kokkos::min( lmn, T( id, x, y, r ) );
+        },
+        Kokkos::Min< ScalarType >( mn ) );
+    Kokkos::fence();
+    MPI_Allreduce( MPI_IN_PLACE, &mn, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD );
+    return mn;
+}
+
+ScalarType fv_max_cells( const DistributedDomain& domain, const Grid4DDataScalar< ScalarType >& T )
+{
+    ScalarType mx = std::numeric_limits< ScalarType >::lowest();
+    Kokkos::parallel_reduce(
+        "fv_max_cells",
+        grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ),
+        KOKKOS_LAMBDA( int id, int x, int y, int r, ScalarType& lmx ) {
+            lmx = Kokkos::max( lmx, T( id, x, y, r ) );
+        },
+        Kokkos::Max< ScalarType >( mx ) );
+    Kokkos::fence();
+    MPI_Allreduce( MPI_IN_PLACE, &mx, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD );
+    return mx;
+}
+
 // ============================================================================
 // Main test function
 // ============================================================================
@@ -271,6 +305,10 @@ void test( const int level, const Method method )
     util::logroot << "Running solid-body rotation test [" << method_name( method ) << "]"
                   << "  level=" << level << "  dt=" << dt << "  steps=" << n_timesteps << "  T_end=" << T_end << "\n";
 
+    // Worst-case under-/overshoot across the run (initial cone is in [0, 1]).
+    ScalarType t_min_worst = fv_min_cells( domain, T.grid_data() );
+    ScalarType t_max_worst = fv_max_cells( domain, T.grid_data() );
+
     for ( int ts = 1; ts <= n_timesteps; ++ts )
     {
         switch ( method )
@@ -306,12 +344,27 @@ void test( const int level, const Method method )
 
         const ScalarType t     = ts * dt;
         const ScalarType error = compute_l2_relative_error( domain, T.grid_data(), T_ref.grid_data() );
-        util::logroot << "  ts=" << ts << "  t=" << t << "  rel_l2_err=" << error << "\n";
+        const ScalarType t_min = fv_min_cells( domain, T.grid_data() );
+        const ScalarType t_max = fv_max_cells( domain, T.grid_data() );
+        t_min_worst            = std::min( t_min_worst, t_min );
+        t_max_worst            = std::max( t_max_worst, t_max );
+        util::logroot << "  ts=" << ts << "  t=" << t << "  rel_l2_err=" << error
+                      << "  T_min=" << t_min << "  T_max=" << t_max << "\n";
     }
 
     // Final relative L2 error after one full revolution.
     const ScalarType final_error = compute_l2_relative_error( domain, T.grid_data(), T_ref.grid_data() );
-    util::logroot << "\nFinal relative L2 error after one revolution: " << final_error << "\n";
+
+    util::logroot << "\n================================================================\n"
+                  << " FV rotation summary (method=" << method_name( method )
+                  << ", level=" << level << ")\n"
+                  << "================================================================\n"
+                  << "  final L2 relative error vs. initial condition: "
+                  << std::scientific << std::setprecision( 6 ) << final_error << "\n"
+                  << "  worst T min (exact range [0,1]):               "
+                  << std::scientific << std::setprecision( 3 ) << t_min_worst << "\n"
+                  << "  worst T max (exact range [0,1]):               "
+                  << std::scientific << std::setprecision( 3 ) << t_max_worst << std::endl;
 }
 
 int main( int argc, char** argv )
