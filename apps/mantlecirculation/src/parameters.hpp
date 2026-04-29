@@ -47,9 +47,9 @@ struct BoundaryConditionsParameters
 /// Choice of viscosity law for the temperature-dependent viscosity field.
 ///   CONSTANT          : eta(T) = const (taken from `reference_viscosity`, optionally
 ///                       multiplied by a radial profile if `radial_profile_enabled`).
-///   FRANK_KAMENETSKII : eta(T) = 10^(rmu * (0.5 - T)).  T in [0,1].
-///                       rmu controls the (log10) viscosity contrast — see
-///                       `ViscosityParameters::rmu`.
+///   FRANK_KAMENETSKII : eta(T) = rmu^(0.5 - T)  (Zhong et al. 2008).  T in [0,1].
+///                       Total cold/hot viscosity contrast = rmu (rmu = 1 → constant
+///                       viscosity).  See `ViscosityParameters::rmu`.
 enum class ViscosityLaw
 {
     CONSTANT,
@@ -61,8 +61,8 @@ struct ViscosityParameters
     /// Viscosity law selector — see ViscosityLaw above.
     ViscosityLaw law = ViscosityLaw::CONSTANT;
 
-    /// Exponent of the Frank-Kamenetskii viscosity law: eta = 10^(rmu * (0.5 - T)).
-    /// Equivalently, total cold/hot viscosity contrast = 10^rmu (rmu=0 → constant viscosity).
+    /// Base of the Frank-Kamenetskii viscosity law (Zhong et al. 2008): eta = rmu^(0.5 - T).
+    /// Total cold/hot viscosity contrast = rmu (rmu = 1 → constant viscosity).
     /// Ignored when `law == CONSTANT`.
     double       rmu = 1.0;
 
@@ -190,6 +190,7 @@ enum class EnergySolverType
 {
     FCT,
     SUPG,
+    ENTROPY_VISCOSITY,
 };
 
 struct TimeSteppingParameters
@@ -349,11 +350,13 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Viscosity" )
         ->description(
             "Viscosity law to use. 'constant' uses a constant or radial profile. "
-            "'frank-kamenetskii' computes eta = 10^(rmu * (0.5 - T))." );
+            "'frank-kamenetskii' computes eta = rmu^(0.5 - T) (Zhong et al. 2008)." );
 
     add_option_with_default( app, "--viscosity-rmu", parameters.physics_parameters.viscosity_parameters.rmu )
         ->group( "Viscosity" )
-        ->description( "Exponent for Frank-Kamenetskii viscosity law: eta = 10^(rmu * (0.5 - T))." );
+        ->description(
+            "Base of the Frank-Kamenetskii viscosity law: eta = rmu^(0.5 - T) "
+            "(Zhong et al. 2008). Cold/hot contrast = rmu; rmu = 1 gives constant viscosity." );
 
     const auto radial_profile_enabled =
         add_flag_with_default(
@@ -472,6 +475,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     std::map< std::string, EnergySolverType > energy_solver_map{
         { "fct", EnergySolverType::FCT },
         { "supg", EnergySolverType::SUPG },
+        { "entropy_viscosity", EnergySolverType::ENTROPY_VISCOSITY },
+        { "ev", EnergySolverType::ENTROPY_VISCOSITY },
     };
 
     add_option_with_default( app, "--energy-solver", parameters.time_stepping_parameters.energy_solver )
