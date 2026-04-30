@@ -1,14 +1,22 @@
 # Entropy-viscosity stabilization {#entropy-viscosity}
 
-Residual-driven, isotropic artificial-diffusion stabilization for the Q1
-advection–diffusion energy equation
+The Q1 Galerkin discretization of the energy equation
 \f[
-    \partial_t T + \mathbf{u}\cdot\nabla T - \kappa\,\nabla^2 T = \gamma,
+    \partial_t T + \mathbf{u}\cdot\nabla T - \kappa\,\nabla^2 T = \gamma
 \f]
-following Kronbichler, Heister & Bangerth (*GJI* **191**, 12–29, 2012) /
-Guermond, Pasquetti & Popov (*JCP* **230**, 4248–4267, 2011).  Adds a strictly
-local diffusion \f$\nu_h(\mathbf{x})\f$ that vanishes where the strong-form PDE
-residual is small and grows only near layers.
+is unstable in the advection-dominated regime (Pe \f$\gg 1\f$) of mantle
+convection: without stabilization it develops O(1) wiggles around boundary
+layers and plumes that destroy the thermal structure within a few steps.
+Entropy viscosity (EV) fixes this by adding an isotropic artificial diffusion
+\f$\nu_h(\mathbf{x})\f$ to the equation.  Unlike SUPG's always-on streamline
+diffusion, \f$\nu_h\f$ is built from the strong-form PDE residual itself: it
+vanishes where the discrete solution satisfies its own equation, and turns on
+locally only near the layers and fronts that actually need it.  The result is
+a stabilization that is essentially zero in 99% of the domain and never adds
+more diffusion than a first-order upwind scheme would.
+
+We follow Kronbichler, Heister & Bangerth (*GJI* **191**, 12–29, 2012) /
+Guermond, Pasquetti & Popov (*JCP* **230**, 4248–4267, 2011).
 
 ## The entropy and its residual
 
