@@ -4,11 +4,12 @@
 #include <vector>
 
 #include "fe/strong_algebraic_dirichlet_enforcement.hpp"
-#include "fe/wedge/operators/shell/div_k_grad.hpp"
 #include "fe/wedge/operators/shell/entropy_viscosity.hpp"
 #include "fe/wedge/operators/shell/mass.hpp"
 #include "fe/wedge/operators/shell/unsteady_advection_diffusion_supg.hpp"
 #include "fe/wedge/operators/shell/unsteady_advection_diffusion_supg_kerngen.hpp"
+#include "fe/wedge/operators/shell/wedge_constant_div_k_grad.hpp"
+#include "fe/wedge/operators/shell/wedge_lumped_lap_projector.hpp"
 #include "fv/hex/conversion.hpp"
 #include "fv/hex/operators/fct_advection_diffusion.hpp"
 #include "grid/grid_types.hpp"
@@ -254,7 +255,8 @@ class EVSolver : public EnergySolver< ScalarType >
 {
     using AD_EV     = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPG< ScalarType >;
     using TempMass  = fe::wedge::operators::shell::Mass< ScalarType >;
-    using DivKGradOp = fe::wedge::operators::shell::DivKGrad< ScalarType >;
+    using EVDiffOp  = fe::wedge::operators::shell::WedgeConstantDivKGrad< ScalarType >;
+    using LapProj   = fe::wedge::operators::shell::WedgeLumpedLapProjector< ScalarType >;
     using DiagSolverT = linalg::solvers::DiagonalSolver< AD_EV >;
     using FGMRESType  = linalg::solvers::FGMRES< AD_EV, DiagSolverT >;
 
@@ -285,22 +287,18 @@ class EVSolver : public EnergySolver< ScalarType >
     , q_(           "ev_q",          *domain_, ownership_mask_ )
     , diag_(        "ev_diag",       *domain_, ownership_mask_ )
     , T_prev_(      "T_prev",        *domain_, ownership_mask_ )
-    , nu_h_nodal_(  "nu_h_nodal",    *domain_, ownership_mask_ )
     , rhs_ev_(      "rhs_ev",        *domain_, ownership_mask_ )
-    , kappa_nodal_( "kappa_nodal",   *domain_, ownership_mask_ )
-    , M_lumped_(    "M_lumped",      *domain_, ownership_mask_ )
-    , ones_vec_(    "ones_vec",      *domain_, ownership_mask_ )
-    , lap_T_(       "lap_T",         *domain_, ownership_mask_ )
     , T_backup_(      "ev_T_backup",      *domain_, ownership_mask_ )
     , T_prev_backup_( "ev_T_prev_backup", *domain_, ownership_mask_ )
     {
         util::logroot << "Setting up entropy-viscosity (EV) energy solver ..." << std::endl;
 
-        // Per-cell ν_h field: extents (#subdomains, N-1, N-1, N_r-1).
+        // Per-wedge ν_h field: extents (#subdomains, N-1, N-1, N_r-1, num_wedges).
         const auto num_sub = static_cast< long long >( domain_->subdomains().size() );
         const auto nx_c    = domain_->domain_info().subdomain_num_nodes_per_side_laterally() - 1;
         const auto nr_c    = domain_->domain_info().subdomain_num_nodes_radially() - 1;
-        nu_h_cell_ = grid::Grid4DDataScalar< ScalarType >( "nu_h_cell", num_sub, nx_c, nx_c, nr_c );
+        nu_h_wedge_ = grid::Grid5DDataScalar< ScalarType >(
+            "nu_h_wedge", num_sub, nx_c, nx_c, nr_c, fe::wedge::num_wedges_per_hex_cell );
 
         A_ = std::make_unique< AD_EV >(
             *domain_, coords_shell_, coords_radii_, boundary_mask_, velocity_,
@@ -319,25 +317,24 @@ class EVSolver : public EnergySolver< ScalarType >
 
         M_ = std::make_unique< TempMass >( *domain_, coords_shell_, coords_radii_, false );
 
-        // Lumped mass M_lumped = M · 1.
-        linalg::assign( ones_vec_, ScalarType( 1 ) );
-        linalg::apply( *M_, ones_vec_, M_lumped_ );
+        // Per-wedge lumped-mass projection of κ·∇²T (κ folded into the
+        // precomputed projector at construction time).
+        lap_projector_ = std::make_unique< LapProj >(
+            *domain_, coords_shell_, coords_radii_, prm_.physics_parameters.diffusivity );
+        lap_w_ = lap_projector_->make_lap_storage( "ev_lap_w" );
 
-        // κ as a Q1 nodal field for DivKGrad(κ).
-        linalg::assign( kappa_nodal_, prm_.physics_parameters.diffusivity );
-
-        A_kappa_ = std::make_unique< DivKGradOp >(
-            *domain_, coords_shell_, coords_radii_, boundary_mask_, kappa_nodal_.grid_data(),
-            /*treat_boundary=*/false, /*diagonal=*/false );
-
-        // ν_h read by reference; updated in place each step via project_nu_h_to_nodes.
-        A_evdiff_ = std::make_unique< DivKGradOp >(
-            *domain_, coords_shell_, coords_radii_, boundary_mask_, nu_h_nodal_.grid_data(),
-            /*treat_boundary=*/false, /*diagonal=*/false );
+        // ν_h read by reference; the underlying view is updated in place
+        // each step by compute_nu_h.
+        A_evdiff_ = std::make_unique< EVDiffOp >(
+            *domain_, coords_shell_, coords_radii_, nu_h_wedge_ );
 
         A_neumann_diag_->dt() = ScalarType( 1e-4 );
         linalg::assign( diag_, ScalarType( 0 ) );
-        linalg::apply( *A_neumann_diag_, ones_vec_, diag_ );
+        {
+            linalg::VectorQ1Scalar< ScalarType > ones( "ev_setup_ones", *domain_, ownership_mask_ );
+            linalg::assign( ones, ScalarType( 1 ) );
+            linalg::apply( *A_neumann_diag_, ones, diag_ );
+        }
 
         constexpr int num_gmres_tmps = 14;
         tmp_gmres_.reserve( num_gmres_tmps );
@@ -381,6 +378,12 @@ class EVSolver : public EnergySolver< ScalarType >
         // history rotation), so we snapshot the (T, T_prev) pair.
         Kokkos::deep_copy( T_backup_.grid_data(),      T_.grid_data() );
         Kokkos::deep_copy( T_prev_backup_.grid_data(), T_prev_.grid_data() );
+        // Mark ν_h stale at the start of a new timestep; the first Picard
+        // iteration's substep-0 will compute it.  Subsequent Picard
+        // iterations of the same timestep reuse it so the explicit-lagged
+        // stabilization stays consistent across the (T, u) Picard fixed
+        // point.  Substeps > 0 always recompute (T evolves between them).
+        nu_h_locked_for_step_ = false;
     }
 
     void restore_for_picard() override
@@ -399,44 +402,45 @@ class EVSolver : public EnergySolver< ScalarType >
         A_neumann_diag_->dt() = dt;
 
         {
+            linalg::VectorQ1Scalar< ScalarType > ones( "ev_step_ones", *domain_, ownership_mask_ );
+            linalg::assign( ones, ScalarType( 1 ) );
             linalg::assign( diag_, ScalarType( 0 ) );
-            linalg::apply( *A_neumann_diag_, ones_vec_, diag_ );
+            linalg::apply( *A_neumann_diag_, ones, diag_ );
             linalg::invert_entries( diag_ );
         }
+
+        const ScalarType gamma =
+            prm_.physics_parameters.constant_internal_heating
+                ? static_cast< ScalarType >( prm_.physics_parameters.constant_internal_heating_value )
+                : ScalarType( 0 );
 
         for ( int i = 0; i < prm_.time_stepping_parameters.energy_substeps; ++i )
         {
             util::logroot << "Solving energy (EV, substep " << i << ") ..." << std::endl;
 
-            // 1) lap_T = DivKGrad(κ) · T  /  M_lumped   ≈ -κ∇²T  (pointwise).
-            linalg::apply( *A_kappa_, T_, lap_T_ );
+            // 1+2) per-wedge lap projection and ν_h.  Skipped on Picard
+            // iterations > 0 of the first substep so all Picard sweeps see
+            // the same explicit-lagged stabilization field; substeps beyond
+            // the first always recompute since T evolves between them.
+            const bool need_nu_h = ( i > 0 ) || !nu_h_locked_for_step_;
+            if ( need_nu_h )
             {
-                auto       lap_view = lap_T_.grid_data();
-                const auto m_view   = M_lumped_.grid_data();
-                Kokkos::parallel_for(
-                    "ev_lap_T_lumped_mass_project",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
-                        { 0, 0, 0, 0 },
-                        { lap_view.extent( 0 ), lap_view.extent( 1 ),
-                          lap_view.extent( 2 ), lap_view.extent( 3 ) } ),
-                    KOKKOS_LAMBDA( int s, int ii, int jj, int kk ) {
-                        const ScalarType m = m_view( s, ii, jj, kk );
-                        lap_view( s, ii, jj, kk ) = ( m > ScalarType( 0 ) )
-                                                        ? lap_view( s, ii, jj, kk ) / m
-                                                        : ScalarType( 0 );
-                    } );
-                Kokkos::fence();
-            }
+                // 1) lap_w[wedge](j) = κ · (K_w · T_w / M_w_lumped)(j)
+                //    via precomputed per-wedge projector — strictly local.
+                lap_projector_->apply( T_, lap_w_ );
 
-            // 2) Entropy stats and per-cell ν_h, then project to nodes.
-            const auto stats = fe::wedge::operators::shell::compute_entropy_stats(
-                T_, ownership_mask_, ev_params_ );
-            fe::wedge::operators::shell::compute_nu_h(
-                nu_h_cell_, T_, T_prev_, velocity_, lap_T_.grid_data(),
-                *domain_, coords_shell_, coords_radii_,
-                dt, stats, ev_params_ );
-            fe::wedge::operators::shell::project_nu_h_to_nodes(
-                nu_h_nodal_, nu_h_cell_, *domain_ );
+                // 2) Entropy stats (volume-weighted E_avg) and per-wedge ν_h.
+                const auto stats = fe::wedge::operators::shell::compute_entropy_stats(
+                    T_, ownership_mask_, *domain_, coords_shell_, coords_radii_, ev_params_ );
+                fe::wedge::operators::shell::compute_nu_h(
+                    nu_h_wedge_, T_, T_prev_, velocity_, lap_w_,
+                    *domain_, coords_shell_, coords_radii_,
+                    dt, stats, ev_params_, gamma );
+            }
+            if ( i == 0 )
+            {
+                nu_h_locked_for_step_ = true;
+            }
 
             // 3) Explicit EV diffusion contribution: rhs_ev = ∫ ν_h ∇T · ∇φ_i.
             linalg::apply( *A_evdiff_, T_, rhs_ev_ );
@@ -497,22 +501,24 @@ class EVSolver : public EnergySolver< ScalarType >
 
     std::unique_ptr< AD_EV >                                                A_, A_neumann_, A_neumann_diag_;
     std::unique_ptr< TempMass >                                             M_;
-    std::unique_ptr< DivKGradOp >                                           A_kappa_, A_evdiff_;
+    std::unique_ptr< EVDiffOp >                                             A_evdiff_;
+    std::unique_ptr< LapProj >                                              lap_projector_;
     std::unique_ptr< FGMRESType >                                           solver_;
 
     linalg::VectorQ1Scalar< ScalarType >                                    g_, tmp_, q_, diag_;
     linalg::VectorQ1Scalar< ScalarType >                                    T_prev_;
-    linalg::VectorQ1Scalar< ScalarType >                                    nu_h_nodal_;
     linalg::VectorQ1Scalar< ScalarType >                                    rhs_ev_;
-    linalg::VectorQ1Scalar< ScalarType >                                    kappa_nodal_;
-    linalg::VectorQ1Scalar< ScalarType >                                    M_lumped_;
-    linalg::VectorQ1Scalar< ScalarType >                                    ones_vec_;
-    linalg::VectorQ1Scalar< ScalarType >                                    lap_T_;
     linalg::VectorQ1Scalar< ScalarType >                                    T_backup_;
     linalg::VectorQ1Scalar< ScalarType >                                    T_prev_backup_;
-    grid::Grid4DDataScalar< ScalarType >                                    nu_h_cell_;
+    grid::Grid5DDataScalar< ScalarType >                                    nu_h_wedge_;
+    typename LapProj::LapStorage                                            lap_w_;
     fe::wedge::operators::shell::EntropyViscosityParameters< ScalarType >   ev_params_{};
     std::vector< linalg::VectorQ1Scalar< ScalarType > >                     tmp_gmres_;
+
+    // Locked-by-Picard flag: false at the start of each timestep (set by
+    // snapshot_for_picard), set to true once substep-0 has computed ν_h so
+    // subsequent Picard iterations of the same step skip the recompute.
+    bool                                                                    nu_h_locked_for_step_ = false;
 };
 
 /// Explicit FCT energy update on the FV mesh, with L2 projection onto Q1 at

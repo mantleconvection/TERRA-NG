@@ -3,6 +3,10 @@
 #include <limits>
 
 #include "communication/shell/communication.hpp"
+#include "dense/vec.hpp"
+#include "fe/wedge/integrands.hpp"
+#include "fe/wedge/kernel_helpers.hpp"
+#include "fe/wedge/quadrature/quadrature.hpp"
 #include "grid/grid_types.hpp"
 #include "grid/shell/bit_masks.hpp"
 #include "grid/shell/spherical_shell.hpp"
@@ -140,25 +144,26 @@ ScalarT min_entry_owned(
 /// Compute the global entropy stats (T_min, T_max, T_m, E_avg, D) used by
 /// the ν_h formula.
 ///
-/// Pass the ownership mask so only *owned* nodes contribute — interior-ghost
-/// / halo nodes carry partial data that would double-count in reductions.
-///
 /// Implementation notes:
 ///   - T_m uses the global [min, max] range (NOT the volume-average), matching
 ///     the ASPECT choice (KHB 2012, p. 7).  This keeps the entropy symmetric
 ///     around the midpoint of the physical range, independent of domain-mass
 ///     bias.
-///   - E_avg is computed as a simple nodal average here, not a proper FEM
-///     volume integral.  That's consistent with per-cell-constant ν_h — the
-///     normalization just sets a scale; being accurate to the mass matrix
-///     buys nothing and would add a solve.  If numerical sensitivity proves
-///     problematic, we can swap to ‖M·E‖_1 / ‖M·1‖_1.
-///   - D uses the signed-magnitude ∞-norm over owned nodes.  A tiny floor
-///     (params.D_floor) prevents division by zero when T is nearly constant.
+///   - E_avg is a true FE volume integral evaluated on the same Felippa 3×2
+///     quadrature points as the per-wedge ν_h kernel:
+///       E_avg = (Σ_wedges Σ_q w_q·|det J(q)|·E(q)) / (Σ_wedges Σ_q w_q·|det J(q)|)
+///     where E(q) = ½·(T(q) − T_m)² and T(q) is interpolated from the 6
+///     wedge nodes via Σ_j N_j(q)·T_j.
+///   - D uses the signed-magnitude ∞-norm of (E − E_avg) over owned nodes.
+///     A tiny floor (params.D_floor) prevents division by zero when T is
+///     nearly constant.
 template < typename ScalarT >
 EntropyStats< ScalarT > compute_entropy_stats(
     const linalg::VectorQ1Scalar< ScalarT >&                     T,
     const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&     ownership_mask,
+    const grid::shell::DistributedDomain&                        domain,
+    const grid::Grid3DDataVec< ScalarT, 3 >&                     grid_coords,
+    const grid::Grid2DDataScalar< ScalarT >&                     radii,
     const EntropyViscosityParameters< ScalarT >&                 params,
     MPI_Comm                                                     comm = MPI_COMM_WORLD )
 {
@@ -166,59 +171,85 @@ EntropyStats< ScalarT > compute_entropy_stats(
 
     const auto T_data = T.grid_data();
 
-    // --- T range ----------------------------------------------------------
+    // T range — same as the nodal version.
     stats.T_min = min_entry_owned( T_data, ownership_mask, comm );
     stats.T_max = max_entry_owned( T_data, ownership_mask, comm );
     stats.T_m   = ScalarT( 0.5 ) * ( stats.T_min + stats.T_max );
 
     const ScalarT T_m_local = stats.T_m;
+    const auto    grid_lat  = grid_coords;
+    const auto    radii_v   = radii;
 
-    // --- ⟨E⟩ and |Ω| as ownership-mask nodal averages ---------------------
-    // We reduce (sum_E, n_owned) jointly by interpreting the ownership mask
-    // as a weight of 1.  Two reductions so we keep both sums exact.
-    ScalarT  sum_E = 0;
-    long int n_owned_local = 0;
+    constexpr int num_q = quadrature::quad_felippa_3x2_num_quad_points;
 
-    Kokkos::parallel_reduce(
-        "ev_entropy_sum",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
-            { 0, 0, 0, 0 },
-            { T_data.extent( 0 ), T_data.extent( 1 ), T_data.extent( 2 ), T_data.extent( 3 ) } ),
-        KOKKOS_LAMBDA( int id, int i, int j, int k, ScalarT& acc ) {
-            if ( util::has_flag( ownership_mask( id, i, j, k ), grid::NodeOwnershipFlag::OWNED ) )
-            {
-                const ScalarT d = T_data( id, i, j, k ) - T_m_local;
-                acc += ScalarT( 0.5 ) * d * d;
-            }
-        },
-        sum_E );
+    // E_avg as ⟨E⟩ = ∫ E dV / |Ω|, summed locally then MPI-reduced.
+    // Each owning rank only contributes integrals over cells in its
+    // subdomain; cells are not shared between ranks (only nodes are),
+    // so this is partition-of-unity at the integration level.
+    ScalarT sum_E_dV = 0;
+    ScalarT sum_dV   = 0;
 
     Kokkos::parallel_reduce(
-        "ev_owned_count",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
-            { 0, 0, 0, 0 },
-            { T_data.extent( 0 ), T_data.extent( 1 ), T_data.extent( 2 ), T_data.extent( 3 ) } ),
-        KOKKOS_LAMBDA( int id, int i, int j, int k, long int& acc ) {
-            if ( util::has_flag( ownership_mask( id, i, j, k ), grid::NodeOwnershipFlag::OWNED ) )
+        "ev_E_avg_volume_int",
+        grid::shell::local_domain_md_range_policy_cells( domain ),
+        KOKKOS_LAMBDA( int id, int xc, int yc, int rc, ScalarT& acc_E, ScalarT& acc_V ) {
+            dense::Vec< ScalarT, 3 > wedge_phy_surf[num_wedges_per_hex_cell][num_nodes_per_wedge_surface] = {};
+            wedge_surface_physical_coords( wedge_phy_surf, grid_lat, id, xc, yc );
+
+            const ScalarT r_1 = radii_v( id, rc );
+            const ScalarT r_2 = radii_v( id, rc + 1 );
+
+            dense::Vec< ScalarT, 3 > qp[num_q];
+            ScalarT                  qw[num_q];
+            quadrature::quad_felippa_3x2_quad_points( qp );
+            quadrature::quad_felippa_3x2_quad_weights( qw );
+
+            dense::Vec< ScalarT, num_nodes_per_wedge > T_w[num_wedges_per_hex_cell];
+            extract_local_wedge_scalar_coefficients( T_w, id, xc, yc, rc, T_data );
+
+            for ( int wedge = 0; wedge < num_wedges_per_hex_cell; ++wedge )
             {
-                acc += 1;
+                for ( int q = 0; q < num_q; ++q )
+                {
+                    const dense::Mat< ScalarT, 3, 3 > J =
+                        jac( wedge_phy_surf[wedge], r_1, r_2, qp[q] );
+                    const ScalarT abs_det = Kokkos::abs( J.det() );
+                    if ( abs_det < ScalarT( 1e-30 ) )
+                    {
+                        continue;
+                    }
+
+                    ScalarT T_q = 0;
+                    for ( int j = 0; j < num_nodes_per_wedge; ++j )
+                    {
+                        T_q += shape( j, qp[q] ) * T_w[wedge]( j );
+                    }
+                    const ScalarT d  = T_q - T_m_local;
+                    const ScalarT Eq = ScalarT( 0.5 ) * d * d;
+
+                    acc_E += qw[q] * abs_det * Eq;
+                    acc_V += qw[q] * abs_det;
+                }
             }
         },
-        n_owned_local );
+        sum_E_dV,
+        sum_dV );
 
     Kokkos::fence();
 
-    MPI_Allreduce( MPI_IN_PLACE, &sum_E,        1, mpi::mpi_datatype< ScalarT >(),  MPI_SUM, comm );
-    MPI_Allreduce( MPI_IN_PLACE, &n_owned_local, 1, MPI_LONG,                        MPI_SUM, comm );
+    MPI_Allreduce( MPI_IN_PLACE, &sum_E_dV, 1, mpi::mpi_datatype< ScalarT >(), MPI_SUM, comm );
+    MPI_Allreduce( MPI_IN_PLACE, &sum_dV,   1, mpi::mpi_datatype< ScalarT >(), MPI_SUM, comm );
 
-    stats.E_avg = ( n_owned_local > 0 ) ? ( sum_E / static_cast< ScalarT >( n_owned_local ) ) : ScalarT( 0 );
+    stats.E_avg = ( sum_dV > ScalarT( 0 ) ) ? ( sum_E_dV / sum_dV ) : ScalarT( 0 );
 
-    // --- D = max|E − E_avg| ---------------------------------------------
-    ScalarT D_local = 0;
+    // D = max|E − E_avg| over owned nodes — same as the nodal version
+    // (∞-norm doesn't have a natural volume weight; nodal extrema are
+    // strictly conservative for the residual cap).
+    ScalarT       D_local     = 0;
     const ScalarT E_avg_local = stats.E_avg;
 
     Kokkos::parallel_reduce(
-        "ev_D_max",
+        "ev_D_max_wedge",
         Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
             { 0, 0, 0, 0 },
             { T_data.extent( 0 ), T_data.extent( 1 ), T_data.extent( 2 ), T_data.extent( 3 ) } ),
@@ -242,249 +273,165 @@ EntropyStats< ScalarT > compute_entropy_stats(
     return stats;
 }
 
-/// Compute the per-cell entropy viscosity ν_h.
+/// Compute per-wedge entropy viscosity ν_h on the shell.
 ///
-/// Implementation notes (first-cut, simplified):
-///  - Evaluates r_E at the 8 corner nodes of each hex cell (not Felippa
-///    quadrature points).  Taking the ∞-norm over 8 corners is conservative
-///    and requires no quadrature machinery.
-///  - The diffusion contribution `−κ∇²T` enters via `lap_T_pointwise`.  The
-///    caller is responsible for producing this Q1 nodal field; the standard
-///    recipe is `lap_T_pointwise = (DivKGrad(κ) · T) / M_lumped`, which is
-///    the lumped-mass projection of the FE-assembled (weak) Laplacian back
-///    to a pointwise estimate of `−∇·(κ∇T)`.  Pass a zero-filled vector to
-///    drop the term (e.g. for pure advection tests, κ = 0).
-///  - ∂_t E uses simple first-order backward difference: (E^n − E^{n-1})/dt.
-///    ASPECT uses BDF-2 with lagged indices (E^{n-1} − E^{n-2}) to keep the
-///    stabilization explicit; we can swap later.  For now T_nm1 holds the
-///    "previous" temperature.
-///  - ∇T is approximated as a face-averaged central difference in the local
-///    (x̂, ŷ, r̂) cell basis.  For spherical-shell wedge cells the three local
-///    axes are approximately orthogonal and this is accurate to O(h).
-///  - h_K is the cell diagonal divided by √3 — the "equivalent edge length"
-///    of a cube with the same diagonal.  Cheap and robust for non-uniform
-///    wedge cells.
+/// One scalar ν_h per wedge (2 wedges per hex), evaluated at the same
+/// Felippa 3×2 quadrature points used by the existing FE operators (Mass,
+/// DivKGrad, AD-SUPG, ...). At each quad point we compute:
+///   - field interpolants T(q), Tp(q), u(q), Lap(q) via Σ_j N_j(q)·field_j
+///     over the 6 wedge nodes,
+///   - FE-consistent physical-space gradient grad_T(q) = J^{-T}(q)·∇_ξ T(q)
+///     using the existing `jac()` and `inv_transposed()` helpers,
+///   - the strong-form residual r_E = |∂_t E + (T−T_m)·(u·∇T + Lap)|.
+/// The cell-constant per-wedge output is the ∞-norm of r_E over quad points
+/// folded into the standard ν_h cap:
+///   ν_h_w = min( α_max·h_w·‖u‖_∞,w,  α_E·h_w²·r_E_max,w / D )
+/// with `h_w = V_wedge^{1/3}` from the same quadrature.
 ///
-/// Inputs:
-///  - `nu_h`: pre-allocated per-cell output.  Must have extents
-///    (num_subdomains, N−1, N−1, N_r−1) matching `local_domain_md_range_policy_cells`.
-///  - `T_n`, `T_nm1`: Q1 temperature at current and previous timestep.
-///  - `u`: Q1 vector velocity (nodal).
-///  - `lap_data`: Q1 nodal estimate of `−κ∇²T` (or zero to skip).
-///  - `domain`, `grid_coords`, `radii`: shell geometry.
-///  - `dt`, `stats`, `params`: step size and pre-computed EV parameters.
-template < typename ScalarT >
+/// The Lap input is a per-wedge nodal field of the weak −κ∇²T projected via
+/// each wedge's own lumped mass (see WedgeLumpedLapProjector).  Shape:
+///   (num_subdomains, Nc_x, Nc_y, Nc_r, num_wedges_per_hex_cell) of
+///   dense::Vec<ScalarT, num_nodes_per_wedge>.
+/// The kernel reads lap_w[wedge](j) directly and interpolates
+///   Lap(q) = Σ_j N_j(q) · lap_w[wedge](j).
+/// No global Q1 lap field, no halo exchange.
+template < typename ScalarT, typename LapWView >
 void compute_nu_h(
-    grid::Grid4DDataScalar< ScalarT >&                           nu_h,
+    grid::Grid5DDataScalar< ScalarT >&                           nu_h_wedge,
     const linalg::VectorQ1Scalar< ScalarT >&                     T_n,
     const linalg::VectorQ1Scalar< ScalarT >&                     T_nm1,
     const linalg::VectorQ1Vec< ScalarT, 3 >&                     u,
-    const grid::Grid4DDataScalar< ScalarT >&                     lap_data,
+    const LapWView&                                              lap_w,
     const grid::shell::DistributedDomain&                        domain,
     const grid::Grid3DDataVec< ScalarT, 3 >&                     grid_coords,
     const grid::Grid2DDataScalar< ScalarT >&                     radii,
     ScalarT                                                      dt,
     const EntropyStats< ScalarT >&                               stats,
-    const EntropyViscosityParameters< ScalarT >&                 params )
+    const EntropyViscosityParameters< ScalarT >&                 params,
+    ScalarT                                                      gamma = ScalarT( 0 ) )
 {
     const auto T_data    = T_n.grid_data();
     const auto T_prev    = T_nm1.grid_data();
     const auto u_data    = u.grid_data();
+    const auto lap_w_dev = lap_w;
 
     const ScalarT T_m       = stats.T_m;
     const ScalarT inv_D     = ScalarT( 1 ) / stats.D;
     const ScalarT inv_dt    = ScalarT( 1 ) / dt;
     const ScalarT alpha_max = params.alpha_max;
     const ScalarT alpha_E   = params.alpha_E;
+    const ScalarT gamma_    = gamma;
+    const auto    grid_lat  = grid_coords;
+    const auto    radii_v   = radii;
 
-    // Offsets of the 8 hex-cell corners in (x_cell, y_cell, r_cell) index space.
-    // Bit-ordering: bit 0 = x, bit 1 = y, bit 2 = r.  So corner c(b) has
-    //   (offs_x, offs_y, offs_r) = (b & 1, (b >> 1) & 1, (b >> 2) & 1).
+    constexpr int num_q = quadrature::quad_felippa_3x2_num_quad_points;
 
     Kokkos::parallel_for(
         "compute_nu_h",
         grid::shell::local_domain_md_range_policy_cells( domain ),
         KOKKOS_LAMBDA( int id, int xc, int yc, int rc ) {
-            // Gather corners in physical space + field values at those corners.
-            dense::Vec< ScalarT, 3 > x_corner[8];
-            ScalarT                  T_c[8];
-            ScalarT                  Tp_c[8];
-            dense::Vec< ScalarT, 3 > u_c[8];
-            ScalarT                  Lap_c[8]; // ≈ −κ∇²T (pointwise) at each corner
+            // Wedge surface coords on the unit sphere, both wedges of the hex.
+            dense::Vec< ScalarT, 3 > wedge_phy_surf[num_wedges_per_hex_cell][num_nodes_per_wedge_surface] = {};
+            wedge_surface_physical_coords( wedge_phy_surf, grid_lat, id, xc, yc );
 
-            for ( int b = 0; b < 8; ++b )
+            // Inner / outer radii of this hex's radial slab.
+            const ScalarT r_1 = radii_v( id, rc );
+            const ScalarT r_2 = radii_v( id, rc + 1 );
+
+            // Felippa 3x2 quadrature.
+            dense::Vec< ScalarT, 3 > qp[num_q];
+            ScalarT                  qw[num_q];
+            quadrature::quad_felippa_3x2_quad_points( qp );
+            quadrature::quad_felippa_3x2_quad_weights( qw );
+
+            // Per-wedge gather of T_n, T_{n-1}, u (3 components).  Lap is
+            // already per-wedge (read directly from lap_w_dev below).
+            dense::Vec< ScalarT, num_nodes_per_wedge > T_w[num_wedges_per_hex_cell];
+            dense::Vec< ScalarT, num_nodes_per_wedge > Tp_w[num_wedges_per_hex_cell];
+            dense::Vec< ScalarT, num_nodes_per_wedge > u_w[num_wedges_per_hex_cell][3];
+
+            extract_local_wedge_scalar_coefficients( T_w,  id, xc, yc, rc, T_data );
+            extract_local_wedge_scalar_coefficients( Tp_w, id, xc, yc, rc, T_prev );
+            for ( int d = 0; d < 3; ++d )
             {
-                const int ox = ( b & 1 );
-                const int oy = ( ( b >> 1 ) & 1 );
-                const int or_ = ( ( b >> 2 ) & 1 );
-                const int xx = xc + ox;
-                const int yy = yc + oy;
-                const int rr = rc + or_;
-
-                x_corner[b] = grid::shell::coords( id, xx, yy, rr, grid_coords, radii );
-                T_c[b]      = T_data( id, xx, yy, rr );
-                Tp_c[b]     = T_prev( id, xx, yy, rr );
-                u_c[b]( 0 ) = u_data( id, xx, yy, rr, 0 );
-                u_c[b]( 1 ) = u_data( id, xx, yy, rr, 1 );
-                u_c[b]( 2 ) = u_data( id, xx, yy, rr, 2 );
-                Lap_c[b]    = lap_data( id, xx, yy, rr );
+                dense::Vec< ScalarT, num_nodes_per_wedge > comp[num_wedges_per_hex_cell];
+                extract_local_wedge_vector_coefficients( comp, id, xc, yc, rc, d, u_data );
+                u_w[0][d] = comp[0];
+                u_w[1][d] = comp[1];
             }
 
-            // Face-averaged T and corner-averaged positions in the three local
-            // directions.  The "x0 face" is where the x-offset is 0, and so on.
-            ScalarT                  T_x0 = 0, T_x1 = 0, T_y0 = 0, T_y1 = 0, T_r0 = 0, T_r1 = 0;
-            dense::Vec< ScalarT, 3 > X_x0{}, X_x1{}, X_y0{}, X_y1{}, X_r0{}, X_r1{};
-            for ( int b = 0; b < 8; ++b )
+            for ( int wedge = 0; wedge < num_wedges_per_hex_cell; ++wedge )
             {
-                const ScalarT q = ScalarT( 0.25 );
-                if ( ( b & 1 ) == 0 )       { T_x0 += q * T_c[b]; X_x0 = X_x0 + x_corner[b] * q; }
-                else                         { T_x1 += q * T_c[b]; X_x1 = X_x1 + x_corner[b] * q; }
-                if ( ( ( b >> 1 ) & 1 ) == 0 ) { T_y0 += q * T_c[b]; X_y0 = X_y0 + x_corner[b] * q; }
-                else                            { T_y1 += q * T_c[b]; X_y1 = X_y1 + x_corner[b] * q; }
-                if ( ( ( b >> 2 ) & 1 ) == 0 ) { T_r0 += q * T_c[b]; X_r0 = X_r0 + x_corner[b] * q; }
-                else                            { T_r1 += q * T_c[b]; X_r1 = X_r1 + x_corner[b] * q; }
-            }
+                ScalarT V_wedge    = 0;
+                ScalarT r_E_max    = 0;
+                ScalarT u_max_norm = 0;
 
-            // Local-axis edge vectors + lengths.
-            const dense::Vec< ScalarT, 3 > ex_vec = X_x1 - X_x0;
-            const dense::Vec< ScalarT, 3 > ey_vec = X_y1 - X_y0;
-            const dense::Vec< ScalarT, 3 > er_vec = X_r1 - X_r0;
-            const ScalarT                  dx    = ex_vec.norm();
-            const ScalarT                  dy    = ey_vec.norm();
-            const ScalarT                  dr    = er_vec.norm();
+                const auto& Lap_w_w = lap_w_dev( id, xc, yc, rc, wedge );
 
-            // Guard against degenerate cells.
-            const ScalarT eps = ScalarT( 1e-30 );
-            if ( dx < eps || dy < eps || dr < eps )
-            {
-                nu_h( id, xc, yc, rc ) = ScalarT( 0 );
-                return;
-            }
-
-            const dense::Vec< ScalarT, 3 > ex_hat = ex_vec * ( ScalarT( 1 ) / dx );
-            const dense::Vec< ScalarT, 3 > ey_hat = ey_vec * ( ScalarT( 1 ) / dy );
-            const dense::Vec< ScalarT, 3 > er_hat = er_vec * ( ScalarT( 1 ) / dr );
-
-            // Central differences in the local frame, then rotate to physical.
-            // Assumes (ex_hat, ey_hat, er_hat) ≈ orthogonal, true for shell cells.
-            const ScalarT                  dT_dx = ( T_x1 - T_x0 ) / dx;
-            const ScalarT                  dT_dy = ( T_y1 - T_y0 ) / dy;
-            const ScalarT                  dT_dr = ( T_r1 - T_r0 ) / dr;
-            const dense::Vec< ScalarT, 3 > grad_T =
-                ex_hat * dT_dx + ey_hat * dT_dy + er_hat * dT_dr;
-
-            // Cell size h_K: diagonal / sqrt(3), the "equivalent cubic edge".
-            const dense::Vec< ScalarT, 3 > diag = x_corner[7] - x_corner[0];
-            const ScalarT                  h_K  = diag.norm() / Kokkos::sqrt( ScalarT( 3 ) );
-
-            // r_E at each corner, take the max over the 8 corners.
-            ScalarT r_E_max   = 0;
-            ScalarT u_max_norm = 0;
-            for ( int b = 0; b < 8; ++b )
-            {
-                const ScalarT dT     = T_c[b]  - T_m;
-                const ScalarT dT_p   = Tp_c[b] - T_m;
-                const ScalarT E      = ScalarT( 0.5 ) * dT   * dT;
-                const ScalarT Ep     = ScalarT( 0.5 ) * dT_p * dT_p;
-                const ScalarT dE_dt  = ( E - Ep ) * inv_dt;
-                const ScalarT u_dot_gradT =
-                    u_c[b]( 0 ) * grad_T( 0 ) + u_c[b]( 1 ) * grad_T( 1 ) + u_c[b]( 2 ) * grad_T( 2 );
-                // Full KHB residual:  ∂_t E + (T − T_m)·(u·∇T − κ∇²T).
-                // `Lap_c[b]` already encodes −κ∇²T (lumped-mass-projected), so add it here.
-                const ScalarT r_E_corner = Kokkos::abs( dE_dt + dT * ( u_dot_gradT + Lap_c[b] ) );
-                r_E_max                  = Kokkos::max( r_E_max, r_E_corner );
-                u_max_norm               = Kokkos::max( u_max_norm, u_c[b].norm() );
-            }
-
-            // ν_h = min(α_max · h · ‖u‖_∞,  α_E · h² · r_E / D)
-            const ScalarT nu_max = alpha_max * h_K * u_max_norm;
-            const ScalarT nu_E   = alpha_E * h_K * h_K * r_E_max * inv_D;
-            nu_h( id, xc, yc, rc ) = Kokkos::min( nu_max, nu_E );
-        } );
-
-    Kokkos::fence();
-}
-
-/// Backward-compatible overload: drops the `−κ∇²T` term from the residual.
-/// Allocates a transient zero-filled `lap_data` view matching T's extents and
-/// forwards to the primary `compute_nu_h`.  Use this when the diffusion-
-/// residual contribution is not needed (e.g. pure advection, κ = 0).  Tests
-/// that wire up a proper lumped-mass-projected Laplacian call the primary
-/// overload with their own `lap_data`.
-template < typename ScalarT >
-void compute_nu_h(
-    grid::Grid4DDataScalar< ScalarT >&                           nu_h,
-    const linalg::VectorQ1Scalar< ScalarT >&                     T_n,
-    const linalg::VectorQ1Scalar< ScalarT >&                     T_nm1,
-    const linalg::VectorQ1Vec< ScalarT, 3 >&                     u,
-    const grid::shell::DistributedDomain&                        domain,
-    const grid::Grid3DDataVec< ScalarT, 3 >&                     grid_coords,
-    const grid::Grid2DDataScalar< ScalarT >&                     radii,
-    ScalarT                                                      dt,
-    const EntropyStats< ScalarT >&                               stats,
-    const EntropyViscosityParameters< ScalarT >&                 params )
-{
-    // Kokkos::View memory is zero-initialized by default for trivial scalars,
-    // so this view is the zero field with no extra fill needed.
-    const auto T_grid = T_n.grid_data();
-    grid::Grid4DDataScalar< ScalarT > lap_zero(
-        "ev_lap_zero",
-        T_grid.extent( 0 ), T_grid.extent( 1 ), T_grid.extent( 2 ), T_grid.extent( 3 ) );
-
-    compute_nu_h( nu_h, T_n, T_nm1, u, lap_zero, domain, grid_coords, radii,
-                  dt, stats, params );
-}
-
-/// Project a per-cell ν_h field onto Q1 nodes by averaging the (up-to-)eight
-/// cells touching each node.
-///
-/// Cells outside the local subdomain extent are silently skipped — halo
-/// contributions from neighbouring subdomains are not included.  At subdomain
-/// boundaries the nodal value therefore under-samples by roughly one cell
-/// in each missing direction; ν_h is small anyway in smooth regions, and
-/// this loss is only at the boundary strip.  The effect on the final solve
-/// is expected to be a small perturbation of the boundary coupling, bounded
-/// by `nu_h_max · h`.
-///
-/// If you need fully consistent values, follow this call with a
-/// `pack_send_and_recv_local_subdomain_boundaries` / `unpack_and_reduce`
-/// round-trip using the sum and a neighbour count — see DivKGrad's
-/// apply_impl for the idiom.
-template < typename ScalarT >
-void project_nu_h_to_nodes(
-    linalg::VectorQ1Scalar< ScalarT >&                     nu_h_nodal,
-    const grid::Grid4DDataScalar< ScalarT >&               nu_h_cells,
-    const grid::shell::DistributedDomain&                  domain )
-{
-    auto            nu_node = nu_h_nodal.grid_data();
-    const long long nx_c    = nu_h_cells.extent( 1 );
-    const long long ny_c    = nu_h_cells.extent( 2 );
-    const long long nr_c    = nu_h_cells.extent( 3 );
-
-    Kokkos::parallel_for(
-        "project_nu_h_to_nodes",
-        grid::shell::local_domain_md_range_policy_nodes( domain ),
-        KOKKOS_LAMBDA( int id, int xn, int yn, int rn ) {
-            ScalarT sum   = 0;
-            int     count = 0;
-            for ( int ox = -1; ox <= 0; ++ox )
-            {
-                for ( int oy = -1; oy <= 0; ++oy )
+                for ( int q = 0; q < num_q; ++q )
                 {
-                    for ( int or_ = -1; or_ <= 0; ++or_ )
+                    // Full 3D Jacobian J = ∂x/∂(ξ,η,ζ) at this quad point.
+                    const dense::Mat< ScalarT, 3, 3 > J =
+                        jac( wedge_phy_surf[wedge], r_1, r_2, qp[q] );
+                    const ScalarT det     = J.det();
+                    const ScalarT abs_det = Kokkos::abs( det );
+                    if ( abs_det < ScalarT( 1e-30 ) )
                     {
-                        const int xc = xn + ox;
-                        const int yc = yn + oy;
-                        const int rc = rn + or_;
-                        if ( xc >= 0 && xc < nx_c && yc >= 0 && yc < ny_c && rc >= 0 && rc < nr_c )
+                        continue; // degenerate — skip this quad point
+                    }
+                    const dense::Mat< ScalarT, 3, 3 > J_inv_t = J.inv_transposed( det );
+
+                    // Interpolate fields and compute physical grad_T at q.
+                    ScalarT                  T_q   = 0;
+                    ScalarT                  Tp_q  = 0;
+                    ScalarT                  Lap_q = 0;
+                    dense::Vec< ScalarT, 3 > u_q{};
+                    dense::Vec< ScalarT, 3 > grad_T_q{};
+
+                    for ( int j = 0; j < num_nodes_per_wedge; ++j )
+                    {
+                        const ScalarT N_j        = shape( j, qp[q] );
+                        const auto    grad_xi_j  = grad_shape( j, qp[q] );
+                        const auto    grad_phys  = J_inv_t * grad_xi_j;
+
+                        T_q   += N_j * T_w[wedge]( j );
+                        Tp_q  += N_j * Tp_w[wedge]( j );
+                        Lap_q += N_j * Lap_w_w( j );
+                        for ( int d = 0; d < 3; ++d )
                         {
-                            sum += nu_h_cells( id, xc, yc, rc );
-                            ++count;
+                            u_q( d )      += N_j * u_w[wedge][d]( j );
+                            grad_T_q( d ) += T_w[wedge]( j ) * grad_phys( d );
                         }
                     }
+
+                    // Strong-form residual at the quad point.
+                    const ScalarT dT     = T_q  - T_m;
+                    const ScalarT dT_p   = Tp_q - T_m;
+                    const ScalarT E      = ScalarT( 0.5 ) * dT   * dT;
+                    const ScalarT Ep     = ScalarT( 0.5 ) * dT_p * dT_p;
+                    const ScalarT dE_dt  = ( E - Ep ) * inv_dt;
+                    const ScalarT u_dot_g =
+                        u_q( 0 ) * grad_T_q( 0 ) + u_q( 1 ) * grad_T_q( 1 ) + u_q( 2 ) * grad_T_q( 2 );
+                    // Full KHB residual:
+                    //   r_E = ∂_t E + (T − T_m)·(u·∇T − κ∇²T − γ).
+                    // Lap_q already encodes −κ∇²T (lumped-mass-projected).
+                    const ScalarT r_E_q =
+                        Kokkos::abs( dE_dt + dT * ( u_dot_g + Lap_q - gamma_ ) );
+
+                    r_E_max    = Kokkos::max( r_E_max, r_E_q );
+                    u_max_norm = Kokkos::max( u_max_norm, u_q.norm() );
+                    V_wedge   += qw[q] * abs_det;
                 }
+
+                // Wedge characteristic length from its own physical volume.
+                const ScalarT h_w = ( V_wedge > ScalarT( 0 ) )
+                                        ? Kokkos::pow( V_wedge, ScalarT( 1.0 / 3.0 ) )
+                                        : ScalarT( 0 );
+
+                const ScalarT nu_max = alpha_max * h_w * u_max_norm;
+                const ScalarT nu_E   = alpha_E * h_w * h_w * r_E_max * inv_D;
+                nu_h_wedge( id, xc, yc, rc, wedge ) = Kokkos::min( nu_max, nu_E );
             }
-            nu_node( id, xn, yn, rn ) = ( count > 0 ) ? sum / static_cast< ScalarT >( count ) : ScalarT( 0 );
         } );
 
     Kokkos::fence();

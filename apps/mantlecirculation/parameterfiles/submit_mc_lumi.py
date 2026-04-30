@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit the A3, C1, and C3 mantlecirculation validation runs on LUMI-G.
+"""Submit the A3, C1, C3, and C4 mantlecirculation EV-stabilized runs on LUMI-G.
 
 Resolves each config TOML relative to this script's own directory. The mantlecirculation
 binary path is taken from `$TERRANEO_BIN`; the SLURM account from `$SLURM_ACCOUNT` (default
@@ -31,9 +31,10 @@ nodes, ntasks_per_node, time_limit = 2, 8, "24:00:00"
 
 # (tag, config-filename) pairs — config resolved against script_dir.
 RUNS = [
-    ("A3_lvl6_supg_cfl025",          "config_A3_lvl6_supg_cfl025.toml"),
-    ("C1_lvl6_supg_cfl05_picard2",   "config_C1_lvl6_supg_cfl05_picard2.toml"),
-    ("C3_lvl6_supg_cfl025_picard2",  "config_C3_lvl6_supg_cfl025_picard2.toml"),
+    ("A3_lvl6_ev_cfl025",            "config_A3_lvl6_ev_cfl025.toml"),
+    ("C1_lvl6_ev_cfl025_picard2",    "config_C1_lvl6_ev_cfl025_picard2.toml"),
+    ("C3_lvl6_ev_cfl025_picard2",    "config_C3_lvl6_ev_cfl025_picard2.toml"),
+    ("C4_lvl6_ev_cfl025_picard2",    "config_C4_lvl6_ev_cfl025_picard2.toml"),
 ]
 
 job_dir = Path("job_scripts"); job_dir.mkdir(exist_ok=True)
