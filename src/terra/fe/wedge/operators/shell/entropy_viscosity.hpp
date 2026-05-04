@@ -26,7 +26,7 @@ namespace terra::fe::wedge::operators::shell {
 /// diffusion is added; near shocks/layers r_E is large and the scheme kicks in
 /// with a diffusion bounded above by first-order upwind.
 ///
-/// Full formulas (ASPECT §3.2.6, Eq. 15):
+/// Full formulas (KHB 2012, GJI 191, page 7 — exact paper text):
 ///   E(T)     = ½ (T − T_m)²,                    T_m = ½(T_min + T_max)
 ///   r_E|_K   = ‖∂_t E + (T − T_m)·(u·∇T − κ∇²T − γ)‖_{∞, K}
 ///   E_avg    = (1/|Ω|) ∫_Ω E(T)
@@ -67,6 +67,11 @@ struct EntropyViscosityParameters
     /// guard explicitly to avoid NaNs in pure-advection tests where T is
     /// identically the initial cone shape away from the front.
     ScalarT D_floor = ScalarT( 1e-14 );
+
+    /// If true, set ν_h_wedge = 0 for any wedge with at least one corner on
+    /// a Dirichlet boundary.  Removes the BL-localised over-damping caused
+    /// by the lumped-mass Lap projection's wall-flux contamination.
+    bool mask_dirichlet_wedges = false;
 };
 
 /// Global scalar stats derived from the current temperature field.
@@ -242,31 +247,58 @@ EntropyStats< ScalarT > compute_entropy_stats(
 
     stats.E_avg = ( sum_dV > ScalarT( 0 ) ) ? ( sum_E_dV / sum_dV ) : ScalarT( 0 );
 
-    // D = max|E − E_avg| over owned nodes — same as the nodal version
-    // (∞-norm doesn't have a natural volume weight; nodal extrema are
-    // strictly conservative for the residual cap).
-    ScalarT       D_local     = 0;
-    const ScalarT E_avg_local = stats.E_avg;
+    // D normalisation: volume-weighted L² norm of (E − E_avg), evaluated at the
+    // same Felippa quadrature as E_avg.  Tracks the entropy field's overall
+    // magnitude rather than a single BL-extremum node.
+    //   D = ( ∫(E − E_avg)² dV / |Ω| )^½
+    const ScalarT E_avg_local      = stats.E_avg;
+    ScalarT       sum_dE2_dV_local = 0;
 
     Kokkos::parallel_reduce(
-        "ev_D_max_wedge",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
-            { 0, 0, 0, 0 },
-            { T_data.extent( 0 ), T_data.extent( 1 ), T_data.extent( 2 ), T_data.extent( 3 ) } ),
-        KOKKOS_LAMBDA( int id, int i, int j, int k, ScalarT& lmax ) {
-            if ( util::has_flag( ownership_mask( id, i, j, k ), grid::NodeOwnershipFlag::OWNED ) )
+        "ev_D_l2_volume",
+        grid::shell::local_domain_md_range_policy_cells( domain ),
+        KOKKOS_LAMBDA( int id, int xc, int yc, int rc, ScalarT& acc ) {
+            dense::Vec< ScalarT, 3 >
+                wedge_phy_surf[num_wedges_per_hex_cell][num_nodes_per_wedge_surface] = {};
+            wedge_surface_physical_coords( wedge_phy_surf, grid_lat, id, xc, yc );
+
+            const ScalarT r_1 = radii_v( id, rc );
+            const ScalarT r_2 = radii_v( id, rc + 1 );
+
+            dense::Vec< ScalarT, 3 > qp[num_q];
+            ScalarT                  qw[num_q];
+            quadrature::quad_felippa_3x2_quad_points( qp );
+            quadrature::quad_felippa_3x2_quad_weights( qw );
+
+            dense::Vec< ScalarT, num_nodes_per_wedge > T_w[num_wedges_per_hex_cell];
+            extract_local_wedge_scalar_coefficients( T_w, id, xc, yc, rc, T_data );
+
+            for ( int wedge = 0; wedge < num_wedges_per_hex_cell; ++wedge )
             {
-                const ScalarT d  = T_data( id, i, j, k ) - T_m_local;
-                const ScalarT E  = ScalarT( 0.5 ) * d * d;
-                const ScalarT dE = Kokkos::abs( E - E_avg_local );
-                lmax             = Kokkos::max( lmax, dE );
+                for ( int q = 0; q < num_q; ++q )
+                {
+                    const dense::Mat< ScalarT, 3, 3 > J =
+                        jac( wedge_phy_surf[wedge], r_1, r_2, qp[q] );
+                    const ScalarT abs_det = Kokkos::abs( J.det() );
+                    if ( abs_det < ScalarT( 1e-30 ) ) continue;
+                    ScalarT T_q = 0;
+                    for ( int j = 0; j < num_nodes_per_wedge; ++j )
+                        T_q += shape( j, qp[q] ) * T_w[wedge]( j );
+                    const ScalarT d  = T_q - T_m_local;
+                    const ScalarT Eq = ScalarT( 0.5 ) * d * d;
+                    const ScalarT dE = Eq - E_avg_local;
+                    acc += qw[q] * abs_det * dE * dE;
+                }
             }
         },
-        Kokkos::Max< ScalarT >( D_local ) );
-
+        sum_dE2_dV_local );
     Kokkos::fence();
-
-    MPI_Allreduce( MPI_IN_PLACE, &D_local, 1, mpi::mpi_datatype< ScalarT >(), MPI_MAX, comm );
+    MPI_Allreduce( MPI_IN_PLACE, &sum_dE2_dV_local, 1,
+                   mpi::mpi_datatype< ScalarT >(), MPI_SUM, comm );
+    // sum_dV is already the global volume from the E_avg reduction above.
+    const ScalarT D_local = ( sum_dV > ScalarT( 0 ) )
+                                ? Kokkos::sqrt( sum_dE2_dV_local / sum_dV )
+                                : ScalarT( 0 );
 
     stats.D = Kokkos::max( D_local, params.D_floor );
 
@@ -282,26 +314,29 @@ EntropyStats< ScalarT > compute_entropy_stats(
 ///     over the 6 wedge nodes,
 ///   - FE-consistent physical-space gradient grad_T(q) = J^{-T}(q)·∇_ξ T(q)
 ///     using the existing `jac()` and `inv_transposed()` helpers,
-///   - the strong-form residual r_E = |∂_t E + (T−T_m)·(u·∇T + Lap)|.
-/// The cell-constant per-wedge output is the ∞-norm of r_E over quad points
+///   - the strong-form KHB-2012 residual
+///       r_E = |∂_t E + (T−T_m)·(u·∇T − κ∇²T − γ)|.
+/// The per-wedge r_E is the L²-mean over Felippa quadpoints
+///   r_E_w = ( ∫ r_E² dV / V_wedge )^½
 /// folded into the standard ν_h cap:
-///   ν_h_w = min( α_max·h_w·‖u‖_∞,w,  α_E·h_w²·r_E_max,w / D )
+///   ν_h_w = min( α_max·h_w·‖u‖_∞,w,  α_E·h_w²·r_E_w / D )
 /// with `h_w = V_wedge^{1/3}` from the same quadrature.
 ///
-/// The Lap input is a per-wedge nodal field of the weak −κ∇²T projected via
-/// each wedge's own lumped mass (see WedgeLumpedLapProjector).  Shape:
-///   (num_subdomains, Nc_x, Nc_y, Nc_r, num_wedges_per_hex_cell) of
-///   dense::Vec<ScalarT, num_nodes_per_wedge>.
-/// The kernel reads lap_w[wedge](j) directly and interpolates
+/// The Lap input is a Q1-nodal field carrying the global lumped-mass
+/// projection of −κ∇²T (i.e. (K·T)/M_lumped, with K the global Galerkin
+/// Laplacian and M_lumped the global lumped mass).  Continuity across
+/// element interfaces makes r_E collapse to ≈0 in smooth regions, so ν_h
+/// honours its no-stabilization-needed limit.  The kernel extracts the 6
+/// wedge-local nodal values per wedge and interpolates
 ///   Lap(q) = Σ_j N_j(q) · lap_w[wedge](j).
-/// No global Q1 lap field, no halo exchange.
-template < typename ScalarT, typename LapWView >
+template < typename ScalarT >
 void compute_nu_h(
     grid::Grid5DDataScalar< ScalarT >&                           nu_h_wedge,
     const linalg::VectorQ1Scalar< ScalarT >&                     T_n,
     const linalg::VectorQ1Scalar< ScalarT >&                     T_nm1,
     const linalg::VectorQ1Vec< ScalarT, 3 >&                     u,
-    const LapWView&                                              lap_w,
+    const grid::Grid4DDataScalar< ScalarT >&                     lap_data,
+    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
     const grid::shell::DistributedDomain&                        domain,
     const grid::Grid3DDataVec< ScalarT, 3 >&                     grid_coords,
     const grid::Grid2DDataScalar< ScalarT >&                     radii,
@@ -310,10 +345,10 @@ void compute_nu_h(
     const EntropyViscosityParameters< ScalarT >&                 params,
     ScalarT                                                      gamma = ScalarT( 0 ) )
 {
-    const auto T_data    = T_n.grid_data();
-    const auto T_prev    = T_nm1.grid_data();
-    const auto u_data    = u.grid_data();
-    const auto lap_w_dev = lap_w;
+    const auto T_data = T_n.grid_data();
+    const auto T_prev = T_nm1.grid_data();
+    const auto u_data = u.grid_data();
+    const auto lap_v  = lap_data;
 
     const ScalarT T_m       = stats.T_m;
     const ScalarT inv_D     = ScalarT( 1 ) / stats.D;
@@ -321,6 +356,8 @@ void compute_nu_h(
     const ScalarT alpha_max = params.alpha_max;
     const ScalarT alpha_E   = params.alpha_E;
     const ScalarT gamma_    = gamma;
+    const bool    mask_dir_wedges = params.mask_dirichlet_wedges;
+    const auto    bmask           = boundary_mask;
     const auto    grid_lat  = grid_coords;
     const auto    radii_v   = radii;
 
@@ -344,14 +381,16 @@ void compute_nu_h(
             quadrature::quad_felippa_3x2_quad_points( qp );
             quadrature::quad_felippa_3x2_quad_weights( qw );
 
-            // Per-wedge gather of T_n, T_{n-1}, u (3 components).  Lap is
-            // already per-wedge (read directly from lap_w_dev below).
+            // Per-wedge gather of T_n, T_{n-1}, u (3 components), and the
+            // Q1-nodal Lap projection.
             dense::Vec< ScalarT, num_nodes_per_wedge > T_w[num_wedges_per_hex_cell];
             dense::Vec< ScalarT, num_nodes_per_wedge > Tp_w[num_wedges_per_hex_cell];
+            dense::Vec< ScalarT, num_nodes_per_wedge > Lap_w[num_wedges_per_hex_cell];
             dense::Vec< ScalarT, num_nodes_per_wedge > u_w[num_wedges_per_hex_cell][3];
 
-            extract_local_wedge_scalar_coefficients( T_w,  id, xc, yc, rc, T_data );
-            extract_local_wedge_scalar_coefficients( Tp_w, id, xc, yc, rc, T_prev );
+            extract_local_wedge_scalar_coefficients( T_w,   id, xc, yc, rc, T_data );
+            extract_local_wedge_scalar_coefficients( Tp_w,  id, xc, yc, rc, T_prev );
+            extract_local_wedge_scalar_coefficients( Lap_w, id, xc, yc, rc, lap_v );
             for ( int d = 0; d < 3; ++d )
             {
                 dense::Vec< ScalarT, num_nodes_per_wedge > comp[num_wedges_per_hex_cell];
@@ -363,10 +402,8 @@ void compute_nu_h(
             for ( int wedge = 0; wedge < num_wedges_per_hex_cell; ++wedge )
             {
                 ScalarT V_wedge    = 0;
-                ScalarT r_E_max    = 0;
+                ScalarT r_E_sq_int = 0; // ∫ r_E² dV (L²-mean projection)
                 ScalarT u_max_norm = 0;
-
-                const auto& Lap_w_w = lap_w_dev( id, xc, yc, rc, wedge );
 
                 for ( int q = 0; q < num_q; ++q )
                 {
@@ -396,7 +433,7 @@ void compute_nu_h(
 
                         T_q   += N_j * T_w[wedge]( j );
                         Tp_q  += N_j * Tp_w[wedge]( j );
-                        Lap_q += N_j * Lap_w_w( j );
+                        Lap_q += N_j * Lap_w[wedge]( j );
                         for ( int d = 0; d < 3; ++d )
                         {
                             u_q( d )      += N_j * u_w[wedge][d]( j );
@@ -412,25 +449,60 @@ void compute_nu_h(
                     const ScalarT dE_dt  = ( E - Ep ) * inv_dt;
                     const ScalarT u_dot_g =
                         u_q( 0 ) * grad_T_q( 0 ) + u_q( 1 ) * grad_T_q( 1 ) + u_q( 2 ) * grad_T_q( 2 );
-                    // Full KHB residual:
+                    // KHB 2012 residual (page 7, formula above eq. 16):
                     //   r_E = ∂_t E + (T − T_m)·(u·∇T − κ∇²T − γ).
+                    // The (T − T_m) factor multiplies the entire RHS of the
+                    // T-PDE residual.  Vanishes on smooth solutions of the
+                    // temperature equation.
                     // Lap_q already encodes −κ∇²T (lumped-mass-projected).
                     const ScalarT r_E_q =
                         Kokkos::abs( dE_dt + dT * ( u_dot_g + Lap_q - gamma_ ) );
 
-                    r_E_max    = Kokkos::max( r_E_max, r_E_q );
+                    r_E_sq_int += qw[q] * abs_det * r_E_q * r_E_q;
                     u_max_norm = Kokkos::max( u_max_norm, u_q.norm() );
                     V_wedge   += qw[q] * abs_det;
                 }
 
-                // Wedge characteristic length from its own physical volume.
+                // h_w = V_wedge^{1/3} from the same Felippa quadrature.
                 const ScalarT h_w = ( V_wedge > ScalarT( 0 ) )
                                         ? Kokkos::pow( V_wedge, ScalarT( 1.0 / 3.0 ) )
                                         : ScalarT( 0 );
 
-                const ScalarT nu_max = alpha_max * h_w * u_max_norm;
-                const ScalarT nu_E   = alpha_E * h_w * h_w * r_E_max * inv_D;
-                nu_h_wedge( id, xc, yc, rc, wedge ) = Kokkos::min( nu_max, nu_E );
+                // Per-wedge r_E as L²-mean over Felippa quadpoints:
+                //   r_E_w = ( ∫ r_E² dV / V_w )^½.
+                const ScalarT r_E_w = ( V_wedge > ScalarT( 0 ) )
+                                          ? Kokkos::sqrt( r_E_sq_int / V_wedge )
+                                          : ScalarT( 0 );
+
+                ScalarT nu_w = Kokkos::min( alpha_max * h_w * u_max_norm,
+                                            alpha_E * h_w * h_w * r_E_w * inv_D );
+
+                // Optional: zero ν_h on wedges that touch a Dirichlet wall.
+                // Wedge 0 corners (within hex (xc,yc,rc)):
+                //   (xc, yc, rc), (xc+1, yc, rc), (xc, yc+1, rc),
+                //   (xc, yc, rc+1), (xc+1, yc, rc+1), (xc, yc+1, rc+1)
+                // Wedge 1 corners:
+                //   (xc+1, yc+1, rc), (xc, yc+1, rc), (xc+1, yc, rc),
+                //   (xc+1, yc+1, rc+1), (xc, yc+1, rc+1), (xc+1, yc, rc+1)
+                if ( mask_dir_wedges )
+                {
+                    const int dx[2][6] = { { 0, 1, 0, 0, 1, 0 }, { 1, 0, 1, 1, 0, 1 } };
+                    const int dy[2][6] = { { 0, 0, 1, 0, 0, 1 }, { 1, 1, 0, 1, 1, 0 } };
+                    const int dr[2][6] = { { 0, 0, 0, 1, 1, 1 }, { 0, 0, 0, 1, 1, 1 } };
+                    bool touches_dirichlet = false;
+                    for ( int k = 0; k < 6; ++k )
+                    {
+                        const auto flag = bmask( id, xc + dx[wedge][k], yc + dy[wedge][k], rc + dr[wedge][k] );
+                        if ( util::has_flag( flag, grid::shell::ShellBoundaryFlag::BOUNDARY ) )
+                        {
+                            touches_dirichlet = true;
+                            break;
+                        }
+                    }
+                    if ( touches_dirichlet ) nu_w = ScalarT( 0 );
+                }
+
+                nu_h_wedge( id, xc, yc, rc, wedge ) = nu_w;
             }
         } );
 

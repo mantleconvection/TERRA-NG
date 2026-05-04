@@ -199,7 +199,12 @@ void test( const int level )
     // for diagnostic purposes but do NOT feed it back — reproduces the plain
     // SUPG baseline.  When true, subtract dt·DivKGrad(ν_h)·T^n from the RHS.
     // Compile-time for now so we can A/B inside one test binary later.
-    constexpr bool ev_apply = true;
+    //
+    // NOTE: forced false during the per-wedge EV refactor.  The old per-hex
+    // ν_h API (compute_nu_h + project_nu_h_to_nodes + DivKGrad(ν_h_nodal))
+    // has been removed; this test should be re-migrated to the per-wedge
+    // path once WedgeConstantDivKGrad lands.
+    constexpr bool ev_apply = false;
 
     // Initialise velocity.
     Kokkos::parallel_for(

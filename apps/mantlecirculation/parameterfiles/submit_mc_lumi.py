@@ -31,10 +31,10 @@ nodes, ntasks_per_node, time_limit = 2, 8, "24:00:00"
 
 # (tag, config-filename) pairs — config resolved against script_dir.
 RUNS = [
-    ("A3_lvl6_ev_cfl025",            "config_A3_lvl6_ev_cfl025.toml"),
-    ("C1_lvl6_ev_cfl025_picard2",    "config_C1_lvl6_ev_cfl025_picard2.toml"),
-    ("C3_lvl6_ev_cfl025_picard2",    "config_C3_lvl6_ev_cfl025_picard2.toml"),
-    ("C4_lvl6_ev_cfl025_picard2",    "config_C4_lvl6_ev_cfl025_picard2.toml"),
+    ("A3_lvl6_ev_cfl05_alphaMax05",         "config_A3_lvl6_ev_cfl05_alphaMax05.toml"),
+    ("C1_lvl6_ev_cfl05_picard2_alphaMax05", "config_C1_lvl6_ev_cfl05_picard2_alphaMax05.toml"),
+    ("C3_lvl6_ev_cfl05_picard2_alphaMax05", "config_C3_lvl6_ev_cfl05_picard2_alphaMax05.toml"),
+    ("C4_lvl6_ev_cfl05_picard2_alphaMax05", "config_C4_lvl6_ev_cfl05_picard2_alphaMax05.toml"),
 ]
 
 job_dir = Path("job_scripts"); job_dir.mkdir(exist_ok=True)
@@ -74,6 +74,9 @@ chmod +x ${{SELECT_GPU}}
 # NUMA-aware CPU binding for all 8 MI250X GCDs per node.
 CPU_BIND="map_cpu:49,57,17,25,1,9,33,41"
 export MPICH_GPU_SUPPORT_ENABLED=1
+export MPICH_GPU_NO_ASYNC_COPY=1
+export OMP_NUM_THREADS=1
+ulimit -c 0
 
 srun --cpu-bind=${{CPU_BIND}} ${{SELECT_GPU}} {binary} \\
     --config {config} --outdir {outdir} --outdir-overwrite

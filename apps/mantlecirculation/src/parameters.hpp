@@ -175,6 +175,26 @@ struct EnergySolverParameters
     int    krylov_max_iterations     = 100;
     double krylov_relative_tolerance = 1e-6;
     double krylov_absolute_tolerance = 1e-12;
+
+    /// Entropy-viscosity stabilization parameters (only used when
+    /// `energy_solver == ENTROPY_VISCOSITY`).  Defaults match ASPECT.
+    double ev_alpha_max = 0.078;   ///< First-order upwind cap on ν_h (= 0.026·d in 3D).
+    double ev_alpha_E   = 1.0;     ///< Residual-branch scale.
+    double ev_D_floor   = 1e-14;   ///< Floor on the D normalization.
+
+    /// If true, log global min/max/mean of the per-wedge ν_h field once per
+    /// output_frequency to <outdir>/nu_h_stats.csv (timestep, min, max, mean).
+    bool   ev_dump_nu_h = false;
+
+    /// If true, set ν_h_wedge = 0 for any wedge that has at least one corner
+    /// on a Dirichlet boundary (CMB or SURFACE).  Motivated by the finding
+    /// that the lumped-mass Lap projection at Dirichlet wall nodes is
+    /// dominated by the wall-flux integral (~18× the actual ∇²T), making
+    /// r_E enormous in wall-touching wedges and pushing ν_h to its α_max
+    /// cap right where the BL gradient lives.  Masking removes the
+    /// BL-localised over-damping; the wall T is anyway fixed by Dirichlet
+    /// so no stabilization is needed there.
+    bool   ev_mask_dirichlet_wedges = false;
 };
 
 /// Time-discretization scheme for the energy (temperature) equation.
@@ -549,6 +569,22 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Energy Solver" );
     add_option_with_default(
         app, "--energy-krylov-absolute-tolerance", parameters.energy_solver_parameters.krylov_absolute_tolerance )
+        ->group( "Energy Solver" );
+
+    add_option_with_default(
+        app, "--ev-alpha-max", parameters.energy_solver_parameters.ev_alpha_max )
+        ->group( "Energy Solver" );
+    add_option_with_default(
+        app, "--ev-alpha-E", parameters.energy_solver_parameters.ev_alpha_E )
+        ->group( "Energy Solver" );
+    add_option_with_default(
+        app, "--ev-D-floor", parameters.energy_solver_parameters.ev_D_floor )
+        ->group( "Energy Solver" );
+    add_option_with_default(
+        app, "--ev-dump-nu-h", parameters.energy_solver_parameters.ev_dump_nu_h )
+        ->group( "Energy Solver" );
+    add_option_with_default(
+        app, "--ev-mask-dirichlet-wedges", parameters.energy_solver_parameters.ev_mask_dirichlet_wedges )
         ->group( "Energy Solver" );
 
     //////////////////////

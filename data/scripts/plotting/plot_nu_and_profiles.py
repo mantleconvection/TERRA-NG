@@ -1,36 +1,33 @@
 #!/usr/bin/env python3
-"""Plot radial T profiles at every 500 timesteps alongside Nusselt number evolution."""
+"""Plot radial T profiles at every 500 timesteps alongside Nusselt number evolution.
+
+Nu values are read from `nu.csv` written by the solver each timestep
+(columns: timestep, sim_time, Nu_top_Q1, Nu_top_FV).
+"""
 
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import numpy as np
-import re
 import sys
 import os
 
 # --- Config ---
 profile_dir = sys.argv[1] if len(sys.argv) > 1 else "/p/scratch/walberlamovinggeo/boehm2/output_C1_lvl5_fgmres10/radial_profiles"
-log_file = sys.argv[2] if len(sys.argv) > 2 else "/p/home/jusers/boehm2/juwels/terraneo-build/apps/mantlecirculation/mc_level5_fgmres10_13660945.out"
+nu_csv = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(profile_dir.rstrip("/")), "nu.csv")
 output_file = sys.argv[3] if len(sys.argv) > 3 else "nu_and_profiles.png"
+# Optional 4th arg: figure title.  Default: derive from output filename stem.
+title = sys.argv[4] if len(sys.argv) > 4 else os.path.basename(output_file).replace(
+    "nu_and_profiles_", "").replace(".png", "").replace("_", " ")
+# Optional 5th arg: reference Nu interval as "min,max[,central[,label]]" — drawn
+# as a translucent horizontal band on the Nu panel.  Empty string disables.
+ref_nu = sys.argv[5] if len(sys.argv) > 5 else ""
 step_interval = 500
 
-# --- Parse Nusselt from log file ---
-timesteps_nu = []
-nu_values = []
-with open(log_file) as f:
-    for line in f:
-        m = re.search(r'Nu_top \(Q1\) = ([0-9.e+-]+)', line)
-        if m:
-            nu_values.append(float(m.group(1)))
-
-# Nu is output every 100 steps starting at step 0 (index 0 = step 0, index 1 = step 100, ...)
-# But first entry is timestep 0, then every 10 timesteps (check the output frequency)
-# Actually from the code: output every 10 timesteps for Nu, every 100 for radial profiles
-# Let's figure out the timestep mapping
-# Nu is printed at timestep 0 and then every 10 timesteps (timestep % 10 == 0)
-# But output_frequency=100 for radial profiles
-timesteps_nu = [i * 10 for i in range(len(nu_values))]
+# --- Load Nusselt from CSV ---
+nu_df = pd.read_csv(nu_csv)
+timesteps_nu = nu_df["timestep"].to_numpy()
+nu_values = nu_df["Nu_top_Q1"].to_numpy()
 
 # --- Collect radial profile files at step_interval ---
 profile_steps = list(range(0, max(timesteps_nu) + 1, step_interval))
@@ -57,19 +54,34 @@ ax1.grid(True, alpha=0.3)
 
 # Right panel: Nusselt number evolution
 ax2.plot(timesteps_nu, nu_values, 'k-', linewidth=0.8)
-# Mark the profile timesteps
+# Mark the profile timesteps (use nearest available Nu sample)
+ts_arr = np.asarray(timesteps_nu)
 for step, color in zip(profile_steps, colors):
-    idx = step // 10
-    if idx < len(nu_values):
-        ax2.axvline(x=step, color=color, alpha=0.5, linewidth=0.8, linestyle='--')
-        ax2.plot(step, nu_values[idx], 'o', color=color, markersize=5)
+    idx = int(np.searchsorted(ts_arr, step))
+    if idx >= len(ts_arr):
+        idx = len(ts_arr) - 1
+    ax2.axvline(x=step, color=color, alpha=0.5, linewidth=0.8, linestyle='--')
+    ax2.plot(ts_arr[idx], nu_values[idx], 'o', color=color, markersize=5)
 
 ax2.set_xlabel("Timestep")
 ax2.set_ylabel("Nu_top (Q1)")
 ax2.set_title("Nusselt Number Evolution")
 ax2.grid(True, alpha=0.3)
 
-plt.suptitle("Level 5, 10 FGMRES, SUPG", fontsize=14)
+# Optional reference Nu band (e.g., from a published benchmark).
+if ref_nu:
+    parts = ref_nu.split(",")
+    nu_min, nu_max = float(parts[0]), float(parts[1])
+    nu_central = float(parts[2]) if len(parts) > 2 else None
+    ref_label = parts[3] if len(parts) > 3 else "ref. Nu"
+    ax2.axhspan(nu_min, nu_max, color="red", alpha=0.15,
+                label=f"{ref_label}: {nu_min:.3f}–{nu_max:.3f}")
+    if nu_central is not None:
+        ax2.axhline(nu_central, color="red", linestyle=":", linewidth=1.0,
+                    label=f"{ref_label} central: {nu_central:.3f}")
+    ax2.legend(fontsize=8, loc="best")
+
+plt.suptitle(title, fontsize=14)
 plt.tight_layout()
 plt.savefig(output_file, dpi=200)
 print(f"Saved to {output_file}")

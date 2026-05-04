@@ -304,29 +304,6 @@ Result<> run( const Parameters& prm )
         xdmf_output.set_write_counter( prm.io_parameters.checkpoint_step );
     }
 
-    if ( !prm.io_parameters.no_xdmf )
-    {
-        logroot << "Writing initial XDMF ..." << std::endl;
-        xdmf_output.write();
-    }
-
-    if ( !prm.io_parameters.no_radial_profiles )
-    {
-        logroot << "Writing initial radial profiles ..." << std::endl;
-        compute_and_write_radial_profiles(
-            T, subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep_initial );
-        compute_and_write_radial_profiles(
-            stokes.eta_fine(), subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep_initial );
-        compute_and_write_velocity_radial_profiles(
-            u.block_1(),
-            coords_shell[velocity_level],
-            subdomain_shell_idx,
-            (*domains[velocity_level]),
-            ownership_mask_data[velocity_level],
-            prm.io_parameters,
-            timestep_initial );
-    }
-
     ScalarType simulated_time = ScalarType( 0 );
 
     // We need some global h. Let's, for simplicity (does not need to be too accurate) just choose the smallest h in
@@ -334,6 +311,8 @@ Result<> run( const Parameters& prm )
     const auto h = grid::shell::min_radial_h( domains[velocity_level]->domain_info().radii() );
 
     // --- Energy solver (polymorphic dispatch via EnergySolver) ---
+    // Construct before the initial XDMF write so that EV's optional
+    // nu_h_nodal_view() can be registered with the XDMF output.
 
     std::unique_ptr< EnergySolver< ScalarType > > energy;
     switch ( prm.time_stepping_parameters.energy_solver )
@@ -357,6 +336,46 @@ Result<> run( const Parameters& prm )
                 u.block_1(), T, T_fct, fv_cell_centers, fct_bcs,
                 prm, table );
             break;
+    }
+
+    // EV-specific: register the Q1-projected per-wedge ν_h diagnostic field
+    // with XDMF if the energy solver exposes one.  Must happen before any
+    // xdmf_output.write() call.
+    if ( auto* nu_h_view = energy->nu_h_nodal_view() )
+    {
+        xdmf_output.add( nu_h_view->grid_data() );
+    }
+
+    if ( !prm.io_parameters.no_xdmf )
+    {
+        logroot << "Writing initial XDMF ..." << std::endl;
+        xdmf_output.write();
+    }
+
+    if ( !prm.io_parameters.no_radial_profiles )
+    {
+        logroot << "Writing initial radial profiles ..." << std::endl;
+        compute_and_write_radial_profiles(
+            T, subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep_initial );
+        compute_and_write_radial_profiles(
+            stokes.eta_fine(), subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep_initial );
+        compute_and_write_velocity_radial_profiles(
+            u.block_1(),
+            coords_shell[velocity_level],
+            subdomain_shell_idx,
+            (*domains[velocity_level]),
+            ownership_mask_data[velocity_level],
+            prm.io_parameters,
+            timestep_initial );
+
+        // EV-specific diagnostic profiles: per-wedge h_w (geometry-only,
+        // available from construction).  lap_T_ is not meaningful before any
+        // time step has run, so skip the lap profile here.
+        if ( auto* hw_view = energy->h_w_diag_view() )
+        {
+            compute_and_write_radial_profiles(
+                *hw_view, subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep_initial );
+        }
     }
 
 
@@ -427,6 +446,14 @@ Result<> run( const Parameters& prm )
             xdmf_output.write();
         }
 
+        // Energy-solver-specific diagnostics dump first — refreshes EV
+        // diagnostic views (lap_diag_) so the radial-profile pass below sees
+        // up-to-date data.
+        if ( write_output )
+        {
+            energy->dump_diagnostics( timestep, prm.io_parameters.outdir );
+        }
+
         if ( write_output && !prm.io_parameters.no_radial_profiles )
         {
             logroot << "Writing radial profiles ..." << std::endl;
@@ -442,10 +469,22 @@ Result<> run( const Parameters& prm )
                 ownership_mask_data[velocity_level],
                 prm.io_parameters,
                 timestep );
+
+            // EV-specific diagnostic profiles (refreshed by dump_diagnostics).
+            if ( auto* lap_view = energy->lap_diag_view() )
+            {
+                compute_and_write_radial_profiles(
+                    *lap_view, subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep );
+            }
+            if ( auto* hw_view = energy->h_w_diag_view() )
+            {
+                compute_and_write_radial_profiles(
+                    *hw_view, subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep );
+            }
         }
 
-        // Compute Nusselt number at the surface.
-        if ( timestep % 10 == 0 )
+        // Compute Nusselt number at the surface every step; log to stdout
+        // every 10 steps; append to <outdir>/nu.csv every step (rank 0).
         {
             const auto Nu_top = compute_nusselt(
                 (*domains[velocity_level]),
@@ -465,7 +504,23 @@ Result<> run( const Parameters& prm )
                 prm.mesh_parameters.radius_min,
                 prm.mesh_parameters.radius_max,
                 /*at_surface=*/true );
-            logroot << "Nu_top (Q1) = " << Nu_top << ", Nu_top (FV) = " << Nu_top_fv << std::endl;
+            if ( timestep % 10 == 0 )
+            {
+                logroot << "Nu_top (Q1) = " << Nu_top << ", Nu_top (FV) = " << Nu_top_fv << std::endl;
+            }
+            // Per-step CSV. simulated_time is updated below; the value here is
+            // the time at the *end* of this step (current T just solved).
+            if ( mpi::rank() == 0 )
+            {
+                const std::string path = prm.io_parameters.outdir + "/nu.csv";
+                std::ofstream out( path, std::ios::app );
+                if ( out.tellp() == 0 )
+                {
+                    out << "timestep,sim_time,Nu_top_Q1,Nu_top_FV\n";
+                }
+                const double t_end_of_step = simulated_time + prm.time_stepping_parameters.energy_substeps * dt;
+                out << timestep << "," << t_end_of_step << "," << Nu_top << "," << Nu_top_fv << "\n";
+            }
         }
 
         simulated_time += prm.time_stepping_parameters.energy_substeps * dt;

@@ -281,7 +281,11 @@ SweepResult test( int level, ScalarType kappa, const std::shared_ptr< util::Tabl
     //   ev_apply=true  →  pure Galerkin advection-diffusion on the LHS +
     //                     explicit ν_h contribution on the RHS (ASPECT-like).
     //   ev_apply=false →  plain SUPG (existing baseline).
-    constexpr bool ev_apply = true;
+    //
+    // NOTE: forced false during the per-wedge EV refactor.  The old per-hex
+    // ν_h API has been removed; this test should be re-migrated to the
+    // per-wedge path once WedgeConstantDivKGrad lands.
+    constexpr bool ev_apply = false;
     const fe::wedge::operators::shell::EntropyViscosityParameters< ScalarType > ev_params{};
 
     std::vector< VectorQ1Scalar< ScalarType > > tmps;
