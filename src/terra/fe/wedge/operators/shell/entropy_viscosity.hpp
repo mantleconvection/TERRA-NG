@@ -320,7 +320,10 @@ EntropyStats< ScalarT > compute_entropy_stats(
 ///   r_E_w = ( ∫ r_E² dV / V_wedge )^½
 /// folded into the standard ν_h cap:
 ///   ν_h_w = min( α_max·h_w·‖u‖_∞,w,  α_E·h_w²·r_E_w / D )
-/// with `h_w = V_wedge^{1/3}` from the same quadrature.
+/// with `h_w = (r_2 − r_1)`, the radial cell extent — the BL-normal length
+/// scale, which is the relevant scale for stabilising the temperature-gradient
+/// direction in shell convection.  V_wedge^{1/3} mixes lateral and radial
+/// scales and over-inflates ν_E in BL-touching wedges where dr ≪ lateral edge.
 ///
 /// The Lap input is a Q1-nodal field carrying the global lumped-mass
 /// projection of −κ∇²T (i.e. (K·T)/M_lumped, with K the global Galerkin
@@ -463,10 +466,10 @@ void compute_nu_h(
                     V_wedge   += qw[q] * abs_det;
                 }
 
-                // h_w = V_wedge^{1/3} from the same Felippa quadrature.
-                const ScalarT h_w = ( V_wedge > ScalarT( 0 ) )
-                                        ? Kokkos::pow( V_wedge, ScalarT( 1.0 / 3.0 ) )
-                                        : ScalarT( 0 );
+                // h_w = radial cell extent (r_2 − r_1).  BL-normal length
+                // scale; V^{1/3} mixed lateral and radial scales and inflated
+                // ν_E in BL-touching wedges where dr ≪ lateral edge.
+                const ScalarT h_w = r_2 - r_1;
 
                 // Per-wedge r_E as L²-mean over Felippa quadpoints:
                 //   r_E_w = ( ∫ r_E² dV / V_w )^½.
