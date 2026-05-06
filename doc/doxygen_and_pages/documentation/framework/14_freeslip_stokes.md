@@ -6,9 +6,12 @@ Ponsuganth Ilangovan Ponkumar Ilango).  The benchmark is a Y₂₂ poloidal
 spherical-harmonic flow on the shell \f$R_m = 0.5,\ R_p = 1\f$ with \f$\nu = 1,\ g = 1\f$,
 solved in three boundary-condition configurations:
 
-- **zs/zs** — zero-slip (Dirichlet) at CMB and surface,
-- **fs/zs** — free-slip at CMB, zero-slip at surface,
-- **fs/fs** — free-slip at both CMB and surface.
+- **zs/zs** — zero-slip (Dirichlet) at CMB and surface
+  (\ref test_epsilon_divdiv_stokes_assess.cpp),
+- **fs/zs** — free-slip at CMB, zero-slip at surface
+  (\ref test_epsilon_divdiv_stokes_assess_freeslip.cpp),
+- **fs/fs** — free-slip at both CMB and surface
+  (\ref test_epsilon_divdiv_stokes_assess_freeslip_freeslip.cpp).
 
 All three reach the expected \f$\mathcal{O}(h^2)\f$ convergence in velocity and
 pressure up to refinement level 6, using FGMRES with order-2 Chebyshev-accelerated
@@ -47,7 +50,7 @@ restores the expected \f$\mathcal{O}(h^2)\f$ rate.
 
 ## Convergence results
 
-**zs/zs (Dirichlet / Dirichlet):**
+**zs/zs (Dirichlet / Dirichlet)** — \ref test_epsilon_divdiv_stokes_assess.cpp:
 
 | Level | vel error | pre error | vel ratio | pre ratio |
 |-------|-----------|-----------|-----------|-----------|
@@ -56,7 +59,7 @@ restores the expected \f$\mathcal{O}(h^2)\f$ rate.
 | 5 | 2.09e-6 | 4.07e-5 | 3.81 | 3.77 |
 | 6 | 5.35e-7 | 1.10e-5 | 3.90 | 3.69 |
 
-**fs/zs (free-slip at CMB / Dirichlet at surface):**
+**fs/zs (free-slip at CMB / Dirichlet at surface)** — \ref test_epsilon_divdiv_stokes_assess_freeslip.cpp:
 
 | Level | vel error | pre error | vel ratio | pre ratio |
 |-------|-----------|-----------|-----------|-----------|
@@ -65,7 +68,7 @@ restores the expected \f$\mathcal{O}(h^2)\f$ rate.
 | 5 | 2.32e-6 | 3.27e-5 | 3.82 | 3.76 |
 | 6 | 5.95e-7 | 9.08e-6 | 3.90 | 3.60 |
 
-**fs/fs (free-slip at CMB / free-slip at surface):**
+**fs/fs (free-slip at CMB / free-slip at surface)** — \ref test_epsilon_divdiv_stokes_assess_freeslip_freeslip.cpp:
 
 | Level | vel error | pre error | vel ratio | pre ratio |
 |-------|-----------|-----------|-----------|-----------|
