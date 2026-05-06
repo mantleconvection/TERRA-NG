@@ -72,3 +72,44 @@ rad-sdr=0
 radial-extra-levels=-1
 # 64 × 64 × 32 cells per diamond at the fine level.
 ```
+
+## Non-uniform radial-shell placement
+
+`--radial-extra-levels` controls **how many** radial cells exist; the second
+group of knobs controls **where** they are placed.  By default the shells are
+equispaced in \f$[r_{\min}, r_{\max}]\f$.  A tanh map can be applied to
+concentrate them near one or both radial boundaries.
+
+| Flag                     | Default     | Effect                                                                                                                                                                                                                              |
+|--------------------------|-------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--radial-distribution`  | `uniform`   | One of `uniform`, `tanh-both`, `tanh-cmb`, `tanh-surface`.  `uniform` is the equispaced default; the three `tanh-*` variants apply the corresponding tanh map from \ref terra::grid::shell::make_tanh_boundary_cluster (and friends). |
+| `--radial-cluster-k`     | `1.0`       | Cluster strength \f$k\f$ for the tanh-based variants.  \f$k \le 0\f$ collapses each variant back to uniform.  \f$k \approx 1\f$ gives mild clustering, \f$k \approx 2\f$ strong clustering.                                          |
+
+The map \f$f : [0,1] \rightarrow [0,1]\f$ corresponding to each variant is:
+
+| Variant         | Map \f$f(s)\f$                                                            | Clusters near                  |
+|-----------------|---------------------------------------------------------------------------|--------------------------------|
+| `uniform`       | \f$f(s) = s\f$                                                            | nowhere — equispaced.         |
+| `tanh-both`     | \f$f(s) = \tfrac{1}{2}\!\left(\tfrac{\tanh(k(2s-1))}{\tanh(k)}+1\right)\f$ | both \f$r_{\min}\f$ and \f$r_{\max}\f$ |
+| `tanh-cmb`      | \f$f(s) = 1 - \tfrac{\tanh(k(1-s))}{\tanh(k)}\f$                          | \f$r_{\min}\f$ (CMB)           |
+| `tanh-surface`  | \f$f(s) = \tfrac{\tanh(k\,s)}{\tanh(k)}\f$                                | \f$r_{\max}\f$ (surface)       |
+
+The shells are then placed at \f$r_i = r_{\min} + (r_{\max} - r_{\min})\,f(s_i)\f$
+with \f$s_i = i / (N - 1)\f$.  The same map is applied at every multigrid level
+(consistently with \ref anisotropic-refinement), so the V-cycle stays
+well-defined.
+
+This feature is orthogonal to `--radial-extra-levels`: clustering changes the
+**positions** of the existing radial cells without changing their count.
+
+```toml
+# Concentrate radial layers near both boundaries (BL focus on CMB and surface).
+radial-distribution=tanh-both
+radial-cluster-k=1.5
+```
+
+```toml
+# Strong CMB clustering only (relevant when only the CMB BL needs resolving).
+radial-distribution=tanh-cmb
+radial-cluster-k=2.0
+```
