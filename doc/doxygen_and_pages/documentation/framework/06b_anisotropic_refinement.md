@@ -2,13 +2,9 @@
 
 By default the spherical-shell mesh is refined isotropically: at multigrid (MG)
 level \f$L\f$, each diamond holds \f$2^L\f$ cells in *every* axis (lateral
-\f$x\f$, lateral \f$y\f$, radial \f$r\f$). This is fine for benchmarks where
-all directions resolve features of comparable wavelength, but mantle-convection
-runs often have very thin radial boundary layers next to wavelengths in the
-lateral plane that are an order of magnitude larger. Spending equal DOFs in
-both directions wastes memory and compute.
+\f$x\f$, lateral \f$y\f$, radial \f$r\f$). 
 
-The mantle-circulation app supports **per-axis decoupling** for both the
+The mantle-circulation app supports decoupling for both the
 diamond refinement level and the subdomain refinement level via three CLI flags
 declared in \ref terra::mantlecirculation::MeshParameters:
 
@@ -38,9 +34,6 @@ For `mesh-min=2`, `mesh-max=6` (the typical \f$L=6\f$ run):
 | `-1`                  | 4 lat × 2 rad               | 64 lat × 32 rad             | radial-coarse                      |
 | `-2`                  | 4 lat × 1 rad               | 64 lat × 16 rad             | minimum (requires `--rad-sdr=0`)   |
 
-Negative offsets are valid when the dynamics is laterally rich but radially
-smooth (e.g. quasi-2D, or runs that don't resolve a thin BL).
-
 ## Validation
 
 The app refuses configurations that would break the MG hierarchy or cause
@@ -57,9 +50,7 @@ undefined behaviour. Three constraints, checked in
 
 `lat_sdr_eff` and `rad_sdr_eff` resolve the `-1`-means-fallback semantics: if
 the per-axis override is negative, the value falls back to
-`--refinement-level-subdomains`. Failing any check exits before mesh setup with
-a descriptive message; the third hint also suggests the obvious remedy
-("Consider lowering `--rad-sdr` or raising `--radial-extra-levels`").
+`--refinement-level-subdomains`.
 
 ## Example
 
