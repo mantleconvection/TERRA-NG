@@ -54,6 +54,17 @@ ax1.grid(True, alpha=0.3)
 
 # Right panel: Nusselt number evolution
 ax2.plot(timesteps_nu, nu_values, 'k-', linewidth=0.8)
+# Annotate the final Nu value reached by the run.
+final_ts, final_nu = int(timesteps_nu[-1]), float(nu_values[-1])
+ax2.plot(final_ts, final_nu, 's', color='black', markersize=6,
+         markerfacecolor='white', markeredgewidth=1.2, zorder=5)
+ax2.annotate(f"final: Nu={final_nu:.4f} @ ts={final_ts}",
+             xy=(final_ts, final_nu),
+             xytext=(-8, 12), textcoords='offset points',
+             ha='right', fontsize=9,
+             bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                       edgecolor='black', alpha=0.85),
+             arrowprops=dict(arrowstyle='-', color='black', lw=0.6))
 # Mark the profile timesteps (use nearest available Nu sample)
 ts_arr = np.asarray(timesteps_nu)
 for step, color in zip(profile_steps, colors):
