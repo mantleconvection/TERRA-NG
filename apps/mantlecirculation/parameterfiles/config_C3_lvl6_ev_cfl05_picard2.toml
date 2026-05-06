@@ -1,24 +1,23 @@
-## C3 benchmark - level 6, dt-scaling=0.5, cubic IC, EV, picard=2,
-## Frank-Kamenetskii rmu=30. alpha_E=1.0 (default).  KHB-correct residual +
-## L²-r_E + L²-D + lap=0 at Dirichlet (built-in defaults) + Dirichlet-wedge
-## masking OFF.  h_w = (r_2 - r_1) (radial cell extent) instead of
-## V_wedge^{1/3}.  Long run.
+## Domain / mesh
 radius-min=1.22
 radius-max=2.22
 refinement-level-mesh-min=2
 refinement-level-mesh-max=6
 refinement-level-subdomains=1
 
+## Physics
 diffusivity=1
 rayleigh-number=1e5
 viscosity-law="frank-kamenetskii"
 viscosity-rmu=30
 
+## Boundary conditions
 velocity-bc-cmb="freeslip"
 velocity-bc-surface="freeslip"
 temperature-bc-value-cmb=1.0
 temperature-bc-value-surface=0.0
 
+## Initial condition
 initial-temperature-profile="conductive"
 initial-temperature-sph-degree=4
 initial-temperature-sph-order=0
@@ -27,6 +26,7 @@ initial-temperature-sph-degree-2=4
 initial-temperature-sph-order-2=4
 initial-temperature-sph-factor-2=0.7142857142857143
 
+## Time stepping & energy solver
 dt-scaling=0.5
 t-end=1.0
 max-timesteps=1000000
@@ -34,6 +34,7 @@ energy-solver="ev"
 energy-substeps=1
 picard-iterations=2
 
+## Stokes solver
 stokes-krylov-restart=10
 stokes-krylov-max-iterations=10
 stokes-krylov-relative-tolerance=1e-06
@@ -44,8 +45,10 @@ stokes-viscous-pc-num-smoothing-steps-prepost=3
 stokes-viscous-pc-num-power-iterations=10
 stokes-viscous-pc-agglom-factors=[]
 
+## I/O
 outdir="./output_C3_lvl6_ev_cfl05_picard2"
 outdir-overwrite=1
 output-frequency=100
 
+## Entropy viscosity
 ev-dump-nu-h=true
