@@ -1,23 +1,23 @@
-## C3 benchmark - level 6, dt-scaling=0.25, cubic IC, SUPG, 1 substep, picard=2, Frank-Kamenetskii rmu=30
+## C4 benchmark - 2-node variant, picard=2, mask OFF.
+## Frank-Kamenetskii rmu=30, Ra=1e6. alpha_E=1.0 (default).  KHB-correct
+## residual + L²-r_E + L²-D + lap=0 at Dirichlet (built-in defaults).
+## h_w = (r_2 - r_1).  Long run.
 radius-min=1.22
 radius-max=2.22
 refinement-level-mesh-min=2
 refinement-level-mesh-max=6
 refinement-level-subdomains=1
 
-## Physics
 diffusivity=1
-rayleigh-number=1e5
+rayleigh-number=1e6
 viscosity-law="frank-kamenetskii"
 viscosity-rmu=30
 
-## Boundary conditions
 velocity-bc-cmb="freeslip"
 velocity-bc-surface="freeslip"
 temperature-bc-value-cmb=1.0
 temperature-bc-value-surface=0.0
 
-## Initial temperature - cubic symmetry: T_perturb = Y_4^0 + (5/7) * Y_4^4
 initial-temperature-profile="conductive"
 initial-temperature-sph-degree=4
 initial-temperature-sph-order=0
@@ -26,15 +26,13 @@ initial-temperature-sph-degree-2=4
 initial-temperature-sph-order-2=4
 initial-temperature-sph-factor-2=0.7142857142857143
 
-## Time discretization
-dt-scaling=0.25
+dt-scaling=0.5
 t-end=1.0
 max-timesteps=1000000
-energy-solver="supg"
+energy-solver="ev"
 energy-substeps=1
 picard-iterations=2
 
-## Stokes solver
 stokes-krylov-restart=10
 stokes-krylov-max-iterations=10
 stokes-krylov-relative-tolerance=1e-06
@@ -43,12 +41,10 @@ stokes-viscous-pc-num-vcycles=1
 stokes-viscous-pc-cheby-order=2
 stokes-viscous-pc-num-smoothing-steps-prepost=3
 stokes-viscous-pc-num-power-iterations=10
-# Per-descent MG preconditioner agglomeration factors. Length must equal
-# num_mg_levels - 1. Empty list (default) = classical V-cycle, no agglomeration.
-# Example: stokes-viscous-pc-agglom-factors=[2, 2, 1, 1] for 5 MG levels.
 stokes-viscous-pc-agglom-factors=[]
 
-## I/O
-outdir="./output_C3_lvl6_supg_cfl025_picard2"
+outdir="./output_C4_lvl6_ev_cfl05_picard2"
 outdir-overwrite=1
 output-frequency=100
+
+ev-dump-nu-h=true
