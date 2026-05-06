@@ -15,6 +15,7 @@ target_sources(terra
         vector_mass.hpp
         div_k_grad.hpp
         div_k_grad_simple.hpp
+        wedge_constant_div_k_grad.hpp
         epsilon.hpp
         epsilon_divdiv.hpp
         epsilon_divdiv_kerngen.hpp

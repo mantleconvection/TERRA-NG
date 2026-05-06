@@ -47,9 +47,9 @@ struct BoundaryConditionsParameters
 /// Choice of viscosity law for the temperature-dependent viscosity field.
 ///   CONSTANT          : eta(T) = const (taken from `reference_viscosity`, optionally
 ///                       multiplied by a radial profile if `radial_profile_enabled`).
-///   FRANK_KAMENETSKII : eta(T) = 10^(rmu * (0.5 - T)).  T in [0,1].
-///                       rmu controls the (log10) viscosity contrast — see
-///                       `ViscosityParameters::rmu`.
+///   FRANK_KAMENETSKII : eta(T) = rmu^(0.5 - T)  (Zhong et al. 2008).  T in [0,1].
+///                       Total cold/hot viscosity contrast = rmu (rmu = 1 → constant
+///                       viscosity).  See `ViscosityParameters::rmu`.
 enum class ViscosityLaw
 {
     CONSTANT,
@@ -61,8 +61,8 @@ struct ViscosityParameters
     /// Viscosity law selector — see ViscosityLaw above.
     ViscosityLaw law = ViscosityLaw::CONSTANT;
 
-    /// Exponent of the Frank-Kamenetskii viscosity law: eta = 10^(rmu * (0.5 - T)).
-    /// Equivalently, total cold/hot viscosity contrast = 10^rmu (rmu=0 → constant viscosity).
+    /// Base of the Frank-Kamenetskii viscosity law (Zhong et al. 2008): eta = rmu^(0.5 - T).
+    /// Total cold/hot viscosity contrast = rmu (rmu = 1 → constant viscosity).
     /// Ignored when `law == CONSTANT`.
     double       rmu = 1.0;
 
@@ -175,6 +175,15 @@ struct EnergySolverParameters
     int    krylov_max_iterations     = 100;
     double krylov_relative_tolerance = 1e-6;
     double krylov_absolute_tolerance = 1e-12;
+
+    /// Entropy-viscosity stabilization parameters (only used when
+    /// `energy_solver == ENTROPY_VISCOSITY`).  Defaults match ASPECT.
+    double ev_alpha_max = 0.078;   ///< First-order upwind cap on ν_h (= 0.026·d in 3D).
+    double ev_alpha_E   = 1.0;     ///< Residual-branch scale.
+
+    /// If true, log global min/max/mean of the per-wedge ν_h field once per
+    /// output_frequency to <outdir>/nu_h_stats.csv (timestep, min, max, mean).
+    bool   ev_dump_nu_h = false;
 };
 
 /// Time-discretization scheme for the energy (temperature) equation.
@@ -190,6 +199,7 @@ enum class EnergySolverType
 {
     FCT,
     SUPG,
+    ENTROPY_VISCOSITY,
 };
 
 struct TimeSteppingParameters
@@ -349,11 +359,13 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Viscosity" )
         ->description(
             "Viscosity law to use. 'constant' uses a constant or radial profile. "
-            "'frank-kamenetskii' computes eta = 10^(rmu * (0.5 - T))." );
+            "'frank-kamenetskii' computes eta = rmu^(0.5 - T) (Zhong et al. 2008)." );
 
     add_option_with_default( app, "--viscosity-rmu", parameters.physics_parameters.viscosity_parameters.rmu )
         ->group( "Viscosity" )
-        ->description( "Exponent for Frank-Kamenetskii viscosity law: eta = 10^(rmu * (0.5 - T))." );
+        ->description(
+            "Base of the Frank-Kamenetskii viscosity law: eta = rmu^(0.5 - T) "
+            "(Zhong et al. 2008). Cold/hot contrast = rmu; rmu = 1 gives constant viscosity." );
 
     const auto radial_profile_enabled =
         add_flag_with_default(
@@ -472,6 +484,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     std::map< std::string, EnergySolverType > energy_solver_map{
         { "fct", EnergySolverType::FCT },
         { "supg", EnergySolverType::SUPG },
+        { "entropy_viscosity", EnergySolverType::ENTROPY_VISCOSITY },
+        { "ev", EnergySolverType::ENTROPY_VISCOSITY },
     };
 
     add_option_with_default( app, "--energy-solver", parameters.time_stepping_parameters.energy_solver )
@@ -544,6 +558,16 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Energy Solver" );
     add_option_with_default(
         app, "--energy-krylov-absolute-tolerance", parameters.energy_solver_parameters.krylov_absolute_tolerance )
+        ->group( "Energy Solver" );
+
+    add_option_with_default(
+        app, "--ev-alpha-max", parameters.energy_solver_parameters.ev_alpha_max )
+        ->group( "Energy Solver" );
+    add_option_with_default(
+        app, "--ev-alpha-E", parameters.energy_solver_parameters.ev_alpha_E )
+        ->group( "Energy Solver" );
+    add_option_with_default(
+        app, "--ev-dump-nu-h", parameters.energy_solver_parameters.ev_dump_nu_h )
         ->group( "Energy Solver" );
 
     //////////////////////

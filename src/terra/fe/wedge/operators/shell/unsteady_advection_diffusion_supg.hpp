@@ -153,6 +153,13 @@ class UnsteadyAdvectionDiffusionSUPG
     ScalarT mass_scaling_;
     bool    lumped_mass_;
 
+    /// When false, the SUPG streamline-diffusion term τ·(u·∇φ_i)(u·∇φ_j) is
+    /// dropped from the local matrix, turning this into a pure Galerkin
+    /// advection-diffusion operator.  Intended as a drop-in for the entropy-
+    /// viscosity pipeline (ASPECT-style: no SUPG, stabilization comes from
+    /// the explicit ∇·(ν_h ∇T^n) RHS contribution).
+    bool    supg_enabled_ = true;
+
     linalg::OperatorApplyMode         operator_apply_mode_;
     linalg::OperatorCommunicationMode operator_communication_mode_;
 
@@ -198,6 +205,12 @@ class UnsteadyAdvectionDiffusionSUPG
 
     ScalarT&       dt() { return dt_; }
     const ScalarT& dt() const { return dt_; }
+
+    /// Toggle SUPG streamline stabilization at runtime (pre-construction is
+    /// also possible via direct access after default-enabling).  false ⇒
+    /// pure Galerkin advection-diffusion.
+    void set_supg_enabled( bool on ) { supg_enabled_ = on; }
+    bool supg_enabled() const { return supg_enabled_; }
 
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
@@ -298,7 +311,10 @@ class UnsteadyAdvectionDiffusionSUPG
 
             // final cell/wedge tau: volume-weighted average
             ScalarT tau_cell              = ( waccum > 0.0 ) ? ( tau_accum / waccum ) : 0.0;
-            streamline_diffusivity[wedge] = tau_cell;
+            // When SUPG is disabled at runtime (e.g. using EV as the sole
+            // stabilization), set τ = 0 so the streamline_diffusion term below
+            // contributes nothing and we are left with pure Galerkin.
+            streamline_diffusivity[wedge] = supg_enabled_ ? tau_cell : ScalarT( 0 );
         }
 
         // Compute the local element matrix.
