@@ -42,6 +42,7 @@
 
 #include "mpi/level_comms.hpp"
 
+#include "build_radii.hpp"
 #include "interpolators.hpp"
 #include "parameters.hpp"
 
@@ -508,10 +509,7 @@ class StokesContext
                     DistributedDomain dom_up = DistributedDomain::create_uniform_on_comm(
                         upper_comm,
                         lat_level,
-                        grid::shell::uniform_shell_radii(
-                            prm_.mesh_parameters.radius_min,
-                            prm_.mesh_parameters.radius_max,
-                            ( 1 << rad_level ) + 1 ),
+                        build_shell_radii< double >( prm_.mesh_parameters, ( 1 << rad_level ) + 1 ),
                         lat_sdr,
                         rad_sdr,
                         ( upper_cf == 1 )

@@ -27,6 +27,21 @@ struct MeshParameters
     int radial_extra_levels = 0;
     int lat_sdr             = -1;
     int rad_sdr             = -1;
+
+    /// Selector for the radial-shell distribution.  All non-uniform variants
+    /// use a tanh map (see grid::shell::make_tanh_*_cluster) parameterised by
+    /// `radial_cluster_k`; `radial_cluster_k <= 0` collapses each variant to
+    /// the uniform distribution.
+    enum class RadialDistribution
+    {
+        UNIFORM,        ///< equispaced shells (default).
+        TANH_BOTH,      ///< both-side clustering at CMB and surface.
+        TANH_CMB,       ///< one-side clustering at the inner boundary (CMB).
+        TANH_SURFACE,   ///< one-side clustering at the outer boundary (surface).
+    };
+
+    RadialDistribution radial_distribution = RadialDistribution::UNIFORM;
+    double             radial_cluster_k    = 1.0;
 };
 
 struct BoundaryConditionsParameters
@@ -307,6 +322,28 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Domain" )
         ->description(
             "Override the radial subdomain refinement level (otherwise --refinement-level-subdomains is used)." );
+
+    std::map< std::string, MeshParameters::RadialDistribution > radial_distribution_map{
+        { "uniform",      MeshParameters::RadialDistribution::UNIFORM },
+        { "tanh-both",    MeshParameters::RadialDistribution::TANH_BOTH },
+        { "tanh-cmb",     MeshParameters::RadialDistribution::TANH_CMB },
+        { "tanh-surface", MeshParameters::RadialDistribution::TANH_SURFACE },
+    };
+    add_option_with_default(
+        app, "--radial-distribution", parameters.mesh_parameters.radial_distribution )
+        ->transform( CLI::CheckedTransformer( radial_distribution_map, CLI::ignore_case ) )
+        ->group( "Domain" )
+        ->description(
+            "Radial shell distribution: 'uniform' (equispaced, default), 'tanh-both' "
+            "(cluster at both CMB and surface), 'tanh-cmb' (cluster at CMB only), "
+            "'tanh-surface' (cluster at surface only).  Cluster strength is set by "
+            "--radial-cluster-k." );
+    add_option_with_default(
+        app, "--radial-cluster-k", parameters.mesh_parameters.radial_cluster_k )
+        ->group( "Domain" )
+        ->description(
+            "Cluster-strength k for the tanh-based radial distributions.  k <= 0 "
+            "collapses to uniform; k ~ 1 mild clustering, k ~ 2 strong clustering." );
 
     ///////////////////////////
     /// Boundary conditions ///

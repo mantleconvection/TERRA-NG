@@ -42,6 +42,7 @@
 #include "linalg/vector_fv.hpp"
 #include "linalg/vector_q1isoq2_q1.hpp"
 #include "src/diagnostics.hpp"
+#include "src/build_radii.hpp"
 #include "src/energy_solver.hpp"
 #include "src/interpolators.hpp"
 #include "src/io.hpp"
@@ -141,8 +142,7 @@ Result<> run( const Parameters& prm )
                 DistributedDomain::create_uniform_on_comm(
                     agglom.comm( idx ),
                     lat_level,
-                    grid::shell::uniform_shell_radii(
-                        prm.mesh_parameters.radius_min, prm.mesh_parameters.radius_max, ( 1 << rad_level ) + 1 ),
+                    build_shell_radii< double >( prm.mesh_parameters, ( 1 << rad_level ) + 1 ),
                     lat_sdr,
                     rad_sdr,
                     agglom.subdomain_fn( idx ) ) ) );

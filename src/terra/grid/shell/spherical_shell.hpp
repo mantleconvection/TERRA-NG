@@ -79,6 +79,52 @@ std::function< T( T ) > make_tanh_boundary_cluster( T k )
     };
 }
 
+/// @brief One-sided tanh map: clusters shells near the inner boundary (\f$r_{\min}\f$).
+///
+/// Returns
+/// \f[
+///     f(s) = \begin{cases}
+///         s & k \leq 0 \\
+///         1 - \dfrac{\tanh\!\big(k(1-s)\big)}{\tanh(k)} & k > 0
+///     \end{cases}
+/// \f]
+/// which satisfies \f$f(0) = 0\f$, \f$f(1) = 1\f$, with small slope near
+/// \f$s = 0\f$ (dense shells) and large slope near \f$s = 1\f$ (sparse shells).
+template < std::floating_point T >
+std::function< T( T ) > make_tanh_inner_cluster( T k )
+{
+    return [k]( T s ) {
+        if ( k <= 0.0 )
+        {
+            return s;
+        }
+        return T( 1 ) - std::tanh( k * ( T( 1 ) - s ) ) / std::tanh( k );
+    };
+}
+
+/// @brief One-sided tanh map: clusters shells near the outer boundary (\f$r_{\max}\f$).
+///
+/// Returns
+/// \f[
+///     f(s) = \begin{cases}
+///         s & k \leq 0 \\
+///         \dfrac{\tanh(k\,s)}{\tanh(k)} & k > 0
+///     \end{cases}
+/// \f]
+/// which satisfies \f$f(0) = 0\f$, \f$f(1) = 1\f$, with large slope near
+/// \f$s = 0\f$ (sparse shells) and small slope near \f$s = 1\f$ (dense shells).
+template < std::floating_point T >
+std::function< T( T ) > make_tanh_outer_cluster( T k )
+{
+    return [k]( T s ) {
+        if ( k <= 0.0 )
+        {
+            return s;
+        }
+        return std::tanh( k * s ) / std::tanh( k );
+    };
+}
+
 /// @brief Computes the radial shell radii for a non-uniformly distributed grid.
 ///
 /// Note that a shell is a 2D manifold in 3D space.
