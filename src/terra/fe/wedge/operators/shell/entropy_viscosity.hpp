@@ -59,20 +59,18 @@ struct EntropyViscosityParameters
     /// Residual scaling constant.  ASPECT uses 1.0.  Tezduyar-style
     /// shock-capturing frameworks tune this in [0.1, 2.0].
     ScalarT alpha_E = ScalarT( 1.0 );
-
-    /// Floor on the normalization D.  When the solution is nearly constant,
-    /// ‖E − E_avg‖ → 0 and the residual-scaled branch blows up.  Guarding
-    /// with a small floor keeps ν_h well defined and the min(·, ·) cap takes
-    /// over.  ASPECT uses an effectively-unbounded D when near-constant; we
-    /// guard explicitly to avoid NaNs in pure-advection tests where T is
-    /// identically the initial cone shape away from the front.
-    ScalarT D_floor = ScalarT( 1e-14 );
-
-    /// If true, set ν_h_wedge = 0 for any wedge with at least one corner on
-    /// a Dirichlet boundary.  Removes the BL-localised over-damping caused
-    /// by the lumped-mass Lap projection's wall-flux contamination.
-    bool mask_dirichlet_wedges = false;
 };
+
+/// Floor on the normalization D used in compute_entropy_stats.  When the
+/// solution is nearly constant ‖E − E_avg‖ → 0 and the residual-scaled
+/// branch blows up; this baked-in floor keeps ν_h well defined and lets the
+/// min(·, ·) cap take over.  Guards against NaNs in pure-advection tests
+/// where T equals the initial cone shape away from the front.
+template < typename ScalarT >
+KOKKOS_INLINE_FUNCTION constexpr ScalarT entropy_viscosity_D_floor()
+{
+    return ScalarT( 1e-14 );
+}
 
 /// Global scalar stats derived from the current temperature field.
 ///
@@ -160,8 +158,8 @@ ScalarT min_entry_owned(
 ///     where E(q) = ½·(T(q) − T_m)² and T(q) is interpolated from the 6
 ///     wedge nodes via Σ_j N_j(q)·T_j.
 ///   - D uses the signed-magnitude ∞-norm of (E − E_avg) over owned nodes.
-///     A tiny floor (params.D_floor) prevents division by zero when T is
-///     nearly constant.
+///     A tiny floor (entropy_viscosity_D_floor) prevents division by zero
+///     when T is nearly constant.
 template < typename ScalarT >
 EntropyStats< ScalarT > compute_entropy_stats(
     const linalg::VectorQ1Scalar< ScalarT >&                     T,
@@ -300,7 +298,7 @@ EntropyStats< ScalarT > compute_entropy_stats(
                                 ? Kokkos::sqrt( sum_dE2_dV_local / sum_dV )
                                 : ScalarT( 0 );
 
-    stats.D = Kokkos::max( D_local, params.D_floor );
+    stats.D = Kokkos::max( D_local, entropy_viscosity_D_floor< ScalarT >() );
 
     return stats;
 }
@@ -339,7 +337,6 @@ void compute_nu_h(
     const linalg::VectorQ1Scalar< ScalarT >&                     T_nm1,
     const linalg::VectorQ1Vec< ScalarT, 3 >&                     u,
     const grid::Grid4DDataScalar< ScalarT >&                     lap_data,
-    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
     const grid::shell::DistributedDomain&                        domain,
     const grid::Grid3DDataVec< ScalarT, 3 >&                     grid_coords,
     const grid::Grid2DDataScalar< ScalarT >&                     radii,
@@ -359,8 +356,6 @@ void compute_nu_h(
     const ScalarT alpha_max = params.alpha_max;
     const ScalarT alpha_E   = params.alpha_E;
     const ScalarT gamma_    = gamma;
-    const bool    mask_dir_wedges = params.mask_dirichlet_wedges;
-    const auto    bmask           = boundary_mask;
     const auto    grid_lat  = grid_coords;
     const auto    radii_v   = radii;
 
@@ -477,33 +472,8 @@ void compute_nu_h(
                                           ? Kokkos::sqrt( r_E_sq_int / V_wedge )
                                           : ScalarT( 0 );
 
-                ScalarT nu_w = Kokkos::min( alpha_max * h_w * u_max_norm,
-                                            alpha_E * h_w * h_w * r_E_w * inv_D );
-
-                // Optional: zero ν_h on wedges that touch a Dirichlet wall.
-                // Wedge 0 corners (within hex (xc,yc,rc)):
-                //   (xc, yc, rc), (xc+1, yc, rc), (xc, yc+1, rc),
-                //   (xc, yc, rc+1), (xc+1, yc, rc+1), (xc, yc+1, rc+1)
-                // Wedge 1 corners:
-                //   (xc+1, yc+1, rc), (xc, yc+1, rc), (xc+1, yc, rc),
-                //   (xc+1, yc+1, rc+1), (xc, yc+1, rc+1), (xc+1, yc, rc+1)
-                if ( mask_dir_wedges )
-                {
-                    const int dx[2][6] = { { 0, 1, 0, 0, 1, 0 }, { 1, 0, 1, 1, 0, 1 } };
-                    const int dy[2][6] = { { 0, 0, 1, 0, 0, 1 }, { 1, 1, 0, 1, 1, 0 } };
-                    const int dr[2][6] = { { 0, 0, 0, 1, 1, 1 }, { 0, 0, 0, 1, 1, 1 } };
-                    bool touches_dirichlet = false;
-                    for ( int k = 0; k < 6; ++k )
-                    {
-                        const auto flag = bmask( id, xc + dx[wedge][k], yc + dy[wedge][k], rc + dr[wedge][k] );
-                        if ( util::has_flag( flag, grid::shell::ShellBoundaryFlag::BOUNDARY ) )
-                        {
-                            touches_dirichlet = true;
-                            break;
-                        }
-                    }
-                    if ( touches_dirichlet ) nu_w = ScalarT( 0 );
-                }
+                const ScalarT nu_w = Kokkos::min( alpha_max * h_w * u_max_norm,
+                                                  alpha_E * h_w * h_w * r_E_w * inv_D );
 
                 nu_h_wedge( id, xc, yc, rc, wedge ) = nu_w;
             }

@@ -398,132 +398,11 @@ class EVSolver : public EnergySolver< ScalarType >
         Kokkos::deep_copy( T_prev_.grid_data(), T_.grid_data() );
 
         // Apply runtime EV parameter overrides from the CLI.
-        ev_params_.alpha_max               = static_cast< ScalarType >( prm_.energy_solver_parameters.ev_alpha_max );
-        ev_params_.alpha_E                 = static_cast< ScalarType >( prm_.energy_solver_parameters.ev_alpha_E );
-        ev_params_.D_floor                 = static_cast< ScalarType >( prm_.energy_solver_parameters.ev_D_floor );
-        ev_params_.mask_dirichlet_wedges   = prm_.energy_solver_parameters.ev_mask_dirichlet_wedges;
-
-        // Q1-nodal diagnostic field for ν_h (only allocated when dump is on).
-        // Populated by dump_diagnostics() as a per-cell wedge-average splatted
-        // to all 8 corners with count-normalisation.  Registered with XDMF in
-        // mantlecirculation.cpp via nu_h_nodal_view().
-        if ( prm_.energy_solver_parameters.ev_dump_nu_h )
-        {
-            nu_h_nodal_diag_ = std::make_unique< linalg::VectorQ1Scalar< ScalarType > >(
-                "nu_h_diag", *domain_, ownership_mask_ );
-            nu_h_count_diag_ = std::make_unique< linalg::VectorQ1Scalar< ScalarType > >(
-                "nu_h_diag_count", *domain_, ownership_mask_ );
-            diag_send_ = std::make_unique<
-                communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarType > >( *domain_ );
-            diag_recv_ = std::make_unique<
-                communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarType > >( *domain_ );
-
-            // Diagnostic Q1 view of the lumped-mass Galerkin Laplacian (lap_T_).
-            // dump_diagnostics() copies lap_T_ into this each output step so the
-            // main loop can dump it via radial_profiles.
-            lap_diag_ = std::make_unique< linalg::VectorQ1Scalar< ScalarType > >(
-                "lap_T", *domain_, ownership_mask_ );
-
-            // Per-wedge h_w = V_wedge^{1/3} (geometry-only; constant in time).
-            // Computed once here using the SAME Felippa 3×2 V_wedge integration
-            // as compute_nu_h, then scattered to a Q1-nodal field for radial
-            // profile dumps and for visual side-by-side with dr.
-            h_w_wedge_ = grid::Grid5DDataScalar< ScalarType >(
-                "ev_h_w_wedge", num_sub, nx_c, nx_c, nr_c, fe::wedge::num_wedges_per_hex_cell );
-            {
-                using namespace fe::wedge;
-                const auto h_w_v   = h_w_wedge_;
-                const auto coords  = coords_shell_;
-                const auto radii_v = coords_radii_;
-                constexpr int num_q = quadrature::quad_felippa_3x2_num_quad_points;
-
-                Kokkos::parallel_for(
-                    "ev_h_w_init",
-                    grid::shell::local_domain_md_range_policy_cells( *domain_ ),
-                    KOKKOS_LAMBDA( int s, int xc, int yc, int rc ) {
-                        dense::Vec< ScalarType, 3 >
-                            wedge_phy_surf[num_wedges_per_hex_cell][num_nodes_per_wedge_surface] = {};
-                        wedge_surface_physical_coords( wedge_phy_surf, coords, s, xc, yc );
-                        const ScalarType r_1 = radii_v( s, rc );
-                        const ScalarType r_2 = radii_v( s, rc + 1 );
-                        dense::Vec< ScalarType, 3 > qp[num_q];
-                        ScalarType                  qw[num_q];
-                        quadrature::quad_felippa_3x2_quad_points( qp );
-                        quadrature::quad_felippa_3x2_quad_weights( qw );
-                        for ( int w = 0; w < num_wedges_per_hex_cell; ++w )
-                        {
-                            ScalarType V = 0;
-                            for ( int q = 0; q < num_q; ++q )
-                            {
-                                const auto J = jac( wedge_phy_surf[w], r_1, r_2, qp[q] );
-                                V += qw[q] * Kokkos::abs( J.det() );
-                            }
-                            h_w_v( s, xc, yc, rc, w ) = ( V > ScalarType( 0 ) )
-                                ? Kokkos::pow( V, ScalarType( 1.0 / 3.0 ) )
-                                : ScalarType( 0 );
-                        }
-                    } );
-                Kokkos::fence();
-            }
-
-            // Scatter h_w to Q1 nodes (cell-avg over the two wedges, splatted to
-            // 8 corners with atomic_add into a count, halo-reduced, divided).
-            h_w_nodal_diag_ = std::make_unique< linalg::VectorQ1Scalar< ScalarType > >(
-                "ev_h_w", *domain_, ownership_mask_ );
-            h_w_count_diag_ = std::make_unique< linalg::VectorQ1Scalar< ScalarType > >(
-                "ev_h_w_count", *domain_, ownership_mask_ );
-            linalg::assign( *h_w_nodal_diag_, ScalarType( 0 ) );
-            linalg::assign( *h_w_count_diag_, ScalarType( 0 ) );
-            {
-                auto       diag_v  = h_w_nodal_diag_->grid_data();
-                auto       count_v = h_w_count_diag_->grid_data();
-                const auto h_w_v   = h_w_wedge_;
-                Kokkos::parallel_for(
-                    "ev_h_w_scatter",
-                    grid::shell::local_domain_md_range_policy_cells( *domain_ ),
-                    KOKKOS_LAMBDA( int s, int xc, int yc, int rc ) {
-                        constexpr int hex_off_x[8] = { 0, 1, 0, 1, 0, 1, 0, 1 };
-                        constexpr int hex_off_y[8] = { 0, 0, 1, 1, 0, 0, 1, 1 };
-                        constexpr int hex_off_r[8] = { 0, 0, 0, 0, 1, 1, 1, 1 };
-                        const ScalarType cell_avg =
-                            ScalarType( 0.5 ) * ( h_w_v( s, xc, yc, rc, 0 ) + h_w_v( s, xc, yc, rc, 1 ) );
-                        for ( int k = 0; k < 8; ++k )
-                        {
-                            Kokkos::atomic_add(
-                                &diag_v( s, xc + hex_off_x[k], yc + hex_off_y[k], rc + hex_off_r[k] ),
-                                cell_avg );
-                            Kokkos::atomic_add(
-                                &count_v( s, xc + hex_off_x[k], yc + hex_off_y[k], rc + hex_off_r[k] ),
-                                ScalarType( 1 ) );
-                        }
-                    } );
-                Kokkos::fence();
-                communication::shell::pack_send_and_recv_local_subdomain_boundaries(
-                    *domain_, diag_v,  *diag_send_, *diag_recv_ );
-                communication::shell::unpack_and_reduce_local_subdomain_boundaries(
-                    *domain_, diag_v,  *diag_recv_ );
-                communication::shell::pack_send_and_recv_local_subdomain_boundaries(
-                    *domain_, count_v, *diag_send_, *diag_recv_ );
-                communication::shell::unpack_and_reduce_local_subdomain_boundaries(
-                    *domain_, count_v, *diag_recv_ );
-                Kokkos::parallel_for(
-                    "ev_h_w_divide",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
-                        { 0, 0, 0, 0 },
-                        { diag_v.extent( 0 ), diag_v.extent( 1 ), diag_v.extent( 2 ), diag_v.extent( 3 ) } ),
-                    KOKKOS_LAMBDA( int s, int x, int y, int r ) {
-                        const ScalarType c = count_v( s, x, y, r );
-                        if ( c > ScalarType( 0 ) ) diag_v( s, x, y, r ) /= c;
-                    } );
-                Kokkos::fence();
-            }
-        }
+        ev_params_.alpha_max = static_cast< ScalarType >( prm_.energy_solver_parameters.ev_alpha_max );
+        ev_params_.alpha_E   = static_cast< ScalarType >( prm_.energy_solver_parameters.ev_alpha_E );
 
         util::logroot << "EV energy solver ready  (α_max=" << ev_params_.alpha_max
-                      << ", α_E=" << ev_params_.alpha_E
-                      << ", D_floor=" << ev_params_.D_floor
-                      << ", mask_dirichlet_wedges=" << ( ev_params_.mask_dirichlet_wedges ? "true" : "false" )
-                      << ")" << std::endl;
+                      << ", α_E=" << ev_params_.alpha_E << ")" << std::endl;
     }
 
     linalg::VectorQ1Scalar< ScalarType >* nu_h_nodal_view() override { return nu_h_nodal_diag_.get(); }
@@ -887,7 +766,6 @@ class EVSolver : public EnergySolver< ScalarType >
                     T_, ownership_mask_, *domain_, coords_shell_, coords_radii_, ev_params_ );
                 fe::wedge::operators::shell::compute_nu_h(
                     nu_h_wedge_, T_, T_prev_, velocity_, lap_T_.grid_data(),
-                    boundary_mask_,
                     *domain_, coords_shell_, coords_radii_,
                     dt, stats, ev_params_, gamma );
             }
