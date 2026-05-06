@@ -12,7 +12,7 @@ Entropy viscosity (EV) fixes this by adding an isotropic artificial diffusion
 diffusion, \f$\nu_h\f$ is built from the strong-form PDE residual itself: it
 vanishes where the discrete solution satisfies its own equation, and turns on
 locally only near the layers and fronts that actually need it.  The result is
-a stabilization that is essentially zero in 99% of the domain and never adds
+a stabilization that is essentially zero in most of the domain and never adds
 more diffusion than a first-order upwind scheme would.
 
 We follow Kronbichler, Heister & Bangerth (*GJI* **191**, 12–29, 2012) /
@@ -21,9 +21,9 @@ Guermond, Pasquetti & Popov (*JCP* **230**, 4248–4267, 2011).
 ## The entropy and its residual
 
 \f[
-    E(T) = \tfrac{1}{2}(T - T_m)^2,
+    E(T) = \frac{1}{2}(T - T_m)^2,
     \qquad
-    T_m = \tfrac{1}{2}(T_{\min} + T_{\max}).
+    T_m = \frac{1}{2}(T_{\min} + T_{\max}).
 \f]
 Multiplying the PDE by \f$\mathrm{d}E/\mathrm{d}T = (T - T_m)\f$ and using
 \f$\partial_t E = (T - T_m)\,\partial_t T\f$ gives the entropy equation
@@ -40,12 +40,11 @@ the per-element residual estimator
 ## The ν_h formula
 
 \f[
-    \boxed{\;
     \nu_h\big|_K = \min\!\Big(
         \alpha_\mathrm{max}\,h_K\,\|\mathbf{u}\|_{\infty,K},
         \;\;
         \alpha_E\,h_K^2\,r_E\big|_K \,/\, D
-    \Big)\;}
+    \Big).
 \f]
 with global normalization
 \f[
@@ -99,7 +98,7 @@ True FE volume integral on the same Felippa quadrature:
     = \frac{\sum_w \sum_q w_q\,|\det J(q)|\,E(q)}
            {\sum_w \sum_q w_q\,|\det J(q)|},
     \qquad
-    E(q) = \tfrac{1}{2}(T(q) - T_m)^2.
+    E(q) = \frac{1}{2}(T(q) - T_m)^2.
 \f]
 Cells are not shared between MPI ranks, so the local sums are partition-of-unity
 and the MPI sum is exact.
