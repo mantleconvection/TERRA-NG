@@ -607,6 +607,44 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         return { "CLI parse error" };
     }
 
+    // Cross-flag validation for anisotropic refinement.  The radial diamond
+    // level at MG level L is (L + radial_extra_levels); we need that level to
+    // be non-negative (otherwise (1 << rad_level) is UB) and to be at least the
+    // radial subdomain refinement level so each subdomain holds >= 1 cell.
+    {
+        const auto& mp           = parameters.mesh_parameters;
+        const int   mesh_min     = mp.refinement_level_mesh_min;
+        const int   extra        = mp.radial_extra_levels;
+        const int   lat_sdr_eff  = ( mp.lat_sdr >= 0 ) ? mp.lat_sdr : mp.refinement_level_subdomains;
+        const int   rad_sdr_eff  = ( mp.rad_sdr >= 0 ) ? mp.rad_sdr : mp.refinement_level_subdomains;
+        const int   rad_level_min = mesh_min + extra;
+
+        if ( rad_level_min < 0 )
+        {
+            return { "Invalid refinement: refinement_level_mesh_min (" + std::to_string( mesh_min )
+                     + ") + radial_extra_levels (" + std::to_string( extra )
+                     + ") = " + std::to_string( rad_level_min )
+                     + " is negative.  Radial mesh refinement level must be >= 0 at the coarsest "
+                       "MG level." };
+        }
+        if ( mesh_min < lat_sdr_eff )
+        {
+            return { "Invalid refinement: refinement_level_mesh_min (" + std::to_string( mesh_min )
+                     + ") is less than the effective lateral subdomain refinement level ("
+                     + std::to_string( lat_sdr_eff )
+                     + ").  Each lateral subdomain needs at least one cell at the coarsest MG level." };
+        }
+        if ( rad_level_min < rad_sdr_eff )
+        {
+            return { "Invalid refinement: refinement_level_mesh_min + radial_extra_levels ("
+                     + std::to_string( rad_level_min )
+                     + ") is less than the effective radial subdomain refinement level ("
+                     + std::to_string( rad_sdr_eff )
+                     + ").  Each radial subdomain needs at least one cell at the coarsest MG level. "
+                       "Consider lowering --rad-sdr or raising --radial-extra-levels." };
+        }
+    }
+
     util::logroot << "=========================================\n";
     util::logroot << "     Starting mantle circulation app     \n";
     util::logroot << "     Run with -h or --help for help      \n";

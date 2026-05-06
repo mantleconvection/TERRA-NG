@@ -1,0 +1,50 @@
+## Domain / mesh
+radius-min=1.22
+radius-max=2.22
+refinement-level-mesh-min=2
+refinement-level-mesh-max=6
+refinement-level-subdomains=1
+
+## Physics
+diffusivity=1
+rayleigh-number=7e3
+viscosity-law="frank-kamenetskii"
+viscosity-rmu=20
+
+## Boundary conditions
+velocity-bc-cmb="freeslip"
+velocity-bc-surface="freeslip"
+temperature-bc-value-cmb=1.0
+temperature-bc-value-surface=0.0
+
+## Initial condition
+initial-temperature-profile="conductive"
+initial-temperature-sph-degree=3
+initial-temperature-sph-order=2
+initial-temperature-sph-epsilon=0.01
+
+## Time stepping & energy solver
+dt-scaling=0.5
+t-end=1.0
+max-timesteps=1000000
+energy-solver="ev"
+energy-substeps=1
+
+## Stokes solver
+stokes-krylov-restart=10
+stokes-krylov-max-iterations=10
+stokes-krylov-relative-tolerance=1e-06
+stokes-krylov-absolute-tolerance=1e-12
+stokes-viscous-pc-num-vcycles=1
+stokes-viscous-pc-cheby-order=2
+stokes-viscous-pc-num-smoothing-steps-prepost=3
+stokes-viscous-pc-num-power-iterations=10
+stokes-viscous-pc-agglom-factors=[]
+
+## I/O
+outdir="./output_A3_lvl6_ev_cfl05"
+outdir-overwrite=1
+output-frequency=100
+
+## Entropy viscosity
+ev-dump-nu-h=true

@@ -13,6 +13,7 @@ Below is a list of the documentation pages for the framework introducing various
 | [Finite Element Discretization](#finite-elements)    | Overview of the FEM approach and element definitions.                                  |
 | [Linear Algebra](#linear-algebra)                    | Matrix and vector representations, solvers, and preconditioners (including multigrid). |
 | [Thick Spherical Shell](#shell)                      | Details on the thick spherical shell mesh.                                             |
+| [Anisotropic refinement](#anisotropic-refinement)    | Per-axis decoupling of mesh and subdomain refinement (radial vs lateral).              |
 | [Parallelization](#parallelization)                  | Parallel execution patterns.                                                           |
 | [Communication](#communication)                      | Data exchange patterns and MPI communication strategies.                               |
 | [Flag Fields and Masks](#flag-fields-and-masks)      | Use of masks and flag grids for selective operations and boundary tagging.             |
