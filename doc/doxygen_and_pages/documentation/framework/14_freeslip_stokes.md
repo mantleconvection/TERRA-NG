@@ -38,16 +38,6 @@ null space is identically zero and the penalty term vanishes on it.  Per-apply
 cost is three extra `MPI_Allreduce` of one double each — negligible against the
 kernel cost.
 
-## A subtlety in the boundary enforcement
-
-Free-slip-only enforcement (zeroing just the normal RHS component) leaves
-inconsistent tangential RHS contributions at the free-slip boundary, which
-degrades velocity convergence to \f$\mathcal{O}(h^{0.5})\f$.  The verification tests
-instead apply the same homogeneous velocity-Dirichlet enforcement at all
-boundary nodes that `mantlecirculation` uses, with the FREESLIP flag carried
-through the operator handling the tangential stress-free condition.  This
-restores the expected \f$\mathcal{O}(h^2)\f$ rate.
-
 ## Convergence results
 
 **zs/zs (Dirichlet / Dirichlet)** — \ref test_epsilon_divdiv_stokes_assess.cpp:
