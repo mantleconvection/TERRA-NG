@@ -1,4 +1,4 @@
-# Lumi Supercomputer
+# Lumi Supercomputer {#LUMI-G}
 
 Access: https://docs.lumi-supercomputer.eu/firststeps/accessLUMI/
 

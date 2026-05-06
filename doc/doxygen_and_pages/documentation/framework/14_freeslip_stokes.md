@@ -6,9 +6,12 @@ Ponsuganth Ilangovan Ponkumar Ilango).  The benchmark is a Y₂₂ poloidal
 spherical-harmonic flow on the shell \f$R_m = 0.5,\ R_p = 1\f$ with \f$\nu = 1,\ g = 1\f$,
 solved in three boundary-condition configurations:
 
-- **zs/zs** — zero-slip (Dirichlet) at CMB and surface,
-- **fs/zs** — free-slip at CMB, zero-slip at surface,
-- **fs/fs** — free-slip at both CMB and surface.
+- **zs/zs** — zero-slip (Dirichlet) at CMB and surface
+  (\ref test_epsilon_divdiv_stokes_assess.cpp),
+- **fs/zs** — free-slip at CMB, zero-slip at surface
+  (\ref test_epsilon_divdiv_stokes_assess_freeslip.cpp),
+- **fs/fs** — free-slip at both CMB and surface
+  (\ref test_epsilon_divdiv_stokes_assess_freeslip_freeslip.cpp).
 
 All three reach the expected \f$\mathcal{O}(h^2)\f$ convergence in velocity and
 pressure up to refinement level 6, using FGMRES with order-2 Chebyshev-accelerated
@@ -35,19 +38,9 @@ null space is identically zero and the penalty term vanishes on it.  Per-apply
 cost is three extra `MPI_Allreduce` of one double each — negligible against the
 kernel cost.
 
-## A subtlety in the boundary enforcement
-
-Free-slip-only enforcement (zeroing just the normal RHS component) leaves
-inconsistent tangential RHS contributions at the free-slip boundary, which
-degrades velocity convergence to \f$\mathcal{O}(h^{0.5})\f$.  The verification tests
-instead apply the same homogeneous velocity-Dirichlet enforcement at all
-boundary nodes that `mantlecirculation` uses, with the FREESLIP flag carried
-through the operator handling the tangential stress-free condition.  This
-restores the expected \f$\mathcal{O}(h^2)\f$ rate.
-
 ## Convergence results
 
-**zs/zs (Dirichlet / Dirichlet):**
+**zs/zs (Dirichlet / Dirichlet)** — \ref test_epsilon_divdiv_stokes_assess.cpp:
 
 | Level | vel error | pre error | vel ratio | pre ratio |
 |-------|-----------|-----------|-----------|-----------|
@@ -56,7 +49,7 @@ restores the expected \f$\mathcal{O}(h^2)\f$ rate.
 | 5 | 2.09e-6 | 4.07e-5 | 3.81 | 3.77 |
 | 6 | 5.35e-7 | 1.10e-5 | 3.90 | 3.69 |
 
-**fs/zs (free-slip at CMB / Dirichlet at surface):**
+**fs/zs (free-slip at CMB / Dirichlet at surface)** — \ref test_epsilon_divdiv_stokes_assess_freeslip.cpp:
 
 | Level | vel error | pre error | vel ratio | pre ratio |
 |-------|-----------|-----------|-----------|-----------|
@@ -65,7 +58,7 @@ restores the expected \f$\mathcal{O}(h^2)\f$ rate.
 | 5 | 2.32e-6 | 3.27e-5 | 3.82 | 3.76 |
 | 6 | 5.95e-7 | 9.08e-6 | 3.90 | 3.60 |
 
-**fs/fs (free-slip at CMB / free-slip at surface):**
+**fs/fs (free-slip at CMB / free-slip at surface)** — \ref test_epsilon_divdiv_stokes_assess_freeslip_freeslip.cpp:
 
 | Level | vel error | pre error | vel ratio | pre ratio |
 |-------|-----------|-----------|-----------|-----------|
