@@ -516,7 +516,9 @@ class EpsilonDivDivKerngen
 
         if ( operator_apply_mode_ == linalg::OperatorApplyMode::Replace )
         {
+            util::Timer timer_zero( "epsilon_divdiv_zero" );
             assign( dst, 0 );
+            Kokkos::fence();
         }
 
         dst_ = dst.grid_data();
@@ -579,19 +581,67 @@ class EpsilonDivDivKerngen
         Kokkos::fence();
         timer_kernel.stop();
 
-        // Null-space penalty for fs/fs: dst += epsilon * sum_i (n_i^T src) n_i
+        // Null-space penalty for fs/fs: dst += epsilon * sum_i (n_i^T src) n_i.
+        //
+        // Fused implementation:
+        //  - 1 GPU reduction kernel computing all 3 dot products (vs 3x3=9 before)
+        //  - 1 MPI_Allreduce of length 3 (vs 9 separate 1-element reductions before)
+        //  - 1 fused AXPY pass over dst (vs 3 separate passes before)
         if ( penalty_active_ && !diagonal_ )
         {
-            for ( int i = 0; i < 3; ++i )
-            {
-                ScalarType alpha =
-                    penalty_epsilon_ * kernels::common::masked_dot_product(
-                                           null_modes_[i], src_, ownership_mask_, grid::NodeOwnershipFlag::OWNED );
+            util::Timer timer_penalty( "epsilon_divdiv_penalty" );
 
-                auto nm        = null_modes_[i];
+            ScalarType alpha0 = 0, alpha1 = 0, alpha2 = 0;
+            {
+                auto       src_local = src_;
+                auto       nm0       = null_modes_[0];
+                auto       nm1       = null_modes_[1];
+                auto       nm2       = null_modes_[2];
+                auto       mask      = ownership_mask_;
+                const auto mask_val_owned = grid::NodeOwnershipFlag::OWNED;
+                Kokkos::parallel_reduce(
+                    "epsilon_divdiv_penalty_dots",
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                        { 0, 0, 0, 0 },
+                        { src_local.extent( 0 ),
+                          src_local.extent( 1 ),
+                          src_local.extent( 2 ),
+                          src_local.extent( 3 ) } ),
+                    KOKKOS_LAMBDA(
+                        int s, int x, int y, int r, ScalarType& a0, ScalarType& a1, ScalarType& a2 ) {
+                        const ScalarType m =
+                            util::has_flag( mask( s, x, y, r ), mask_val_owned ) ? ScalarType( 1 ) : ScalarType( 0 );
+                        ScalarType s0 = 0, s1 = 0, s2 = 0;
+                        for ( int d = 0; d < VecDim; ++d )
+                        {
+                            const ScalarType sv = src_local( s, x, y, r, d ) * m;
+                            s0 += nm0( s, x, y, r, d ) * sv;
+                            s1 += nm1( s, x, y, r, d ) * sv;
+                            s2 += nm2( s, x, y, r, d ) * sv;
+                        }
+                        a0 += s0;
+                        a1 += s1;
+                        a2 += s2;
+                    },
+                    Kokkos::Sum< ScalarType >( alpha0 ),
+                    Kokkos::Sum< ScalarType >( alpha1 ),
+                    Kokkos::Sum< ScalarType >( alpha2 ) );
+                Kokkos::fence( "epsilon_divdiv_penalty_dots" );
+            }
+
+            ScalarType partial[3] = { alpha0, alpha1, alpha2 };
+            MPI_Allreduce( MPI_IN_PLACE, partial, 3, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+            const ScalarType a0 = penalty_epsilon_ * partial[0];
+            const ScalarType a1 = penalty_epsilon_ * partial[1];
+            const ScalarType a2 = penalty_epsilon_ * partial[2];
+
+            {
                 auto dst_local = dst_;
+                auto nm0       = null_modes_[0];
+                auto nm1       = null_modes_[1];
+                auto nm2       = null_modes_[2];
                 Kokkos::parallel_for(
-                    "penalty_axpy",
+                    "epsilon_divdiv_penalty_axpy_fused",
                     Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
                         { 0, 0, 0, 0 },
                         { dst_local.extent( 0 ),
@@ -600,7 +650,8 @@ class EpsilonDivDivKerngen
                           dst_local.extent( 3 ) } ),
                     KOKKOS_LAMBDA( int s, int x, int y, int r ) {
                         for ( int d = 0; d < VecDim; ++d )
-                            dst_local( s, x, y, r, d ) += alpha * nm( s, x, y, r, d );
+                            dst_local( s, x, y, r, d ) += a0 * nm0( s, x, y, r, d ) + a1 * nm1( s, x, y, r, d ) +
+                                                          a2 * nm2( s, x, y, r, d );
                     } );
             }
             Kokkos::fence( "penalty" );
