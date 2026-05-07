@@ -107,7 +107,10 @@ class Redistribute
         return ni * ni * nr * VecDim;
     }
 
+  public:
     // A message: ships one subdomain's DoFs between a send and a receive rank.
+    // Public so NVCC's cudafe1 stub (generated for device-side captures of
+    // send_messages_ / recv_messages_) can reference the type.
     struct Message
     {
         int send_rank;               // rank on union_comm_
@@ -116,6 +119,7 @@ class Redistribute
         int local_subdomain_on_coarse; // >= 0 if the receiver uses the coarse domain's local index
     };
 
+  private:
     void build_plan_(
         const grid::shell::SubdomainToRankDistributionFunction& fn_fine,
         const grid::shell::SubdomainToRankDistributionFunction& fn_coarse )

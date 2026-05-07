@@ -279,7 +279,7 @@ class SUPGSolver : public EnergySolver< ScalarType >
 template < typename ScalarType >
 class EVSolver : public EnergySolver< ScalarType >
 {
-    using AD_EV     = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPG< ScalarType >;
+    using AD_EV     = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPGKerngen< ScalarType >;
     using TempMass  = fe::wedge::operators::shell::Mass< ScalarType >;
     using EVDiffOp  = fe::wedge::operators::shell::WedgeConstantDivKGrad< ScalarType >;
     using DiagSolverT = linalg::solvers::DiagonalSolver< AD_EV >;

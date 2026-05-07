@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Strong-scale benchmark driver for the mantle-circulation app on Helma H100.
+Strong-scale benchmark driver for the mantle-circulation app on JUWELS Booster.
 
 For each (MT-level, n_gpus) cell in the sweep:
   - emit a per-cell sbatch script under bench_mt/jobs/
@@ -26,7 +26,7 @@ from pathlib import Path
 
 BENCH_DIR     = Path(__file__).resolve().parent
 APP_DIR       = BENCH_DIR.parent
-BINARY        = APP_DIR / "mantlecirculation"
+BINARY        = Path("/p/home/jusers/boehm2/juwels/terraneo-build/apps/mantlecirculation/mantlecirculation")
 BENCH_CONFIG  = BENCH_DIR / "config_bench_A3.toml"
 JOB_DIR       = BENCH_DIR / "jobs"
 OUTPUT_ROOT   = BENCH_DIR / "outputs"
@@ -34,33 +34,58 @@ OUTPUT_ROOT   = BENCH_DIR / "outputs"
 # (mesh_max, list of GPU counts to test). mesh_max -> MT label = 2^mesh_max.
 DEFAULT_SWEEP: list[tuple[int, list[int]]] = [
     # (mesh_max, [n_gpus])
-    (5, [1, 2, 4, 8]),         # MT32   (rad=16, lat=32)
-    (6, [1, 2, 4, 8, 16]),     # MT64   (rad=32, lat=64)
-    (7, [4, 8, 16, 32]),       # MT128  (rad=64, lat=128)
-    (8, [16, 32, 64]),         # MT256  (rad=128, lat=256)
-    (9, [64, 128]),            # MT512  (rad=256, lat=512)
+    (5,  [1, 2, 4, 8]),                  # MT32    (rad=16,  lat=32)
+    (6,  [1, 2, 4, 8, 16]),              # MT64    (rad=32,  lat=64)
+    (7,  [4, 8, 16, 32]),                # MT128   (rad=64,  lat=128)
+    (8,  [16, 32, 64, 128, 256]),        # MT256   (rad=128, lat=256)
+    (9,  [64, 128, 256, 512]),           # MT512   (rad=256, lat=512)
+    (10, [256, 512, 1024, 2048]),        # MT1024  (rad=512, lat=1024)
 ]
 
 GPUS_PER_NODE  = 4
-TIME_LIMIT     = "00:30:00"
+ACCOUNT        = "walberlamovinggeo"
 
-# Pick the smallest level_subdomains s.t. 10*8^k >= n_gpus, capped at 3.
-def choose_subdomains(n_gpus: int) -> int:
-    for k in range(0, 4):
-        if 10 * (8 ** k) >= n_gpus:
-            return k
-    return 3
+# JUWELS Booster: --partition=booster caps at 384 nodes per job; >384 needs --partition=largebooster
+# (same hardware, different policy). The 2048-GPU MT1024 cell is 512 nodes -> largebooster.
+BOOSTER_NODE_CAP = 384
+
+# Walltime: MT32..MT256 fit comfortably in 15 min; MT512/MT1024 cells at low
+# GPU counts can take >15 min (observed: MT512_g64, MT1024_g256, MT1024_g512
+# all timed out at 15 min on the first sweep), so give the two largest models
+# a 30-min budget.
+def time_limit_for(mesh_max: int) -> str:
+    return "00:30:00" if mesh_max >= 9 else "00:15:00"
+
+# Total subdomain count = 10 * 4^lat_sdr * 2^rad_sdr
+# (lat sdr subdivides 2 axes per level -> x4; rad sdr subdivides 1 axis -> x2).
+# We restrict rad_sdr in {max(0, lat_sdr-1), lat_sdr} so the radial direction
+# is never refined more than the lateral. Allowing rad_sdr=lat_sdr (in addition
+# to lat_sdr-1) gives a 2x granularity step alongside the 8x lat-step, which
+# avoids over-decomposing just to land on a rank-balanced count.
+def subdomains_for(lat_sdr: int, rad_sdr: int) -> int:
+    return 10 * (4 ** lat_sdr) * (2 ** rad_sdr)
+
+# Pick the (lat_sdr, rad_sdr) with smallest total subdomain count s.t.
+# subdomains >= n_gpus and divides n_gpus evenly.
+def choose_lat_rad(n_gpus: int) -> tuple[int, int]:
+    candidates = []
+    for lat in range(0, 5):
+        for rad in {max(0, lat - 1), lat}:
+            candidates.append((subdomains_for(lat, rad), lat, rad))
+    candidates.sort()
+    for subs, lat, rad in candidates:
+        if subs >= n_gpus and subs % n_gpus == 0:
+            return lat, rad
+    raise ValueError(f"no balanced (lat_sdr, rad_sdr) found for n_gpus={n_gpus}")
 
 # Validate per the runtime guards in parameters.hpp:
-#   mesh_min + radial_extra_levels >= 0
-#   mesh_min >= lat_sdr_eff
-#   mesh_min + radial_extra_levels >= rad_sdr_eff
-# We use lat_sdr_eff = rad_sdr_eff = level_subdomains and radial_extra_levels = -1.
-def choose_mesh_min(level_subdomains: int) -> int:
-    # mesh_min must be >= max(level_subdomains, level_subdomains + 1) = level_subdomains + 1
-    # (the radial constraint is the binding one because radial_extra_levels = -1).
-    # But we also want mesh_min >= 2 for a non-trivial MG hierarchy.
-    return max(2, level_subdomains + 1)
+#   mesh_min + radial_extra_levels >= 0          -> mesh_min >= 1
+#   mesh_min >= lat_sdr
+#   mesh_min + radial_extra_levels >= rad_sdr    -> mesh_min >= rad_sdr + 1
+# (the last with radial_extra_levels = -1). mesh_min >= 2 keeps a non-trivial
+# MG hierarchy.
+def choose_mesh_min(lat_sdr: int, rad_sdr: int) -> int:
+    return max(2, lat_sdr, rad_sdr + 1)
 
 def gpu_to_node_layout(n_gpus: int) -> tuple[int, int]:
     """Map a target n_gpus to (#nodes, #ntasks_per_node).
@@ -79,15 +104,15 @@ def render_job_script(mesh_max: int, n_gpus: int) -> tuple[Path, Path, dict]:
     cell_tag         = f"MT{mt_label}_g{n_gpus}"
     job_path         = JOB_DIR / f"bench_{cell_tag}.sh"
     out_path         = OUTPUT_ROOT / cell_tag
-    nodes, tpn       = gpu_to_node_layout(n_gpus)
-    level_subdomains = choose_subdomains(n_gpus)
-    mesh_min         = choose_mesh_min(level_subdomains)
-    radial_extra     = -1
+    nodes, tpn   = gpu_to_node_layout(n_gpus)
+    lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
+    mesh_min     = choose_mesh_min(lat_sdr, rad_sdr)
+    radial_extra = -1
 
     info = dict(
         cell_tag=cell_tag, mt_label=mt_label,
         mesh_max=mesh_max, mesh_min=mesh_min,
-        level_subdomains=level_subdomains, radial_extra=radial_extra,
+        lat_sdr=lat_sdr, rad_sdr=rad_sdr, radial_extra=radial_extra,
         n_gpus=n_gpus, nodes=nodes, tasks_per_node=tpn,
     )
 
@@ -97,34 +122,39 @@ def render_job_script(mesh_max: int, n_gpus: int) -> tuple[Path, Path, dict]:
         f"--outdir-overwrite "
         f"--refinement-level-mesh-min {mesh_min} "
         f"--refinement-level-mesh-max {mesh_max} "
-        f"--refinement-level-subdomains {level_subdomains} "
+        f"--lat-sdr {lat_sdr} "
+        f"--rad-sdr {rad_sdr} "
         f"--radial-extra-levels {radial_extra} "
         f"--no-xdmf --no-radial-profiles"
     )
+
+    partition  = "largebooster" if nodes > BOOSTER_NODE_CAP else "booster"
+    time_limit = time_limit_for(mesh_max)
 
     script = f"""#!/bin/bash -l
 #SBATCH --job-name=bench_{cell_tag}
 #SBATCH --output=bench_{cell_tag}.o%j
 #SBATCH --error=bench_{cell_tag}.e%j
 #SBATCH -D {JOB_DIR}
-#SBATCH --partition=h100
+#SBATCH --partition={partition}
+#SBATCH --account={ACCOUNT}
 #SBATCH --nodes={nodes}
 #SBATCH --ntasks-per-node={tpn}
-#SBATCH --cpus-per-task=32
-#SBATCH --gres=gpu:h100:{tpn}
-#SBATCH --time={TIME_LIMIT}
-#SBATCH --export=NONE
+#SBATCH --cpus-per-task=12
+#SBATCH --gres=gpu:{tpn}
+#SBATCH --time={time_limit}
 
-cd {APP_DIR}
-echo "Running from: $(pwd)"
-echo "Cell: {cell_tag}  mesh_max={mesh_max}  level_subdomains={level_subdomains}  mesh_min={mesh_min}  radial_extra={radial_extra}  n_gpus={n_gpus}  nodes={nodes}x{tpn}"
+echo "Cell: {cell_tag}  mesh_max={mesh_max}  mesh_min={mesh_min}  lat_sdr={lat_sdr}  rad_sdr={rad_sdr}  radial_extra={radial_extra}  n_gpus={n_gpus}  nodes={nodes}x{tpn}  partition={partition}"
 
-unset SLURM_EXPORT_ENV
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+module load Stages/2025
+module load CUDA/12
+module load NVHPC/25.5-CUDA-12
+module load OpenMPI/4.1.8
 
-module load openmpi/5.0.5-nvhpc24.11-cuda
+export OMPI_MCA_pml=ucx
+export UCX_TLS=rc,sm,cuda_copy,cuda_ipc
 
-mpirun -np {n_gpus} {BINARY} {cmdline_args}
+srun --gpu-bind=closest {BINARY} {cmdline_args}
 """
 
     job_path.write_text(script)
@@ -171,12 +201,13 @@ def main(argv):
         # Persist a manifest so collect_bench_mt.py can map cells -> job ids.
         manifest = JOB_DIR / "manifest.txt"
         with open(manifest, "w") as f:
-            f.write("# cell_tag\tjob_id\tmesh_max\tlevel_subdomains\tmesh_min\tradial_extra\tn_gpus\tnodes\ttasks_per_node\n")
+            f.write("# cell_tag\tjob_id\tmesh_max\tlat_sdr\trad_sdr\tmesh_min\tradial_extra\tn_gpus\tnodes\ttasks_per_node\n")
             for info, jobid in submitted:
                 f.write("\t".join([
                     info["cell_tag"], jobid,
-                    str(info["mesh_max"]), str(info["level_subdomains"]), str(info["mesh_min"]),
-                    str(info["radial_extra"]),
+                    str(info["mesh_max"]),
+                    str(info["lat_sdr"]), str(info["rad_sdr"]),
+                    str(info["mesh_min"]), str(info["radial_extra"]),
                     str(info["n_gpus"]), str(info["nodes"]), str(info["tasks_per_node"]),
                 ]) + "\n")
         print(f"\nWrote manifest: {manifest}")

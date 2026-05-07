@@ -94,11 +94,20 @@ def read_manifest():
             if not line or line.startswith("#"):
                 continue
             parts = line.split("\t")
-            (cell_tag, job_id, mesh_max, level_subd, mesh_min, radial_extra, n_gpus, nodes, tpn) = parts
+            if len(parts) == 10:
+                (cell_tag, job_id, mesh_max, lat_sdr, rad_sdr, mesh_min,
+                 radial_extra, n_gpus, nodes, tpn) = parts
+            elif len(parts) == 9:
+                # legacy manifest (single sdr column for both axes)
+                (cell_tag, job_id, mesh_max, sdr, mesh_min,
+                 radial_extra, n_gpus, nodes, tpn) = parts
+                lat_sdr = rad_sdr = sdr
+            else:
+                sys.exit(f"manifest line has {len(parts)} columns, expected 9 or 10: {line}")
             rows.append(dict(
                 cell_tag=cell_tag, job_id=job_id,
                 mesh_max=int(mesh_max),
-                level_subdomains=int(level_subd),
+                lat_sdr=int(lat_sdr), rad_sdr=int(rad_sdr),
                 mesh_min=int(mesh_min),
                 radial_extra=int(radial_extra),
                 n_gpus=int(n_gpus), nodes=int(nodes), tasks_per_node=int(tpn),
@@ -124,7 +133,8 @@ def main(argv):
             cell_tag=r["cell_tag"],
             mt_label=2 ** r["mesh_max"],
             mesh_max=r["mesh_max"],
-            level_subdomains=r["level_subdomains"],
+            lat_sdr=r["lat_sdr"],
+            rad_sdr=r["rad_sdr"],
             mesh_min=r["mesh_min"],
             radial_extra=r["radial_extra"],
             n_gpus=r["n_gpus"],
