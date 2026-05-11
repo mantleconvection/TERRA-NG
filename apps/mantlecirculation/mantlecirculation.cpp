@@ -400,7 +400,13 @@ Result<> run( const Parameters& prm )
             prm.boundary_conditions_parameters.temperature_surface,
             prm.boundary_conditions_parameters.temperature_cmb,
             prm.mesh_parameters.radius_min, prm.mesh_parameters.radius_max, true );
+        const auto V_rms_0 = compute_v_rms(
+            (*domains[velocity_level]),
+            u.block_1(),
+            coords_shell[velocity_level],
+            coords_radii[velocity_level] );
         logroot << "Nu_top (Q1) = " << Nu_top_0 << ", Nu_top (FV) = " << Nu_top_fv_0
+                << ", V_rms = " << V_rms_0
                 << "  [timestep 0, before time stepping]" << std::endl;
     }
 
@@ -512,9 +518,15 @@ Result<> run( const Parameters& prm )
                 prm.mesh_parameters.radius_min,
                 prm.mesh_parameters.radius_max,
                 /*at_surface=*/true );
+            const auto V_rms = compute_v_rms(
+                (*domains[velocity_level]),
+                u.block_1(),
+                coords_shell[velocity_level],
+                coords_radii[velocity_level] );
             if ( timestep % 10 == 0 )
             {
-                logroot << "Nu_top (Q1) = " << Nu_top << ", Nu_top (FV) = " << Nu_top_fv << std::endl;
+                logroot << "Nu_top (Q1) = " << Nu_top << ", Nu_top (FV) = " << Nu_top_fv
+                        << ", V_rms = " << V_rms << std::endl;
             }
             // Per-step CSV. simulated_time is updated below; the value here is
             // the time at the *end* of this step (current T just solved).
@@ -524,10 +536,11 @@ Result<> run( const Parameters& prm )
                 std::ofstream out( path, std::ios::app );
                 if ( out.tellp() == 0 )
                 {
-                    out << "timestep,sim_time,Nu_top_Q1,Nu_top_FV\n";
+                    out << "timestep,sim_time,Nu_top_Q1,Nu_top_FV,V_rms\n";
                 }
                 const double t_end_of_step = simulated_time + prm.time_stepping_parameters.energy_substeps * dt;
-                out << timestep << "," << t_end_of_step << "," << Nu_top << "," << Nu_top_fv << "\n";
+                out << timestep << "," << t_end_of_step << "," << Nu_top << "," << Nu_top_fv
+                    << "," << V_rms << "\n";
             }
         }
 
