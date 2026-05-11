@@ -300,6 +300,13 @@ Result<> run( const Parameters& prm )
             u.block_1(), T, T_fct,
             (*domains[velocity_level]), coords_shell[velocity_level], coords_radii[velocity_level],
             prm );
+        // Refresh viscosity from the loaded T: the IC-based eta computed
+        // earlier would otherwise drive the first Stokes solve with a stale
+        // viscosity field and produce an unphysical velocity at restart.
+        if ( prm.physics_parameters.viscosity_parameters.law != ViscosityLaw::CONSTANT )
+        {
+            stokes.update_viscosity( T );
+        }
         // Continue XDMF output sequence from the checkpoint file step.
         xdmf_output.set_write_counter( prm.io_parameters.checkpoint_step );
     }
@@ -483,8 +490,9 @@ Result<> run( const Parameters& prm )
             }
         }
 
-        // Compute Nusselt number at the surface every step; log to stdout
-        // every 10 steps; append to <outdir>/nu.csv every step (rank 0).
+        // Nusselt number: computed and appended to <outdir>/nu.csv at the
+        // same cadence as XDMF output (output_frequency).
+        if ( write_output )
         {
             const auto Nu_top = compute_nusselt(
                 (*domains[velocity_level]),
@@ -529,7 +537,10 @@ Result<> run( const Parameters& prm )
                 << ", we're at " << simulated_time / prm.time_stepping_parameters.t_end * 100.0 << "%)" << std::endl;
         timer_timestep.stop();
 
-        write_timer_tree( prm.io_parameters, timestep );
+        if ( write_output )
+        {
+            write_timer_tree( prm.io_parameters, timestep );
+        }
 
         if ( simulated_time >= prm.time_stepping_parameters.t_end )
         {

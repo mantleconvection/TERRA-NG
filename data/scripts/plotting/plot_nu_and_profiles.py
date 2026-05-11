@@ -49,7 +49,9 @@ for step, color in zip(profile_steps, colors):
 ax1.set_xlabel("Temperature (avg)")
 ax1.set_ylabel("Radius")
 ax1.set_title("Radial Temperature Profiles")
-ax1.legend(fontsize=7, loc="center left", bbox_to_anchor=(0.0, 0.5))
+ncol_legend = max(1, min(6, (len(profile_steps) + 9) // 10))
+ax1.legend(fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.12),
+           ncol=ncol_legend, frameon=False)
 ax1.grid(True, alpha=0.3)
 
 # Right panel: Nusselt number evolution
@@ -94,5 +96,6 @@ if ref_nu:
 
 plt.suptitle(title, fontsize=14)
 plt.tight_layout()
-plt.savefig(output_file, dpi=200)
+plt.subplots_adjust(bottom=0.22)
+plt.savefig(output_file, dpi=200, bbox_inches="tight")
 print(f"Saved to {output_file}")

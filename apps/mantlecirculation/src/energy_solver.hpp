@@ -781,6 +781,17 @@ class EVSolver : public EnergySolver< ScalarType >
             linalg::apply( *M_, T_, q_ );
             linalg::lincomb( q_, { ScalarType( 1 ), -dt }, { q_, rhs_ev_ } );
 
+            // 4b) Constant internal-heating source: q += dt · M · γ.
+            //     rhs_ev_ is finished with at this point and is reused as a
+            //     scratch γ-vector; tmp_ is also free until the Dirichlet
+            //     enforcement below.
+            if ( gamma != ScalarType( 0 ) )
+            {
+                linalg::assign( rhs_ev_, gamma );
+                linalg::apply( *M_, rhs_ev_, tmp_ );
+                linalg::lincomb( q_, { ScalarType( 1 ), dt }, { q_, tmp_ } );
+            }
+
             // 5) History rotation BEFORE the solve overwrites T.
             Kokkos::deep_copy( T_prev_.grid_data(), T_.grid_data() );
 
