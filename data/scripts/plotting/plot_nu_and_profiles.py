@@ -49,11 +49,24 @@ for step, color in zip(profile_steps, colors):
 ax1.set_xlabel("Temperature (avg)")
 ax1.set_ylabel("Radius")
 ax1.set_title("Radial Temperature Profiles")
-ax1.legend(fontsize=7, loc="center left", bbox_to_anchor=(0.0, 0.5))
+ncol_legend = max(1, min(6, (len(profile_steps) + 9) // 10))
+ax1.legend(fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.12),
+           ncol=ncol_legend, frameon=False)
 ax1.grid(True, alpha=0.3)
 
 # Right panel: Nusselt number evolution
 ax2.plot(timesteps_nu, nu_values, 'k-', linewidth=0.8)
+# Annotate the final Nu value reached by the run.
+final_ts, final_nu = int(timesteps_nu[-1]), float(nu_values[-1])
+ax2.plot(final_ts, final_nu, 's', color='black', markersize=6,
+         markerfacecolor='white', markeredgewidth=1.2, zorder=5)
+ax2.annotate(f"final: Nu={final_nu:.4f} @ ts={final_ts}",
+             xy=(final_ts, final_nu),
+             xytext=(-8, 12), textcoords='offset points',
+             ha='right', fontsize=9,
+             bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                       edgecolor='black', alpha=0.85),
+             arrowprops=dict(arrowstyle='-', color='black', lw=0.6))
 # Mark the profile timesteps (use nearest available Nu sample)
 ts_arr = np.asarray(timesteps_nu)
 for step, color in zip(profile_steps, colors):
@@ -83,5 +96,6 @@ if ref_nu:
 
 plt.suptitle(title, fontsize=14)
 plt.tight_layout()
-plt.savefig(output_file, dpi=200)
+plt.subplots_adjust(bottom=0.22)
+plt.savefig(output_file, dpi=200, bbox_inches="tight")
 print(f"Saved to {output_file}")

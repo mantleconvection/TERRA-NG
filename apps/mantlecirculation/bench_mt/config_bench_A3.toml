@@ -1,0 +1,42 @@
+## A3 physics, benchmark variant.
+## - 20 timesteps total (a few warmup + the rest measured).
+## - No XDMF / radial-profile output (timing should not include I/O).
+## - Mesh + subdomain refinement levels are passed via CLI overrides; this file
+##   keeps physics-only knobs.
+radius-min=1.22
+radius-max=2.22
+diffusivity=1
+rayleigh-number=7e3
+viscosity-law="frank-kamenetskii"
+viscosity-rmu=20
+
+velocity-bc-cmb="freeslip"
+velocity-bc-surface="freeslip"
+temperature-bc-value-cmb=1.0
+temperature-bc-value-surface=0.0
+
+initial-temperature-profile="conductive"
+initial-temperature-sph-degree=3
+initial-temperature-sph-order=2
+initial-temperature-sph-epsilon=0.01
+
+dt-scaling=0.5
+t-end=1.0
+max-timesteps=20
+energy-solver="ev"
+energy-substeps=1
+
+stokes-krylov-restart=10
+stokes-krylov-max-iterations=10
+stokes-krylov-relative-tolerance=1e-06
+stokes-krylov-absolute-tolerance=1e-12
+stokes-viscous-pc-num-vcycles=1
+stokes-viscous-pc-cheby-order=2
+stokes-viscous-pc-num-smoothing-steps-prepost=3
+stokes-viscous-pc-num-power-iterations=10
+stokes-viscous-pc-agglom-factors=[]
+
+outdir-overwrite=1
+output-frequency=1000
+
+ev-dump-nu-h=false

@@ -300,6 +300,13 @@ Result<> run( const Parameters& prm )
             u.block_1(), T, T_fct,
             (*domains[velocity_level]), coords_shell[velocity_level], coords_radii[velocity_level],
             prm );
+        // Refresh viscosity from the loaded T: the IC-based eta computed
+        // earlier would otherwise drive the first Stokes solve with a stale
+        // viscosity field and produce an unphysical velocity at restart.
+        if ( prm.physics_parameters.viscosity_parameters.law != ViscosityLaw::CONSTANT )
+        {
+            stokes.update_viscosity( T );
+        }
         // Continue XDMF output sequence from the checkpoint file step.
         xdmf_output.set_write_counter( prm.io_parameters.checkpoint_step );
     }
@@ -393,7 +400,13 @@ Result<> run( const Parameters& prm )
             prm.boundary_conditions_parameters.temperature_surface,
             prm.boundary_conditions_parameters.temperature_cmb,
             prm.mesh_parameters.radius_min, prm.mesh_parameters.radius_max, true );
+        const auto V_rms_0 = compute_v_rms(
+            (*domains[velocity_level]),
+            u.block_1(),
+            coords_shell[velocity_level],
+            coords_radii[velocity_level] );
         logroot << "Nu_top (Q1) = " << Nu_top_0 << ", Nu_top (FV) = " << Nu_top_fv_0
+                << ", V_rms = " << V_rms_0
                 << "  [timestep 0, before time stepping]" << std::endl;
     }
 
@@ -483,8 +496,9 @@ Result<> run( const Parameters& prm )
             }
         }
 
-        // Compute Nusselt number at the surface every step; log to stdout
-        // every 10 steps; append to <outdir>/nu.csv every step (rank 0).
+        // Nusselt number: computed and appended to <outdir>/nu.csv at the
+        // same cadence as XDMF output (output_frequency).
+        if ( write_output )
         {
             const auto Nu_top = compute_nusselt(
                 (*domains[velocity_level]),
@@ -504,9 +518,15 @@ Result<> run( const Parameters& prm )
                 prm.mesh_parameters.radius_min,
                 prm.mesh_parameters.radius_max,
                 /*at_surface=*/true );
+            const auto V_rms = compute_v_rms(
+                (*domains[velocity_level]),
+                u.block_1(),
+                coords_shell[velocity_level],
+                coords_radii[velocity_level] );
             if ( timestep % 10 == 0 )
             {
-                logroot << "Nu_top (Q1) = " << Nu_top << ", Nu_top (FV) = " << Nu_top_fv << std::endl;
+                logroot << "Nu_top (Q1) = " << Nu_top << ", Nu_top (FV) = " << Nu_top_fv
+                        << ", V_rms = " << V_rms << std::endl;
             }
             // Per-step CSV. simulated_time is updated below; the value here is
             // the time at the *end* of this step (current T just solved).
@@ -516,10 +536,11 @@ Result<> run( const Parameters& prm )
                 std::ofstream out( path, std::ios::app );
                 if ( out.tellp() == 0 )
                 {
-                    out << "timestep,sim_time,Nu_top_Q1,Nu_top_FV\n";
+                    out << "timestep,sim_time,Nu_top_Q1,Nu_top_FV,V_rms\n";
                 }
                 const double t_end_of_step = simulated_time + prm.time_stepping_parameters.energy_substeps * dt;
-                out << timestep << "," << t_end_of_step << "," << Nu_top << "," << Nu_top_fv << "\n";
+                out << timestep << "," << t_end_of_step << "," << Nu_top << "," << Nu_top_fv
+                    << "," << V_rms << "\n";
             }
         }
 
@@ -529,7 +550,10 @@ Result<> run( const Parameters& prm )
                 << ", we're at " << simulated_time / prm.time_stepping_parameters.t_end * 100.0 << "%)" << std::endl;
         timer_timestep.stop();
 
-        write_timer_tree( prm.io_parameters, timestep );
+        if ( write_output )
+        {
+            write_timer_tree( prm.io_parameters, timestep );
+        }
 
         if ( simulated_time >= prm.time_stepping_parameters.t_end )
         {

@@ -3,6 +3,7 @@
 #include "parameters.hpp"
 
 #include "fe/wedge/integrands.hpp"
+#include "fe/wedge/kernel_helpers.hpp"
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "kokkos/kokkos_wrapper.hpp"
@@ -238,6 +239,92 @@ inline ScalarType compute_nusselt(
     const ScalarType denominator = compute_boundary_heat_flux_integral( domain, T_ref.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, at_surface );
 
     return Kokkos::abs( numerator ) / Kokkos::abs( denominator );
+}
+
+/// @brief Volume-averaged root-mean-square velocity over the shell.
+///
+/// V_rms = sqrt( ∫_Ω |u|² dV / ∫_Ω dV )
+///
+/// Integrated with the Felippa 3×2 wedge quadrature on each hex cell.  Cells
+/// are not shared between ranks (only nodes are), so each rank's contribution
+/// is a partition of the global volume integral; the two partial sums are
+/// MPI_Allreduce'd before the final ratio.
+inline ScalarType compute_v_rms(
+    const grid::shell::DistributedDomain&              domain,
+    const linalg::VectorQ1Vec< ScalarType, 3 >&        velocity,
+    const grid::Grid3DDataVec< ScalarType, 3 >&        coords_shell,
+    const grid::Grid2DDataScalar< ScalarType >&        coords_radii )
+{
+    using namespace fe::wedge;
+
+    const auto u_data   = velocity.grid_data();
+    const auto grid_lat = coords_shell;
+    const auto radii_v  = coords_radii;
+
+    constexpr int num_q = quadrature::quad_felippa_3x2_num_quad_points;
+
+    ScalarType sum_u2_dV = 0;
+    ScalarType sum_dV    = 0;
+
+    Kokkos::parallel_reduce(
+        "v_rms_volume_int",
+        grid::shell::local_domain_md_range_policy_cells( domain ),
+        KOKKOS_LAMBDA( int id, int xc, int yc, int rc, ScalarType& acc_u2, ScalarType& acc_V ) {
+            dense::Vec< ScalarType, 3 > wedge_phy_surf[num_wedges_per_hex_cell][num_nodes_per_wedge_surface] = {};
+            wedge_surface_physical_coords( wedge_phy_surf, grid_lat, id, xc, yc );
+
+            const ScalarType r_1 = radii_v( id, rc );
+            const ScalarType r_2 = radii_v( id, rc + 1 );
+
+            dense::Vec< ScalarType, 3 > qp[num_q];
+            ScalarType                  qw[num_q];
+            quadrature::quad_felippa_3x2_quad_points( qp );
+            quadrature::quad_felippa_3x2_quad_weights( qw );
+
+            dense::Vec< ScalarType, num_nodes_per_wedge > u_w[num_wedges_per_hex_cell][3];
+            for ( int d = 0; d < 3; ++d )
+            {
+                dense::Vec< ScalarType, num_nodes_per_wedge > comp[num_wedges_per_hex_cell];
+                extract_local_wedge_vector_coefficients( comp, id, xc, yc, rc, d, u_data );
+                u_w[0][d] = comp[0];
+                u_w[1][d] = comp[1];
+            }
+
+            for ( int wedge = 0; wedge < num_wedges_per_hex_cell; ++wedge )
+            {
+                for ( int q = 0; q < num_q; ++q )
+                {
+                    const dense::Mat< ScalarType, 3, 3 > J =
+                        jac( wedge_phy_surf[wedge], r_1, r_2, qp[q] );
+                    const ScalarType abs_det = Kokkos::abs( J.det() );
+                    if ( abs_det < ScalarType( 1e-30 ) )
+                    {
+                        continue;
+                    }
+
+                    ScalarType uq[3] = { 0, 0, 0 };
+                    for ( int j = 0; j < num_nodes_per_wedge; ++j )
+                    {
+                        const ScalarType N_j = shape( j, qp[q] );
+                        uq[0] += N_j * u_w[wedge][0]( j );
+                        uq[1] += N_j * u_w[wedge][1]( j );
+                        uq[2] += N_j * u_w[wedge][2]( j );
+                    }
+                    const ScalarType u_mag2 = uq[0]*uq[0] + uq[1]*uq[1] + uq[2]*uq[2];
+
+                    acc_u2 += qw[q] * abs_det * u_mag2;
+                    acc_V  += qw[q] * abs_det;
+                }
+            }
+        },
+        sum_u2_dV,
+        sum_dV );
+    Kokkos::fence();
+
+    MPI_Allreduce( MPI_IN_PLACE, &sum_u2_dV, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &sum_dV,    1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+
+    return ( sum_dV > ScalarType( 0 ) ) ? Kokkos::sqrt( sum_u2_dV / sum_dV ) : ScalarType( 0 );
 }
 
 } // namespace terra::mantlecirculation

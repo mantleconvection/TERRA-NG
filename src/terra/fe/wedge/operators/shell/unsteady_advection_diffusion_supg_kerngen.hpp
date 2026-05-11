@@ -101,6 +101,13 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
     ScalarT mass_scaling_;
     bool    lumped_mass_;
 
+    /// When false, the SUPG streamline-diffusion term τ·(u·∇φ_i)(u·∇φ_j) is
+    /// dropped from the local matrix, turning this into a pure Galerkin
+    /// advection-diffusion operator.  Mirrors the legacy SUPG operator's
+    /// `set_supg_enabled(false)` toggle so the EV energy solver can route
+    /// through the optimized kerngen path.
+    bool    supg_enabled_ = true;
+
     linalg::OperatorApplyMode         operator_apply_mode_;
     linalg::OperatorCommunicationMode operator_communication_mode_;
 
@@ -207,6 +214,9 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
 
     ScalarT&       dt() { return dt_; }
     const ScalarT& dt() const { return dt_; }
+
+    void set_supg_enabled( bool on ) { supg_enabled_ = on; }
+    bool supg_enabled() const { return supg_enabled_; }
 
     const char* path_name() const { return kernel_path_ == KernelPath::Slow ? "slow" : "fast"; }
     KernelPath  kernel_path() const { return kernel_path_; }
@@ -392,7 +402,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                 tau_accum += tau_q * quad_weights[q];
                 waccum    += quad_weights[q];
             }
-            streamline_diffusivity[wedge] = ( waccum > 0.0 ) ? ( tau_accum / waccum ) : 0.0;
+            streamline_diffusivity[wedge] = ( supg_enabled_ && waccum > 0.0 ) ? ( tau_accum / waccum ) : 0.0;
         }
 
         dense::Mat< ScalarT, 6, 6 > A[num_wedges_per_hex_cell] = {};
@@ -714,8 +724,10 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                         tau_sum += tauq * QUAD_W;
                         w_sum   += QUAD_W;
                     }
-                    // volume-averaged tau (unchanged from legacy)
-                    const double tau_wedge = ( w_sum > 0.0 ) ? ( tau_sum / w_sum ) : 0.0;
+                    // volume-averaged tau (unchanged from legacy); zero out
+                    // when SUPG is disabled (EV pipeline) so the streamline
+                    // contributions degenerate cleanly.
+                    const double tau_wedge = ( supg_enabled_ && w_sum > 0.0 ) ? ( tau_sum / w_sum ) : 0.0;
 
                     // Per-i accumulators for the 6 output nodes of this wedge.
                     double dst_acc[num_nodes_per_wedge] = { 0.0 };

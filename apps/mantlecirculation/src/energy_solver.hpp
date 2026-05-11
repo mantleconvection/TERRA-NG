@@ -279,7 +279,7 @@ class SUPGSolver : public EnergySolver< ScalarType >
 template < typename ScalarType >
 class EVSolver : public EnergySolver< ScalarType >
 {
-    using AD_EV     = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPG< ScalarType >;
+    using AD_EV     = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPGKerngen< ScalarType >;
     using TempMass  = fe::wedge::operators::shell::Mass< ScalarType >;
     using EVDiffOp  = fe::wedge::operators::shell::WedgeConstantDivKGrad< ScalarType >;
     using DiagSolverT = linalg::solvers::DiagonalSolver< AD_EV >;
@@ -780,6 +780,17 @@ class EVSolver : public EnergySolver< ScalarType >
             // 4) RHS:  q = M·T^n  -  dt · rhs_ev.
             linalg::apply( *M_, T_, q_ );
             linalg::lincomb( q_, { ScalarType( 1 ), -dt }, { q_, rhs_ev_ } );
+
+            // 4b) Constant internal-heating source: q += dt · M · γ.
+            //     rhs_ev_ is finished with at this point and is reused as a
+            //     scratch γ-vector; tmp_ is also free until the Dirichlet
+            //     enforcement below.
+            if ( gamma != ScalarType( 0 ) )
+            {
+                linalg::assign( rhs_ev_, gamma );
+                linalg::apply( *M_, rhs_ev_, tmp_ );
+                linalg::lincomb( q_, { ScalarType( 1 ), dt }, { q_, tmp_ } );
+            }
 
             // 5) History rotation BEFORE the solve overwrites T.
             Kokkos::deep_copy( T_prev_.grid_data(), T_.grid_data() );
