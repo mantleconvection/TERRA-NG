@@ -36,6 +36,8 @@ class ShearHeatingSimple
 
     grid::Grid3DDataVec< ScalarT, 3 >    grid_;
     grid::Grid2DDataScalar< ScalarT >    radii_;
+    
+    grid::Grid4DDataScalar< ScalarType > coeff_times_mu_;
     grid::Grid4DDataScalar< ScalarType > ux_;
     grid::Grid4DDataScalar< ScalarType > uy_;
     grid::Grid4DDataScalar< ScalarType > uz_;
@@ -62,6 +64,7 @@ class ShearHeatingSimple
         const grid::shell::DistributedDomain&       domain,
         const grid::Grid3DDataVec< ScalarT, 3 >&    grid,
         const grid::Grid2DDataScalar< ScalarT >&    radii,
+        const grid::Grid4DDataScalar< ScalarType >& coeff_times_mu,
         const grid::Grid4DDataScalar< ScalarType >& ux,
         const grid::Grid4DDataScalar< ScalarType >& uy,
         const grid::Grid4DDataScalar< ScalarType >& uz,
@@ -73,6 +76,7 @@ class ShearHeatingSimple
     : domain_( domain )
     , grid_( grid )
     , radii_( radii )
+    , coeff_times_mu_(coeff_times_mu)
     , ux_( ux )
     , uy_( uy )
     , uz_( uz )
@@ -210,9 +214,13 @@ class ShearHeatingSimple
             int num_quad_points = single_quadpoint_ ? quadrature::quad_felippa_1x1_num_quad_points :
                                                       quadrature::quad_felippa_3x2_num_quad_points;
 
+            dense::Vec< ScalarT, 6 > coeff_times_mu[num_wedges_per_hex_cell];
+
             dense::Vec< ScalarT, 6 > ux[num_wedges_per_hex_cell];
             dense::Vec< ScalarT, 6 > uy[num_wedges_per_hex_cell];
             dense::Vec< ScalarT, 6 > uz[num_wedges_per_hex_cell];
+
+            extract_local_wedge_scalar_coefficients( coeff_times_mu, local_subdomain_id, x_cell, y_cell, r_cell, coeff_times_mu_ );
 
             extract_local_wedge_scalar_coefficients( ux, local_subdomain_id, x_cell, y_cell, r_cell, ux_ );
             extract_local_wedge_scalar_coefficients( uy, local_subdomain_id, x_cell, y_cell, r_cell, uy_ );
@@ -230,6 +238,17 @@ class ShearHeatingSimple
                     const auto J                = jac( wedge_phy_surf[wedge], r_1, r_2, qp );
                     const auto det              = Kokkos::abs( J.det() );
                     const auto J_inv_transposed = J.inv().transposed();
+                    
+                    ///////////////////////////////////////////////////////////////////////////////////////
+                    // We need to implement the shear heating term
+                    // \phi = 2\mu (\eps - \frac{1}{3}\nabla\cdot{u}) : (\eps - \frac{1}{3}\nabla\cdot{u})
+                    // where, \eps = \frac{1}{2}(\nabla u + (\nabla u)^T)
+                    // here the parameter coeff_times_mu means that the shear heating term 
+                    // can be scaled in such a way that it can be turned off/on on certain 
+                    // parts of the domain
+                    ///////////////////////////////////////////////////////////////////////////////////////
+
+                    ScalarType coeff_times_mu_eval = 0.0;
 
                     ScalarType dux_dx_eval = 0.0;
                     ScalarType dux_dy_eval = 0.0;
@@ -245,6 +264,10 @@ class ShearHeatingSimple
 
                     for ( int j = 0; j < num_nodes_per_wedge; j++ )
                     {
+                        const auto shape_j = shape( j, qp );
+
+                        coeff_times_mu_eval += shape_j * coeff_times_mu[wedge]( j );
+
                         const auto grad_j = grad_shape( j, qp );
 
                         dux_dx_eval += ( J_inv_transposed * grad_j )( 0 ) * ux[wedge]( j );
@@ -282,51 +305,9 @@ class ShearHeatingSimple
                         {
                             const auto v = shape( j, qp );
 
-                            A[wedge]( i, j ) += w * shear_heating_qp * u * v * det;
+                            A[wedge]( i, j ) += w * shear_heating_qp * (2.0 * coeff_times_mu_eval) * u * v * det;
                         }
                     }
-                }
-            }
-
-            if ( treat_boundary_ )
-            {
-                Kokkos::abort( "Not tested." );
-
-                for ( int wedge = 0; wedge < num_wedges_per_hex_cell; wedge++ )
-                {
-                    dense::Mat< ScalarT, 6, 6 > boundary_mask;
-                    boundary_mask.fill( 1.0 );
-                    if ( r_cell == 0 )
-                    {
-                        // Inner boundary (CMB).
-                        for ( int i = 0; i < 6; i++ )
-                        {
-                            for ( int j = 0; j < 6; j++ )
-                            {
-                                if ( i != j && ( i < 3 || j < 3 ) )
-                                {
-                                    boundary_mask( i, j ) = 0.0;
-                                }
-                            }
-                        }
-                    }
-
-                    if ( r_cell + 1 == radii_.extent( 1 ) - 1 )
-                    {
-                        // Outer boundary (surface).
-                        for ( int i = 0; i < 6; i++ )
-                        {
-                            for ( int j = 0; j < 6; j++ )
-                            {
-                                if ( i != j && ( i >= 3 || j >= 3 ) )
-                                {
-                                    boundary_mask( i, j ) = 0.0;
-                                }
-                            }
-                        }
-                    }
-
-                    A[wedge].hadamard_product( boundary_mask );
                 }
             }
         }

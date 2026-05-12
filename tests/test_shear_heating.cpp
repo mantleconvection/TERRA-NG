@@ -109,6 +109,34 @@ struct UzInterpolator
     }
 };
 
+struct ViscosityInterpolator
+{
+    Grid3DDataVec< double, 3 > grid_;
+    Grid2DDataScalar< double > radii_;
+    Grid4DDataScalar< double > data_;
+    bool                       only_boundary_;
+
+    ViscosityInterpolator(
+        const Grid3DDataVec< double, 3 >& grid,
+        const Grid2DDataScalar< double >& radii,
+        const Grid4DDataScalar< double >& data,
+        bool                              only_boundary )
+    : grid_( grid )
+    , radii_( radii )
+    , data_( data )
+    , only_boundary_( only_boundary )
+    {}
+
+    KOKKOS_INLINE_FUNCTION
+    void operator()( const int local_subdomain_id, const int x, const int y, const int r ) const
+    {
+        const dense::Vec< double, 3 > coords = grid::shell::coords( local_subdomain_id, x, y, r, grid_, radii_ );
+
+        data_( local_subdomain_id, x, y, r ) =
+            coords( 0 ) * coords( 0 ) + coords( 1 ) * coords( 1 ) + coords( 2 ) * coords( 2 );
+    }
+};
+
 struct TrialTestFunctionInterpolator
 {
     Grid3DDataVec< double, 3 > grid_;
@@ -163,8 +191,10 @@ int main( int argc, char** argv )
     const auto coords_shell = terra::grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto coords_radii = terra::grid::shell::subdomain_shell_radii< ScalarType >( domain );
 
-    VectorQ1Scalar< ScalarType > u( "u", domain, mask_data );
-    VectorQ1Scalar< ScalarType > v( "v", domain, mask_data );
+    VectorQ1Scalar< ScalarType > T_h( "T_h", domain, mask_data );
+    VectorQ1Scalar< ScalarType > s_h( "s_h", domain, mask_data );
+
+    VectorQ1Scalar< ScalarType > mu( "mu", domain, mask_data );
 
     VectorQ1Scalar< ScalarType > ux( "ux", domain, mask_data );
     VectorQ1Scalar< ScalarType > uy( "uy", domain, mask_data );
@@ -175,17 +205,22 @@ int main( int argc, char** argv )
     using ShearHeatingOperator = fe::wedge::operators::shell::ShearHeatingSimple< ScalarType >;
 
     ShearHeatingOperator shear_heating_operator(
-        domain, coords_shell, coords_radii, ux.grid_data(), uy.grid_data(), uz.grid_data(), false, false );
+        domain, coords_shell, coords_radii, mu.grid_data(), ux.grid_data(), uy.grid_data(), uz.grid_data(), false, false );
 
     Kokkos::parallel_for(
         "u_interpolation",
         local_domain_md_range_policy_nodes( domain ),
-        TrialTestFunctionInterpolator( coords_shell, coords_radii, u.grid_data(), false ) );
+        TrialTestFunctionInterpolator( coords_shell, coords_radii, T_h.grid_data(), false ) );
 
     Kokkos::parallel_for(
         "v_interpolation",
         local_domain_md_range_policy_nodes( domain ),
-        TrialTestFunctionInterpolator( coords_shell, coords_radii, v.grid_data(), false ) );
+        TrialTestFunctionInterpolator( coords_shell, coords_radii, s_h.grid_data(), false ) );
+
+    Kokkos::parallel_for(
+        "mu_interpolation",
+        local_domain_md_range_policy_nodes( domain ),
+        ViscosityInterpolator( coords_shell, coords_radii, mu.grid_data(), false ) );
 
     Kokkos::parallel_for(
         "ux_interpolation",
@@ -202,16 +237,17 @@ int main( int argc, char** argv )
         local_domain_md_range_policy_nodes( domain ),
         UzInterpolator( coords_shell, coords_radii, uz.grid_data(), false ) );
 
-    linalg::apply( shear_heating_operator, u, f_dst );
+    linalg::apply( shear_heating_operator, T_h, f_dst );
 
-    const auto shear_heating_integral_analytical = 14.5 * (4.0 / 3.0) * M_PI * (rMax * rMax * rMax - rMin * rMin * rMin);
-    const auto shear_heating_integral = linalg::dot( v, f_dst );
+    const auto shear_heating_integral_analytical =
+        14.5 * ( 4.0 / 5.0 ) * M_PI * ( rMax * rMax * rMax * rMax * rMax - rMin * rMin * rMin * rMin * rMin );
+    const auto shear_heating_integral = linalg::dot( s_h, f_dst );
 
-    const auto shear_heating_integral_error = std::abs(shear_heating_integral - shear_heating_integral_analytical);
+    const auto shear_heating_integral_error = std::abs( shear_heating_integral - shear_heating_integral_analytical );
 
-    if( shear_heating_integral_error > 0.05 )
+    if ( shear_heating_integral_error > 0.025 )
     {
-        Kokkos::abort("Integration error too high!");
+        Kokkos::abort( "Integration error too high!" );
     }
 
     // std::cout << "shear_heating_integral_analytical = " << shear_heating_integral_analytical << std::endl;
