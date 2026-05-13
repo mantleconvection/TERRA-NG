@@ -3,6 +3,7 @@
 
 #include "../../quadrature/quadrature.hpp"
 #include "communication/shell/communication.hpp"
+#include "communication/shell/communication_plan.hpp"
 #include "dense/vec.hpp"
 #include "fe/wedge/integrands.hpp"
 #include "fe/wedge/kernel_helpers.hpp"
@@ -39,8 +40,8 @@ class ShearHeatingSimple
     linalg::OperatorApplyMode         operator_apply_mode_;
     linalg::OperatorCommunicationMode operator_communication_mode_;
 
-    communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT > send_buffers_;
     communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT > recv_buffers_;
+    communication::shell::ShellBoundaryCommPlan< grid::Grid4DDataScalar< ScalarT > > comm_plan_;
 
     grid::Grid4DDataScalar< ScalarType > src_;
     grid::Grid4DDataScalar< ScalarType > dst_;
@@ -71,9 +72,8 @@ class ShearHeatingSimple
     , uz_( uz )
     , operator_apply_mode_( operator_apply_mode )
     , operator_communication_mode_( operator_communication_mode )
-    // TODO: we can reuse the send and recv buffers and pass in from the outside somehow
-    , send_buffers_( domain )
     , recv_buffers_( domain )
+    , comm_plan_( domain )
     {
         quadrature::quad_felippa_1x1_quad_points( quad_points_1x1_ );
         quadrature::quad_felippa_1x1_quad_weights( quad_weights_1x1_ );
@@ -118,9 +118,7 @@ class ShearHeatingSimple
 
         if ( operator_communication_mode_ == linalg::OperatorCommunicationMode::CommunicateAdditively )
         {
-            communication::shell::pack_send_and_recv_local_subdomain_boundaries(
-                domain_, dst_, send_buffers_, recv_buffers_ );
-            communication::shell::unpack_and_reduce_local_subdomain_boundaries( domain_, dst_, recv_buffers_ );
+            terra::communication::shell::send_recv_with_plan( comm_plan_, dst_, recv_buffers_ );
         }
     }
 
