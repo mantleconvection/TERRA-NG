@@ -202,12 +202,12 @@ Result<> run( const Parameters& prm )
         { SURFACE, DIRICHLET },
     };
 
-    if ( prm.boundary_conditions_parameters.velocity_bc_cmb == BoundaryConditionsParameters::VelocityBC::FREE_SLIP )
+    if ( prm.boundary_parameters.velocity_bc_cmb == BoundaryConditionsParameters::VelocityBC::FREE_SLIP )
     {
         grid::shell::set_boundary_condition_flag( bcs, CMB, FREESLIP );
     }
 
-    if ( prm.boundary_conditions_parameters.velocity_bc_surface == BoundaryConditionsParameters::VelocityBC::FREE_SLIP )
+    if ( prm.boundary_parameters.velocity_bc_surface == BoundaryConditionsParameters::VelocityBC::FREE_SLIP )
     {
         grid::shell::set_boundary_condition_flag( bcs, SURFACE, FREESLIP );
     }

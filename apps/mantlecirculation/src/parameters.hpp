@@ -457,7 +457,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         { "freeslip", BoundaryConditionsParameters::VelocityBC::FREE_SLIP },
     };
 
-    add_option_with_default( app, "--velocity-bc-cmb", parameters.boundary_conditions_parameters.velocity_bc_cmb )
+    add_option_with_default( app, "--velocity-bc-cmb", parameters.boundary_parameters.velocity_bc_cmb )
         ->transform( CLI::CheckedTransformer( velocity_bc_cmb_map, CLI::ignore_case ) )
         ->default_val( "noslip" )
         ->group( "Boundary Conditions" );
