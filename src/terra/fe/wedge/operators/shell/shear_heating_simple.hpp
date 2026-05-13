@@ -22,15 +22,9 @@ class ShearHeatingSimple
     using DstVectorType                 = linalg::VectorQ1Scalar< ScalarT >;
     using ScalarType                    = ScalarT;
     using Grid4DDataLocalMatrices       = terra::grid::Grid4DDataMatrices< ScalarType, 6, 6, 2 >;
-    static constexpr int LocalMatrixDim = 6;
 
   private:
-    bool storeLMatrices_ =
-        false; // set to let apply_impl() know, that it should store the local matrices after assembling them
-    bool applyStoredLMatrices_ =
-        false; // set to make apply_impl() load and use the stored LMatrices for the operator application
-    Grid4DDataLocalMatrices lmatrices_;
-    bool                    single_quadpoint_ = false;
+    bool single_quadpoint_ = false;
 
     grid::shell::DistributedDomain domain_;
 
@@ -41,9 +35,6 @@ class ShearHeatingSimple
     grid::Grid4DDataScalar< ScalarType > ux_;
     grid::Grid4DDataScalar< ScalarType > uy_;
     grid::Grid4DDataScalar< ScalarType > uz_;
-
-    bool treat_boundary_;
-    bool diagonal_;
 
     linalg::OperatorApplyMode         operator_apply_mode_;
     linalg::OperatorCommunicationMode operator_communication_mode_;
@@ -68,8 +59,6 @@ class ShearHeatingSimple
         const grid::Grid4DDataScalar< ScalarType >& ux,
         const grid::Grid4DDataScalar< ScalarType >& uy,
         const grid::Grid4DDataScalar< ScalarType >& uz,
-        bool                                        treat_boundary,
-        bool                                        diagonal,
         linalg::OperatorApplyMode                   operator_apply_mode = linalg::OperatorApplyMode::Replace,
         linalg::OperatorCommunicationMode           operator_communication_mode =
             linalg::OperatorCommunicationMode::CommunicateAdditively )
@@ -80,8 +69,6 @@ class ShearHeatingSimple
     , ux_( ux )
     , uy_( uy )
     , uz_( uz )
-    , treat_boundary_( treat_boundary )
-    , diagonal_( diagonal )
     , operator_apply_mode_( operator_apply_mode )
     , operator_communication_mode_( operator_communication_mode )
     // TODO: we can reuse the send and recv buffers and pass in from the outside somehow
@@ -103,70 +90,11 @@ class ShearHeatingSimple
     /// @brief Getter for grid member
     grid::Grid3DDataVec< ScalarT, 3 > get_grid() const { return grid_; }
 
-    /// @brief S/Getter for diagonal member
-    void set_diagonal( bool v ) { diagonal_ = v; }
-
     /// @brief S/Getter for quadpoint member
     void set_single_quadpoint( bool v ) { single_quadpoint_ = v; }
 
-    /// @brief Retrives the local matrix stored in the operator
-    KOKKOS_INLINE_FUNCTION
-    dense::Mat< ScalarT, 6, 6 > get_local_matrix(
-        const int local_subdomain_id,
-        const int x_cell,
-        const int y_cell,
-        const int r_cell,
-        const int wedge )
-    {
-        assert( lmatrices_.data() != nullptr );
-
-        return lmatrices_( local_subdomain_id, x_cell, y_cell, r_cell, wedge );
-    }
-
-    /// @brief Set the local matrix stored in the operator
-    KOKKOS_INLINE_FUNCTION
-    void set_local_matrix(
-        const int                                                    local_subdomain_id,
-        const int                                                    x_cell,
-        const int                                                    y_cell,
-        const int                                                    r_cell,
-        const int                                                    wedge,
-        const dense::Mat< ScalarT, LocalMatrixDim, LocalMatrixDim >& mat ) const
-    {
-        Kokkos::abort( "Not implemented." );
-    }
-
-    /// @brief Setter/Getter for app applyStoredLMatrices_: usage of stored local matrices during apply
-    void setApplyStoredLMatrices( bool v ) { applyStoredLMatrices_ = v; }
-
-    /// @brief
-    /// allocates memory for the local matrices
-    /// calls kernel with storeLMatrices_ = true to assemble and store the local matrices
-    /// sets applyStoredLMatrices_, such that future applies use the stored local matrices
-    void store_lmatrices()
-    {
-        storeLMatrices_ = true;
-        if ( lmatrices_.data() == nullptr )
-        {
-            lmatrices_ = Grid4DDataLocalMatrices(
-                "LaplaceSimple::lmatrices_",
-                domain_.subdomains().size(),
-                domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
-                domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
-                domain_.domain_info().subdomain_num_nodes_radially() - 1 );
-            Kokkos::parallel_for(
-                "assemble_store_lmatrices", grid::shell::local_domain_md_range_policy_cells( domain_ ), *this );
-            Kokkos::fence();
-        }
-        storeLMatrices_       = false;
-        applyStoredLMatrices_ = true;
-    }
-
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
-        if ( storeLMatrices_ or applyStoredLMatrices_ )
-            assert( lmatrices_.data() != nullptr );
-
         if ( operator_apply_mode_ == linalg::OperatorApplyMode::Replace )
         {
             assign( dst, 0 );
@@ -199,8 +127,8 @@ class ShearHeatingSimple
     KOKKOS_INLINE_FUNCTION void
         operator()( const int local_subdomain_id, const int x_cell, const int y_cell, const int r_cell ) const
     {
-        dense::Mat< ScalarT, 6, 6 > A[num_wedges_per_hex_cell] = {};
-        if ( !applyStoredLMatrices_ )
+        dense::Vec< ScalarT, 6 > dst[num_wedges_per_hex_cell];
+
         {
             // Gather surface points for each wedge.
             dense::Vec< ScalarT, 3 > wedge_phy_surf[num_wedges_per_hex_cell][num_nodes_per_wedge_surface] = {};
@@ -301,46 +229,13 @@ class ShearHeatingSimple
                     {
                         const auto u = shape( i, qp );
 
-                        for ( int j = 0; j < num_nodes_per_wedge; j++ )
-                        {
-                            const auto v = shape( j, qp );
-
-                            A[wedge]( i, j ) += w * shear_heating_qp * (2.0 * coeff_times_mu_eval) * u * v * det;
-                        }
+                        dst[wedge]( i ) += w * shear_heating_qp * (2.0 * coeff_times_mu_eval) * u * det;
                     }
                 }
             }
         }
-        else
+
         {
-            // load LMatrix for both local wedges
-            A[0] = lmatrices_( local_subdomain_id, x_cell, y_cell, r_cell, 0 );
-            A[1] = lmatrices_( local_subdomain_id, x_cell, y_cell, r_cell, 1 );
-        }
-
-        if ( diagonal_ )
-        {
-            A[0] = A[0].diagonal();
-            A[1] = A[1].diagonal();
-        }
-
-        if ( storeLMatrices_ )
-        {
-            // write local matrices to mem
-            lmatrices_( local_subdomain_id, x_cell, y_cell, r_cell, 0 ) = A[0];
-            lmatrices_( local_subdomain_id, x_cell, y_cell, r_cell, 1 ) = A[1];
-        }
-        else
-        {
-            // apply local matrices to local DoFs
-            dense::Vec< ScalarT, 6 > src[num_wedges_per_hex_cell];
-            extract_local_wedge_scalar_coefficients( src, local_subdomain_id, x_cell, y_cell, r_cell, src_ );
-
-            dense::Vec< ScalarT, 6 > dst[num_wedges_per_hex_cell];
-
-            dst[0] = A[0] * src[0];
-            dst[1] = A[1] * src[1];
-
             atomically_add_local_wedge_scalar_coefficients( dst_, local_subdomain_id, x_cell, y_cell, r_cell, dst );
         }
     }

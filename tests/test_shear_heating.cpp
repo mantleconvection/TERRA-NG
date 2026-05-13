@@ -205,7 +205,13 @@ int main( int argc, char** argv )
     using ShearHeatingOperator = fe::wedge::operators::shell::ShearHeatingSimple< ScalarType >;
 
     ShearHeatingOperator shear_heating_operator(
-        domain, coords_shell, coords_radii, mu.grid_data(), ux.grid_data(), uy.grid_data(), uz.grid_data(), false, false );
+        domain,
+        coords_shell,
+        coords_radii,
+        mu.grid_data(),
+        ux.grid_data(),
+        uy.grid_data(),
+        uz.grid_data() );
 
     Kokkos::parallel_for(
         "u_interpolation",
@@ -241,7 +247,7 @@ int main( int argc, char** argv )
 
     const auto shear_heating_integral_analytical =
         14.5 * ( 4.0 / 5.0 ) * M_PI * ( rMax * rMax * rMax * rMax * rMax - rMin * rMin * rMin * rMin * rMin );
-    const auto shear_heating_integral = linalg::dot( s_h, f_dst );
+    const auto shear_heating_integral = linalg::dot( s_h, f_dst ) / 2.0; // Divided by 2.0 because of 2 \nu definition
 
     const auto shear_heating_integral_error = std::abs( shear_heating_integral - shear_heating_integral_analytical );
 
