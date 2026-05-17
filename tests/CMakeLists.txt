@@ -99,6 +99,8 @@ add_terra_test(test_supg_fast_vs_slow)
 add_terra_test(test_supg_fast_vs_slow 4)
 add_terra_test(test_supg_perf)
 add_terra_test(test_xdmf_writer)
+add_terra_test(test_ev_rotation)
+add_terra_test(test_ev_advection_diffusion)
 
 # Adding target for all the tests.
 get_property(ALL_TERRA_TESTS GLOBAL PROPERTY TERRA_TEST_TARGETS)
