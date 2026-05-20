@@ -16,9 +16,6 @@
 #include <nesmik/nesmik.hpp>
 #endif
 
-#include <terra/kernels/common/grid_operations.hpp>
-
-
 using namespace terra;
 
 using fe::wedge::operators::shell::EpsilonDivDivKerngen;
@@ -82,43 +79,6 @@ double measure_run_time( int executions, OperatorT& A, const SrcOf< OperatorT >&
     return duration_max;
 }
 
-
-template<
-	typename VectorType,
-	typename VectorContainerType>
-double measure_run_time_linalg(
-	int 				executions,
-	VectorType&			res,
-	const double 			c0,
-	const VectorContainerType&	vecs,
-	const std::vector<double>&	coefs)
-{
-    Kokkos::Timer timer;
-
-    Kokkos::fence();
-    MPI_Barrier( MPI_COMM_WORLD );
-    timer.reset();
-
-    for ( int i = 0; i < executions; ++i )
-    {
-    	terra::linalg::lincomb(
-			res,
-			coefs,
-			vecs,
-			c0
-	);
-        //There are fences in the timing, which might not be okay.
-    }
-
-    Kokkos::fence();
-
-    MPI_Barrier( MPI_COMM_WORLD );
-    double duration     = timer.seconds() / executions;
-    double duration_max = 0.0;
-    MPI_Allreduce( &duration, &duration_max, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD );
-    return duration_max;
-}
-
 BenchmarkData
     run( const int lat_level, const int rad_level, const int executions, const int lat_sdr, const int rad_sdr )
 {
@@ -145,22 +105,30 @@ BenchmarkData
     const auto dofs_scalar = kernels::common::count_masked< long >( mask_data, grid::NodeOwnershipFlag::OWNED );
     const auto dofs_vec    = 3 * dofs_scalar;
 
-    const double c0 = 2.7182;
-    std::vector<double> coefs = {3.1415, 0.5772, 1.4142};
+    VectorQ1Vec< double > src_vec_double( "src_vec_double", domain, mask_data );
+    VectorQ1Vec< double > dst_vec_double( "dst_vec_double", domain, mask_data );
 
-    VectorQ1Scalar<double> y("y", domain, mask_data);
-    linalg::randomize(y);
+    VectorQ1Scalar< double > coeff_double( "coeff_double", domain, mask_data );
 
-    std::vector<VectorQ1Scalar<double> > vecs;
-    for(int i = 0; i != 3; ++i)
-    {
-    	    vecs.emplace_back("v1", domain, mask_data);
-	    linalg::randomize(vecs.back());
-    }
+    linalg::assign( coeff_double, 1.0 );
+    linalg::randomize( src_vec_double );
 
-    util::Timer t("linalg kernel - double");
-    double      duration = measure_run_time_linalg(executions, y, c0, vecs, coefs);
-    long        dofs     = dofs_vec;  //Very suspicious.
+    BoundaryConditions bcs = {
+        { CMB, DIRICHLET },
+        { SURFACE, DIRICHLET },
+    };
+
+    EpsilonDivDivKerngen A(
+        domain,
+        coords_shell_double,
+        coords_radii_double,
+        boundary_mask_data,
+        coeff_double.grid_data(),
+        bcs,
+        false );
+    util::Timer t( "EpsDivDivKerngen - double" );
+    double      duration = measure_run_time( executions, A, src_vec_double, dst_vec_double );
+    long        dofs     = dofs_vec;
 
     return BenchmarkData{ lat_level, dofs, duration };
 }
