@@ -162,7 +162,7 @@ BenchmarkData
     linalg::randomize(v3);
 
     util::Timer t("linalg kernel - double");
-    double      duration = measure_run_time(executions, c0, c1, v1, c2, v2, c3, v3);
+    double      duration = measure_run_time_linalg(executions, c0, c1, v1, c2, v2, c3, v3);
     long        dofs     = dofs_vec;  //Very suspicious.
 
     return BenchmarkData{ lat_level, dofs, duration };
