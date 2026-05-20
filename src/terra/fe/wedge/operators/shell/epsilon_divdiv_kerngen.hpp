@@ -100,6 +100,10 @@ class EpsilonDivDivKerngen
     dense::Vec< ScalarT, 3 > quad_points[quadrature::quad_felippa_1x1_num_quad_points];
     ScalarT                  quad_weights[quadrature::quad_felippa_1x1_num_quad_points];
 
+    /* I am not sure it is a good idea to have them as variables.
+     *  Because I do not know where it lives, in the global memory or not.
+     */
+
     // Local subdomain extents (in cells)
     int local_subdomains_;
     int hex_lat_;
@@ -837,6 +841,8 @@ class EpsilonDivDivKerngen
      *
      * Templated on Diagonal so the compiler can dead-code-eliminate the
      * unused matvec or diagonal-only path, reducing register pressure.
+     *
+     * This here it is interedted.
      */
     template < bool Diagonal >
     KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann( const Team& team ) const
@@ -1128,6 +1134,7 @@ class EpsilonDivDivKerngen
         using ScratchK =
             Kokkos::View< double**, Kokkos::LayoutRight, typename Team::scratch_memory_space, Kokkos::MemoryUnmanaged >;
 
+        //Alighnment issues.
         ScratchCoords coords_sh( shmem, nxy, 3 );
         shmem += nxy * 3;
 
@@ -1212,11 +1219,13 @@ class EpsilonDivDivKerngen
             { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 0, 1 }, { 0, 1, 1 } },
             { { 1, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 1, 1 }, { 0, 1, 1 }, { 1, 0, 1 } } };
 
+        //This could be inlined and unrolled, maybe?
         const int n00 = node_id( tx, ty );
         const int n01 = node_id( tx, ty + 1 );
         const int n10 = node_id( tx + 1, ty );
         const int n11 = node_id( tx + 1, ty + 1 );
 
+        //The loop could start such that it does not run into the break.
         for ( int pass = 0; pass < r_passes_; ++pass )
         {
             const int lvl0   = pass * r_tile_ + tr;
@@ -1270,6 +1279,7 @@ class EpsilonDivDivKerngen
                     const double half_dr = 0.5 * ( r_1 - r_0 );
                     const double r_mid   = 0.5 * ( r_0 + r_1 );
 
+                    //Not sure if it leads to different loads, as some locations, such as `(v0, 1)` are accessed multiple times.
                     const double J_0_0 = r_mid * ( -coords_sh( v0, 0 ) + coords_sh( v1, 0 ) );
                     const double J_0_1 = r_mid * ( -coords_sh( v0, 0 ) + coords_sh( v2, 0 ) );
                     const double J_0_2 =
@@ -1387,6 +1397,7 @@ class EpsilonDivDivKerngen
                             const int ddx = WEDGE_NODE_OFF[w][n][0];
                             const int ddy = WEDGE_NODE_OFF[w][n][1];
                             const int ddr = WEDGE_NODE_OFF[w][n][2];
+                            //Why not sum up locally and then perform one atomic update?
                             Kokkos::atomic_add(
                                 &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 0 ),
                                 kwJ * ( 2.0 * ( g0 * gu00 + g1 * gu10 + g2 * gu20 ) + NEG_TWO_THIRDS * g0 * div_u ) );
@@ -1422,6 +1433,7 @@ class EpsilonDivDivKerngen
                             const int ddx = WEDGE_NODE_OFF[w][n][0];
                             const int ddy = WEDGE_NODE_OFF[w][n][1];
                             const int ddr = WEDGE_NODE_OFF[w][n][2];
+                            //Also local summing up and then do one atomic update.
                             Kokkos::atomic_add(
                                 &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 0 ),
                                 kwJ * sv0 * ( gg + ONE_THIRD * g0 * g0 ) );
@@ -1672,9 +1684,11 @@ class EpsilonDivDivKerngen
                 double i20, i21, i22;
 
                 {
+                    //`half_dr` should be combined with `ONE_THIRD`, probably not an issue though.
                     const double half_dr = 0.5 * ( r_1 - r_0 );
                     const double r_mid   = 0.5 * ( r_0 + r_1 );
 
+                    //This is probably not so good, because it is coalescent, but I am not sure if it can be optimized.
                     const double J_0_0 = r_mid * ( -coords_sh( v0, 0 ) + coords_sh( v1, 0 ) );
                     const double J_0_1 = r_mid * ( -coords_sh( v0, 0 ) + coords_sh( v2, 0 ) );
                     const double J_0_2 =
@@ -1793,6 +1807,7 @@ class EpsilonDivDivKerngen
                             kwJ * ( 2.0 * ( g0 * gu20 + g1 * gu21 + g2 * gu22 ) + NEG_TWO_THIRDS * g2 * div_u );
 
                         // Accumulate Ann for freeslip CMB nodes (n < 3) and surface nodes (n >= 3).
+                        //Duplication, maybe possible to be merged as only `corner` depends it.
                         if ( cmb_freeslip && n < 3 )
                         {
                             const int    corner = CMB_NODE_TO_CORNER[w][n];

@@ -121,6 +121,7 @@ inline Grid4DDataScalar< ShellBoundaryFlag > setup_boundary_mask_data( const Dis
 
         if ( subdomain_info.subdomain_r() == num_radial_subdomains - 1 )
         {
+           //Set here proper bounds.
             Kokkos::parallel_for(
                 "set_boundary_flags",
                 Kokkos::MDRangePolicy( { 0, 0 }, { mask_data.extent( 1 ), mask_data.extent( 2 ) } ),
