@@ -173,13 +173,6 @@ class EpsilonDivDivKerngen
             kernel_path_ = KernelPath::FastFreeslip;
         else
             kernel_path_ = KernelPath::FastDirichletNeumann;
-
-        // Experimental wave-parallel DN path opt-in via env var.
-        // Only meaningful when the host-side rules would have picked the DN path.
-        if ( kernel_path_ == KernelPath::FastDirichletNeumann && std::getenv( "EPSDIVDIV_WAVE" ) != nullptr )
-        {
-            kernel_path_ = KernelPath::FastDirichletNeumannWave;
-        }
     }
 
   public:

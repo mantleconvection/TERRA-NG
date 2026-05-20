@@ -126,6 +126,8 @@ BenchmarkData
         coeff_double.grid_data(),
         bcs,
         false );
+    // Force the wave-parallel matvec path for this benchmark.
+    A.set_kernel_path( decltype( A )::KernelPath::FastDirichletNeumannWave );
     util::Timer t( "EpsDivDivKerngen - double" );
     double      duration = measure_run_time( executions, A, src_vec_double, dst_vec_double );
     long        dofs     = dofs_vec;
