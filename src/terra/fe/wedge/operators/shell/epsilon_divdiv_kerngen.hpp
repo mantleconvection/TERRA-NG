@@ -20,6 +20,8 @@
 #include "linalg/vector_q1.hpp"
 #include "util/timer.hpp"
 
+#include <cstdlib>   // for std::getenv (wave-parallel DN path opt-in)
+
 namespace terra::fe::wedge::operators::shell {
 
 using grid::shell::get_boundary_condition_flag;
@@ -70,6 +72,20 @@ class EpsilonDivDivKerngen
     using LocalMatrixStorage      = linalg::solvers::LocalMatrixStorage< ScalarType, LocalMatrixDim >;
     using Team                    = Kokkos::TeamPolicy<>::member_type;
 
+    /**
+     * @brief Kernel path selected on host.
+     *
+     * This value is computed whenever BCs or stored-matrix mode change and is then
+     * used by `apply_impl()` to select which kernel launch to issue.
+     */
+    enum class KernelPath
+    {
+        Slow,
+        FastDirichletNeumann,
+        FastFreeslip,
+        FastDirichletNeumannWave,   // wave-parallel experimental DN path
+    };
+
   private:
     // Optional element-local matrix storage (GCA/coarsening/explicit local-matrix mode)
     LocalMatrixStorage local_matrix_storage_;
@@ -119,18 +135,6 @@ class EpsilonDivDivKerngen
     ScalarT r_max_;
     ScalarT r_min_;
 
-    /**
-     * @brief Kernel path selected on host.
-     *
-     * This value is computed whenever BCs or stored-matrix mode change and is then
-     * used by `apply_impl()` to select which kernel launch to issue.
-     */
-    enum class KernelPath
-    {
-        Slow,
-        FastDirichletNeumann,
-        FastFreeslip,
-    };
     KernelPath kernel_path_ = KernelPath::FastDirichletNeumann;
 
     // Rotation null-space penalty (active only for fs/fs)
@@ -169,6 +173,13 @@ class EpsilonDivDivKerngen
             kernel_path_ = KernelPath::FastFreeslip;
         else
             kernel_path_ = KernelPath::FastDirichletNeumann;
+
+        // Experimental wave-parallel DN path opt-in via env var.
+        // Only meaningful when the host-side rules would have picked the DN path.
+        if ( kernel_path_ == KernelPath::FastDirichletNeumann && std::getenv( "EPSDIVDIV_WAVE" ) != nullptr )
+        {
+            kernel_path_ = KernelPath::FastDirichletNeumannWave;
+        }
     }
 
   public:
@@ -267,9 +278,11 @@ class EpsilonDivDivKerngen
                       << "), r_passes=" << r_passes_ << std::endl;
         util::logroot << "[EpsilonDivDiv] number of tiles (x,y,r)=(" << lat_tiles_ << "," << lat_tiles_ << ","
                       << r_tiles_ << "), team_size=" << team_size_ << ", blocks=" << blocks_ << std::endl;
-        const char* path_name = ( kernel_path_ == KernelPath::Slow )         ? "slow" :
-                                ( kernel_path_ == KernelPath::FastFreeslip ) ? "fast-freeslip" :
-                                                                               "fast-dirichlet-neumann";
+        const char* path_name =
+            ( kernel_path_ == KernelPath::Slow )                     ? "slow" :
+            ( kernel_path_ == KernelPath::FastFreeslip )             ? "fast-freeslip" :
+            ( kernel_path_ == KernelPath::FastDirichletNeumannWave ) ? "fast-dirichlet-neumann-wave" :
+                                                                       "fast-dirichlet-neumann";
         util::logroot << "[EpsilonDivDiv] kernel path = " << path_name << std::endl;
 #endif
         init_penalty();
@@ -426,6 +439,12 @@ class EpsilonDivDivKerngen
         update_kernel_path_flag_host_only();
     }
 
+    /// @brief Override the kernel path. Bypasses the host-side rules in
+    /// update_kernel_path_flag_host_only(); will be re-derived if BCs or
+    /// stored-matrix mode change.
+    void set_kernel_path( KernelPath p ) { kernel_path_ = p; }
+    KernelPath kernel_path() const { return kernel_path_; }
+
     const grid::Grid4DDataScalar< ScalarType >& k_grid_data() { return k_; }
     const grid::shell::DistributedDomain&       get_domain() const { return domain_; }
     grid::Grid2DDataScalar< ScalarT >           get_radii() const { return radii_; }
@@ -457,9 +476,10 @@ class EpsilonDivDivKerngen
         update_kernel_path_flag_host_only();
 
         util::logroot << "[EpsilonDivDiv] (set_stored_matrix_mode) kernel path = "
-                      << ( ( kernel_path_ == KernelPath::Slow )         ? "slow" :
-                           ( kernel_path_ == KernelPath::FastFreeslip ) ? "fast-freeslip" :
-                                                                          "fast-dirichlet-neumann" )
+                      << ( ( kernel_path_ == KernelPath::Slow )                     ? "slow" :
+                           ( kernel_path_ == KernelPath::FastFreeslip )             ? "fast-freeslip" :
+                           ( kernel_path_ == KernelPath::FastDirichletNeumannWave ) ? "fast-dirichlet-neumann-wave" :
+                                                                                      "fast-dirichlet-neumann" )
                       << std::endl;
     }
 
@@ -558,9 +578,37 @@ class EpsilonDivDivKerngen
                     } );
             }
         }
+        else if ( kernel_path_ == KernelPath::FastDirichletNeumannWave )
+        {
+            // Wave-parallel DN path: each wave (64 lanes) processes 10 radial cells.
+            // league_size: one team per (subdomain, x_cell, y_cell, r_stack).
+            const int r_stacks = ( hex_rad_ + kWaveCellsPerWave - 1 ) / kWaveCellsPerWave;
+            const int wave_blocks =
+                local_subdomains_ * ( hex_lat_ ) * ( hex_lat_ ) * r_stacks;
+            using LB = Kokkos::LaunchBounds< 64, 1 >;
+            Kokkos::TeamPolicy< LB > wv_policy(
+                wave_blocks, /*team_size=*/1, /*vector_length=*/64 );
+            wv_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn_wave() ) );
+            if ( diagonal_ )
+            {
+                Kokkos::parallel_for(
+                    "epsilon_divdiv_apply_kernel_fast_dn_wave_diag", wv_policy,
+                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                        this->template run_team_fast_dirichlet_neumann_wave< true >( team );
+                    } );
+            }
+            else
+            {
+                Kokkos::parallel_for(
+                    "epsilon_divdiv_apply_kernel_fast_dn_wave_matvec", wv_policy,
+                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                        this->template run_team_fast_dirichlet_neumann_wave< false >( team );
+                    } );
+            }
+        }
         else
         {
-            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > dn_policy( blocks_, team_size_ );
+            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 1 > > dn_policy( blocks_, team_size_ );
             dn_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn( team_size_ ) ) );
             if ( diagonal_ )
             {
@@ -746,6 +794,11 @@ class EpsilonDivDivKerngen
         return sizeof( ScalarType ) * nscalars;
     }
 
+    // Wave-parallel DN kernel: constants, scratch sizing, and the
+    // run_team_fast_dirichlet_neumann_wave<Diagonal>() member function
+    // are defined in this separate file (included in the class body).
+#include "epsilon_divdiv_kerngen_wave.hpp"
+
   private:
     /**
      * @brief Decode a team league rank / team rank into:
@@ -850,6 +903,7 @@ class EpsilonDivDivKerngen
         operator_fast_dirichlet_neumann_path< Diagonal >(
             team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell );
     }
+
 
     /**
      * @brief Team entry for fast free-slip matrix-free path.
