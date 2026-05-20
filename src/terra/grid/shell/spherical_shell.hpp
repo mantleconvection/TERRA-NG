@@ -2758,10 +2758,10 @@ inline Grid4DDataScalar< ValueType >
         distributed_domain.domain_info().subdomain_num_nodes_radially( level ) );
 }
 
-inline Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >
+inline Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >
     local_domain_md_range_policy_nodes( const DistributedDomain& distributed_domain )
 {
-    return Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+    return Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
         { 0, 0, 0, 0 },
         { static_cast< long long >( distributed_domain.subdomains().size() ),
           distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally(),
@@ -2771,20 +2771,20 @@ inline Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >
 
 // loop only lateral dimensions of each subdomain. Used in the precomputation of lateral parts of the
 // Jacobian (-> Oliver)
-inline Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >
+inline Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >
     local_domain_md_range_policy_cells_lateral( const DistributedDomain& distributed_domain )
 {
-    return Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >(
+    return Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
         { 0, 0, 0 },
         { static_cast< long long >( distributed_domain.subdomains().size() ),
           distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
           distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() - 1 } );
 }
 
-inline Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >
+inline Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >
     local_domain_md_range_policy_cells( const DistributedDomain& distributed_domain )
 {
-    return Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+    return Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
         { 0, 0, 0, 0 },
         { static_cast< long long >( distributed_domain.subdomains().size() ),
           distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
@@ -2805,10 +2805,10 @@ inline Kokkos::RangePolicy<>
             ( distributed_domain.domain_info().subdomain_num_nodes_radially() - 1 ) );
 }
 
-inline Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >
+inline Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >
     local_domain_md_range_policy_cells_fv_skip_ghost_layers( const DistributedDomain& distributed_domain )
 {
-    return Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+    return Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
         { 0, 1, 1, 1 },
         { static_cast< long long >( distributed_domain.subdomains().size() ),
           distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1 - 1,
