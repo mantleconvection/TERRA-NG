@@ -109,7 +109,7 @@ class TwoGridGCA
         // Looping over the coarse grid.
         Kokkos::parallel_for(
             "gca_coarsening",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+            Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                 { 0, 0, 0, 0 },
                 {
                     static_cast< long long >( coarse_op.get_domain().subdomains().size() ),

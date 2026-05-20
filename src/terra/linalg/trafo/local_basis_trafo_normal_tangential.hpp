@@ -110,7 +110,7 @@ void cartesian_to_normal_tangential_in_place(
 
     Kokkos::parallel_for(
         "cartesian_to_normal_tangential_in_place",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 }, { data.extent( 0 ), data.extent( 1 ), data.extent( 2 ), data.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             if ( !util::has_flag( mask_data( local_subdomain, i, j, k ), flag ) )
@@ -154,7 +154,7 @@ void normal_tangential_to_cartesian_in_place(
 
     Kokkos::parallel_for(
         "cartesian_to_normal_tangential_in_place",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 }, { data.extent( 0 ), data.extent( 1 ), data.extent( 2 ), data.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             if ( !util::has_flag( mask_data( local_subdomain, i, j, k ), flag ) )
