@@ -107,7 +107,7 @@ double measure_run_time_linalg(
 	terra::kernels::common::lincomb(
 			res,
 			c0,
-			c1, v1
+			c1, v1,
 			c2, v2,
 			c3, v3
 	);
