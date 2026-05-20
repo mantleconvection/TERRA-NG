@@ -23,7 +23,7 @@ void fill_view( View4D v, Scalar val )
     const int N3 = v.extent( 3 );
     Kokkos::parallel_for(
         "fill_view",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { N0, N1, N2, N3 } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 }, { N0, N1, N2, N3 } ),
         KOKKOS_LAMBDA( int a, int i, int j, int k ) { v( a, i, j, k ) = val; } );
     Kokkos::fence();
 }
@@ -37,7 +37,7 @@ void lincomb_mdrange( const View4D& y, Scalar c0, Scalar c1, const View4D& x1 )
     const int N3 = y.extent( 3 );
     Kokkos::parallel_for(
         "lincomb_mdrange",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { N0, N1, N2, N3 } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 }, { N0, N1, N2, N3 } ),
         KOKKOS_LAMBDA( int a, int i, int j, int k ) { y( a, i, j, k ) = c0 + c1 * x1( a, i, j, k ); } );
 }
 
@@ -80,7 +80,7 @@ void lincomb_tiled(
     const int N2 = y.extent( 2 );
     const int N3 = y.extent( 3 );
 
-    using Policy = Kokkos::MDRangePolicy< Kokkos::Rank< 4 >, Kokkos::IndexType< int > >;
+    using Policy = Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right >, Kokkos::IndexType< int > >;
     Policy policy( { 0, 0, 0, 0 }, { N0, N1, N2, N3 }, { t0, t1, t2, t3 } );
 
     Kokkos::parallel_for(

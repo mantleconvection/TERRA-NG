@@ -46,7 +46,7 @@ inline Grid4DDataScalar< NodeOwnershipFlag > setup_node_ownership_mask_data( con
 
         Kokkos::parallel_for(
             "set_global_subdomain_id",
-            Kokkos::MDRangePolicy(
+            Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                 { 0, 0, 0 }, { mask_data.extent( 1 ), mask_data.extent( 2 ), mask_data.extent( 3 ) } ),
             KOKKOS_LAMBDA( const int x, const int y, const int r ) {
                 tmp_data_for_global_subdomain_indices( local_subdomain_id, x, y, r ) = global_subdomain_id;
@@ -69,7 +69,7 @@ inline Grid4DDataScalar< NodeOwnershipFlag > setup_node_ownership_mask_data( con
 
         Kokkos::parallel_for(
             "set_node_owner_flags",
-            Kokkos::MDRangePolicy(
+            Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                 { 0, 0, 0 }, { mask_data.extent( 1 ), mask_data.extent( 2 ), mask_data.extent( 3 ) } ),
             KOKKOS_LAMBDA( const int x, const int y, const int r ) {
                 if ( tmp_data_for_global_subdomain_indices( local_subdomain_id, x, y, r ) == global_subdomain_id )

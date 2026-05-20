@@ -368,7 +368,7 @@ class Redistribute
         {
             Kokkos::parallel_for(
                 "redistribute_pack",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 5 > >( { 0, 0, 0, 0, 0 }, { num_messages, ni, ni, nr, VecDim } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 5, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0, 0 }, { num_messages, ni, ni, nr, VecDim } ),
                 KOKKOS_LAMBDA( int m, int i, int j, int k, int c ) {
                     const int local_sdr = msg_sdr( m );
                     const int flat      = m * block + ( ( i * ni + j ) * nr + k ) * VecDim + c;
@@ -379,7 +379,7 @@ class Redistribute
         {
             Kokkos::parallel_for(
                 "redistribute_pack",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 5 > >( { 0, 0, 0, 0, 0 }, { num_messages, ni, ni, nr, VecDim } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 5, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0, 0 }, { num_messages, ni, ni, nr, VecDim } ),
                 KOKKOS_LAMBDA( int m, int i, int j, int k, int c ) {
                     const int local_sdr = msg_sdr( m );
                     const int flat      = m * block + ( ( i * ni + j ) * nr + k ) * VecDim + c;
@@ -413,7 +413,7 @@ class Redistribute
         {
             Kokkos::parallel_for(
                 "redistribute_unpack",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 5 > >( { 0, 0, 0, 0, 0 }, { num_messages, ni, ni, nr, VecDim } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 5, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0, 0 }, { num_messages, ni, ni, nr, VecDim } ),
                 KOKKOS_LAMBDA( int m, int i, int j, int k, int c ) {
                     const int local_sdr       = msg_sdr( m );
                     const int flat            = m * block + ( ( i * ni + j ) * nr + k ) * VecDim + c;
@@ -424,7 +424,7 @@ class Redistribute
         {
             Kokkos::parallel_for(
                 "redistribute_unpack",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 5 > >( { 0, 0, 0, 0, 0 }, { num_messages, ni, ni, nr, VecDim } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 5, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0, 0 }, { num_messages, ni, ni, nr, VecDim } ),
                 KOKKOS_LAMBDA( int m, int i, int j, int k, int c ) {
                     const int local_sdr          = msg_sdr( m );
                     const int flat               = m * block + ( ( i * ni + j ) * nr + k ) * VecDim + c;

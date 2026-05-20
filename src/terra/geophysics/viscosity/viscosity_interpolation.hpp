@@ -45,7 +45,7 @@ class RadialProfileViscosityInterpolator
         data_ = dst_grid;
         Kokkos::parallel_for(
             "viscosity_interpolation",
-            Kokkos::MDRangePolicy(
+            Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                 { 0, 0, 0, 0 },
                 { dst_grid.extent( 0 ), dst_grid.extent( 1 ), dst_grid.extent( 2 ), dst_grid.extent( 3 ) } ),
             *this );

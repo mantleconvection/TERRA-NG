@@ -102,7 +102,7 @@ inline Result<> compute_and_write_velocity_radial_profiles(
 
     Kokkos::parallel_for(
         "decompose velocity into radial and tangential",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 },
             { u_grid.extent( 0 ), u_grid.extent( 1 ), u_grid.extent( 2 ), u_grid.extent( 3 ) } ),
         KOKKOS_LAMBDA( int sd, int x, int y, int r ) {

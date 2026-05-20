@@ -457,7 +457,7 @@ class EVSolver : public EnergySolver< ScalarType >
         const auto nu = nu_h_wedge_;
         Kokkos::parallel_reduce(
             "ev_nu_h_stats",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 5 > >(
+            Kokkos::MDRangePolicy< Kokkos::Rank< 5, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                 { 0, 0, 0, 0, 0 },
                 { nu.extent( 0 ), nu.extent( 1 ), nu.extent( 2 ), nu.extent( 3 ), nu.extent( 4 ) } ),
             KOKKOS_LAMBDA( int s, int x, int y, int r, int w,
@@ -542,7 +542,7 @@ class EVSolver : public EnergySolver< ScalarType >
             // Pointwise divide.
             Kokkos::parallel_for(
                 "ev_nu_h_diag_divide",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                     { 0, 0, 0, 0 },
                     { diag_v.extent( 0 ), diag_v.extent( 1 ), diag_v.extent( 2 ), diag_v.extent( 3 ) } ),
                 KOKKOS_LAMBDA( int s, int x, int y, int r ) {
@@ -571,7 +571,7 @@ class EVSolver : public EnergySolver< ScalarType >
                 ScalarType local_max = 0;
                 Kokkos::parallel_reduce(
                     "ev_lap_max_at_r",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >(
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                         { 0, 0, 0 }, { lap_v.extent( 0 ), lap_v.extent( 1 ), lap_v.extent( 2 ) } ),
                     KOKKOS_LAMBDA( int s, int x, int y, ScalarType& m ) {
                         if ( util::has_flag( own_v( s, x, y, r_target ), grid::NodeOwnershipFlag::OWNED ) )
@@ -623,7 +623,7 @@ class EVSolver : public EnergySolver< ScalarType >
             const auto h_w_v  = h_w_wedge_;
             Kokkos::parallel_reduce(
                 "ev_h_w_stats",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 5 > >(
+                Kokkos::MDRangePolicy< Kokkos::Rank< 5, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                     { 0, 0, 0, 0, 0 },
                     { h_w_v.extent( 0 ), h_w_v.extent( 1 ), h_w_v.extent( 2 ),
                       h_w_v.extent( 3 ), h_w_v.extent( 4 ) } ),
@@ -658,7 +658,7 @@ class EVSolver : public EnergySolver< ScalarType >
             const int  n_sub     = static_cast< int >( radii_v.extent( 0 ) );
             Kokkos::parallel_reduce(
                 "ev_dr_stats",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 2 > >( { 0, 0 }, { n_sub, n_r_cells } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 2, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0 }, { n_sub, n_r_cells } ),
                 KOKKOS_LAMBDA( int s, int i, ScalarType& mn, ScalarType& mx, ScalarType& sm, long long& cnt ) {
                     const ScalarType v = radii_v( s, i + 1 ) - radii_v( s, i );
                     if ( v < mn ) mn = v;
@@ -740,7 +740,7 @@ class EVSolver : public EnergySolver< ScalarType >
                     const auto bm    = boundary_mask_;
                     Kokkos::parallel_for(
                         "ev_lap_T_lumped_mass_divide",
-                        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                             { 0, 0, 0, 0 },
                             { lap_v.extent( 0 ), lap_v.extent( 1 ), lap_v.extent( 2 ), lap_v.extent( 3 ) } ),
                         KOKKOS_LAMBDA( int s, int x, int y, int r ) {

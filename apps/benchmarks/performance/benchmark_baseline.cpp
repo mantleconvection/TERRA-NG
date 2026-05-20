@@ -155,7 +155,7 @@ BenchmarkData
         {
             Kokkos::parallel_for(
                 "stencil",
-                Kokkos::MDRangePolicy(
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                     { 0, 1, 1, 1 }, { y.extent( 0 ), y.extent( 1 ) - 1, y.extent( 2 ) - 1, y.extent( 3 ) - 1 } ),
                 ConstantStencilInner< T >( x0, y ) );
         }

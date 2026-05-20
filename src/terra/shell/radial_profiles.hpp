@@ -95,7 +95,7 @@ RadialProfiles< ScalarType > radial_profiles(
 
     Kokkos::parallel_for(
         "radial profiles reduction",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 },
             { data_grid.extent( 0 ), data_grid.extent( 1 ), data_grid.extent( 2 ), data_grid.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain_id, int x, int y, int r ) {

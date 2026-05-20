@@ -88,7 +88,7 @@ class ProlongationLinear
         // Looping over the fine grid.
         Kokkos::parallel_for(
             "matvec",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+            Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                 { 0, 0, 0, 0 },
                 {
                     dst_.extent( 0 ),
@@ -265,7 +265,7 @@ class ProlongationVecLinear
         // Looping over the fine grid.
         Kokkos::parallel_for(
             "matvec",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+            Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                 { 0, 0, 0, 0 },
                 {
                     dst_.extent( 0 ),

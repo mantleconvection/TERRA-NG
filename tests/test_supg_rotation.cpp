@@ -109,7 +109,7 @@ ScalarType compute_l2_relative_error_nodes(
 
     Kokkos::parallel_reduce(
         "l2_err_num",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 },
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 },
                                                     { T.extent( 0 ), T.extent( 1 ), T.extent( 2 ), T.extent( 3 ) } ),
         KOKKOS_LAMBDA( int id, int i, int j, int k, ScalarType& acc ) {
             if ( util::has_flag( mask( id, i, j, k ), grid::NodeOwnershipFlag::OWNED ) )
@@ -122,7 +122,7 @@ ScalarType compute_l2_relative_error_nodes(
 
     Kokkos::parallel_reduce(
         "l2_err_den",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 },
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 },
                                                     { T.extent( 0 ), T.extent( 1 ), T.extent( 2 ), T.extent( 3 ) } ),
         KOKKOS_LAMBDA( int id, int i, int j, int k, ScalarType& acc ) {
             if ( util::has_flag( mask( id, i, j, k ), grid::NodeOwnershipFlag::OWNED ) )
@@ -151,7 +151,7 @@ ScalarType max_entry_nodes( const Grid4DDataScalar< ScalarType >& x )
     ScalarType max_val = std::numeric_limits< ScalarType >::lowest();
     Kokkos::parallel_reduce(
         "max_entry_nodes",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 },
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 },
                                                     { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int id, int i, int j, int k, ScalarType& lmax ) {
             lmax = Kokkos::max( lmax, x( id, i, j, k ) );

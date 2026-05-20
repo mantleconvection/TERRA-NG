@@ -183,7 +183,7 @@ std::enable_if_t< detail_view_constraints::is_kokkos_view_v< BufferView > && ( s
 
     Kokkos::parallel_for(
         "copy_to_buffer_1D",
-        Kokkos::MDRangePolicy( { 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 2, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ) } ),
         KOKKOS_LAMBDA( const int idx, const int d ) {
             auto x           = detail::idx( idx, size_x, boundary_position_x, grid::BoundaryDirection::FORWARD );
             auto y           = detail::idx( idx, size_y, boundary_position_y, grid::BoundaryDirection::FORWARD );
@@ -223,7 +223,7 @@ std::enable_if_t< detail_view_constraints::is_kokkos_view_v< BufferView > && ( s
 
     Kokkos::parallel_for(
         "copy_to_buffer_2D",
-        Kokkos::MDRangePolicy( { 0, 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ), buffer.extent( 2 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ), buffer.extent( 2 ) } ),
         KOKKOS_LAMBDA( const int i, const int j, const int d ) {
             int x = 0, y = 0, r = 0;
 
@@ -313,7 +313,7 @@ void copy_to_buffer(
 
     Kokkos::parallel_for(
         "copy_to_buffer_1D",
-        Kokkos::MDRangePolicy( { 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 2, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ) } ),
         KOKKOS_LAMBDA( const int idx, const int d ) {
             auto x           = detail::idx( idx, size_x, boundary_position_x, grid::BoundaryDirection::FORWARD );
             auto y           = detail::idx( idx, size_y, boundary_position_y, grid::BoundaryDirection::FORWARD );
@@ -350,7 +350,7 @@ void copy_to_buffer(
 
     Kokkos::parallel_for(
         "copy_to_buffer_2D",
-        Kokkos::MDRangePolicy( { 0, 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ), buffer.extent( 2 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ), buffer.extent( 2 ) } ),
         KOKKOS_LAMBDA( const int i, const int j, const int d ) {
             int x = 0;
             int y = 0;
@@ -435,7 +435,7 @@ void copy_from_buffer_rotate_and_reduce(
 
     Kokkos::parallel_for(
         "copy_from_buffer_1D",
-        Kokkos::MDRangePolicy( { 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 2, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ) } ),
         KOKKOS_LAMBDA( const int idx, const int d ) {
             auto x = detail::idx( idx, size_x, boundary_position_x, boundary_direction );
             auto y = detail::idx( idx, size_y, boundary_position_y, boundary_direction );
@@ -472,7 +472,7 @@ void copy_from_buffer_rotate_and_reduce(
 
     Kokkos::parallel_for(
         "copy_from_buffer_2D",
-        Kokkos::MDRangePolicy( { 0, 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ), buffer.extent( 2 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0 }, { buffer.extent( 0 ), buffer.extent( 1 ), buffer.extent( 2 ) } ),
         KOKKOS_LAMBDA( const int i, const int j, const int d ) {
             int x = 0;
             int y = 0;

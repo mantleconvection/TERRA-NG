@@ -179,7 +179,7 @@ int main( int argc, char** argv )
     {
         Kokkos::parallel_for(
             "init_fine",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 5 > >( { 0, 0, 0, 0, 0 }, { num_local_fine, ni, ni, nr, 3 } ),
+            Kokkos::MDRangePolicy< Kokkos::Rank< 5, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0, 0 }, { num_local_fine, ni, ni, nr, 3 } ),
             KOKKOS_LAMBDA( int s, int i, int j, int k, int c ) {
                 data_fine( s, i, j, k, c ) =
                     test_seed( coords_fine( s, 0 ), coords_fine( s, 1 ), coords_fine( s, 2 ), coords_fine( s, 3 ),
@@ -209,7 +209,7 @@ int main( int argc, char** argv )
     {
         Kokkos::parallel_reduce(
             "check_after_forward",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 5 > >( { 0, 0, 0, 0, 0 }, { num_local_coarse, ni, ni, nr, 3 } ),
+            Kokkos::MDRangePolicy< Kokkos::Rank< 5, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0, 0 }, { num_local_coarse, ni, ni, nr, 3 } ),
             KOKKOS_LAMBDA( int s, int i, int j, int k, int c, double& local_max ) {
                 const double expected =
                     test_seed( coords_coarse( s, 0 ), coords_coarse( s, 1 ), coords_coarse( s, 2 ),
@@ -238,7 +238,7 @@ int main( int argc, char** argv )
     {
         Kokkos::parallel_reduce(
             "check_roundtrip",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 5 > >( { 0, 0, 0, 0, 0 }, { num_local_fine, ni, ni, nr, 3 } ),
+            Kokkos::MDRangePolicy< Kokkos::Rank< 5, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0, 0 }, { num_local_fine, ni, ni, nr, 3 } ),
             KOKKOS_LAMBDA( int s, int i, int j, int k, int c, double& local_max ) {
                 const double expected =
                     test_seed( coords_fine( s, 0 ), coords_fine( s, 1 ), coords_fine( s, 2 ), coords_fine( s, 3 ),

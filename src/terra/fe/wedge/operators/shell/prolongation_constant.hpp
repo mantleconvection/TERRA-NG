@@ -56,7 +56,7 @@ class ProlongationConstant
         // Looping over the coarse grid.
         Kokkos::parallel_for(
             "matvec",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+            Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                 { 0, 0, 0, 0 },
                 {
                     src_.extent( 0 ),
@@ -145,7 +145,7 @@ class ProlongationVecConstant
         // Looping over the coarse grid.
         Kokkos::parallel_for(
             "matvec",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+            Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                 { 0, 0, 0, 0 },
                 {
                     src_.extent( 0 ),

@@ -79,7 +79,7 @@ void pack_inner_cells(
 
     Kokkos::parallel_for(
         "fv_pack_inner_cells",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 2 > >( { 0, 0 }, { ni, nj } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 2, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0 }, { ni, nj } ),
         KOKKOS_LAMBDA( const int i, const int j ) {
             int x = 0, y = 0, r = 0;
 
@@ -140,7 +140,7 @@ void unpack_to_ghost(
 
     Kokkos::parallel_for(
         "fv_unpack_to_ghost",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 2 > >( { 0, 0 }, { ni, nj } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 2, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0 }, { ni, nj } ),
         KOKKOS_LAMBDA( const int i, const int j ) {
             int x = 0, y = 0, r = 0;
 
@@ -428,7 +428,7 @@ void pack_inner_cells_vec(
 
     Kokkos::parallel_for(
         "fv_pack_inner_cells_vec",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 2 > >( { 0, 0 }, { ni, nj } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 2, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0 }, { ni, nj } ),
         KOKKOS_LAMBDA( const int i, const int j ) {
             int x = 0, y = 0, r = 0;
 
@@ -483,7 +483,7 @@ void unpack_to_ghost_vec(
 
     Kokkos::parallel_for(
         "fv_unpack_to_ghost_vec",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 2 > >( { 0, 0 }, { ni, nj } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 2, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0 }, { ni, nj } ),
         KOKKOS_LAMBDA( const int i, const int j ) {
             int x = 0, y = 0, r = 0;
 

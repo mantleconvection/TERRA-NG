@@ -83,7 +83,7 @@ class BoundaryMass
         {
             Kokkos::parallel_for(
                 "matvec",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                     { 0, 0, 0, 0 },
                     { static_cast< long long >( domain_.subdomains().size() ),
                       domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
@@ -95,7 +95,7 @@ class BoundaryMass
         {
             Kokkos::parallel_for(
                 "matvec",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                     { 0, 0, 0, domain_.domain_info().subdomain_num_nodes_radially() - 2 },
                     { static_cast< long long >( domain_.subdomains().size() ),
                       domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,

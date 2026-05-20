@@ -320,7 +320,7 @@ class EpsilonDivDivKerngen
 
             Kokkos::parallel_for(
                 "penalty_fill_mode_" + std::to_string( axis ),
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
                 KOKKOS_LAMBDA( int s, int x, int y, int r ) {
                     const auto c = grid::shell::coords( s, x, y, r, grid_local, radii_local );
                     // ê_axis × r: cyclic cross product
@@ -341,7 +341,7 @@ class EpsilonDivDivKerngen
 
             Kokkos::parallel_for(
                 "penalty_fs_enforce_" + std::to_string( axis ),
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
                 KOKKOS_LAMBDA( int s, int x, int y, int r ) {
                     if ( !util::has_flag( mask_local( s, x, y, r ), freeslip_boundary_mask ) )
                         return;
@@ -384,7 +384,7 @@ class EpsilonDivDivKerngen
                 auto nj = null_modes_[j];
                 Kokkos::parallel_for(
                     "penalty_gs_subtract",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
                     KOKKOS_LAMBDA( int s, int x, int y, int r ) {
                         for ( int d = 0; d < VecDim; ++d )
                             ni( s, x, y, r, d ) -= dot_ij * nj( s, x, y, r, d );
@@ -400,7 +400,7 @@ class EpsilonDivDivKerngen
             auto ni = null_modes_[i];
             Kokkos::parallel_for(
                 "penalty_gs_normalize",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
                 KOKKOS_LAMBDA( int s, int x, int y, int r ) {
                     for ( int d = 0; d < VecDim; ++d )
                         ni( s, x, y, r, d ) *= inv_norm;
@@ -605,7 +605,7 @@ class EpsilonDivDivKerngen
                 const auto mask_val_owned = grid::NodeOwnershipFlag::OWNED;
                 Kokkos::parallel_reduce(
                     "epsilon_divdiv_penalty_dots",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                         { 0, 0, 0, 0 },
                         { src_local.extent( 0 ),
                           src_local.extent( 1 ),
@@ -646,7 +646,7 @@ class EpsilonDivDivKerngen
                 auto nm2       = null_modes_[2];
                 Kokkos::parallel_for(
                     "epsilon_divdiv_penalty_axpy_fused",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                         { 0, 0, 0, 0 },
                         { dst_local.extent( 0 ),
                           dst_local.extent( 1 ),

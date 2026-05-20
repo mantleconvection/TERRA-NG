@@ -73,7 +73,7 @@ ScalarType linf_norm_q1( const VectorQ1Scalar< ScalarType >& v )
     ScalarType  local_max = 0.0;
     Kokkos::parallel_reduce(
         "linf_q1",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 },
             { static_cast< long long >( grid.extent( 0 ) ),
               static_cast< long long >( grid.extent( 1 ) ),

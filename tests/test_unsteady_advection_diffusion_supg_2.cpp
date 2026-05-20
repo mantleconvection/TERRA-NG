@@ -51,7 +51,7 @@ T max_entry( const grid::Grid4DDataScalar< T >& x )
     T max_val = std::numeric_limits< T >::lowest();
     Kokkos::parallel_reduce(
         "max_entry",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 },
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 },
                                                     { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int s, int i, int j, int k, T& lmax ) {
             lmax = Kokkos::max( lmax, x( s, i, j, k ) );
@@ -523,7 +523,7 @@ SweepResult test( int level, ScalarType kappa, const std::shared_ptr< util::Tabl
                 const auto m_view   = M_lumped.grid_data();
                 Kokkos::parallel_for(
                     "lap_T_lumped_mass_project",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                         { 0, 0, 0, 0 },
                         { lap_view.extent( 0 ), lap_view.extent( 1 ),
                           lap_view.extent( 2 ), lap_view.extent( 3 ) } ),

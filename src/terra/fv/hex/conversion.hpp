@@ -49,7 +49,7 @@ void l2_project_analytical_to_fv(
     grid::Grid4DDataScalar< ScalarType > fv_grid = dst.grid_data();
     Kokkos::parallel_for(
         "l2_project_into_fv_function",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 1, 1, 1 },
             { fv_grid.extent( 0 ), fv_grid.extent( 1 ) - 1, fv_grid.extent( 2 ) - 1, fv_grid.extent( 3 ) - 1 } ),
         KOKKOS_LAMBDA(
@@ -150,7 +150,7 @@ void l2_project_fv_to_fe(
 
     Kokkos::parallel_for(
         "l2_project_fv_to_fe_rhs_assembly",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 1, 1, 1 },
             { fv_grid.extent( 0 ), fv_grid.extent( 1 ) - 1, fv_grid.extent( 2 ) - 1, fv_grid.extent( 3 ) - 1 } ),
         KOKKOS_LAMBDA(
@@ -265,7 +265,7 @@ void l2_project_fv_to_fe_lumped(
 
     Kokkos::parallel_for(
         "l2_project_fv_to_fe_lumped_assembly",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 1, 1, 1 },
             { fv_grid.extent( 0 ), fv_grid.extent( 1 ) - 1, fv_grid.extent( 2 ) - 1, fv_grid.extent( 3 ) - 1 } ),
         KOKKOS_LAMBDA(
@@ -358,7 +358,7 @@ void l2_project_fe_to_fv(
 
     Kokkos::parallel_for(
         "l2_project_fe_to_fv",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 1, 1, 1 },
             { fv_grid.extent( 0 ), fv_grid.extent( 1 ) - 1, fv_grid.extent( 2 ) - 1, fv_grid.extent( 3 ) - 1 } ),
         KOKKOS_LAMBDA(

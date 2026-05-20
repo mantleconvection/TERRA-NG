@@ -76,7 +76,7 @@ inline ScalarType compute_nusselt_fv(
 
     Kokkos::parallel_reduce(
         "nusselt_fv_surface",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 1, 1 }, { nsd, nx_fv - 1, ny_fv - 1 } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 1, 1 }, { nsd, nx_fv - 1, ny_fv - 1 } ),
         KOKKOS_LAMBDA( const int sd, const int x, const int y, ScalarType& sum ) {
             // Skip subdomains that do not actually own the boundary at hand.
             if ( boundary_mask( sd, 1, 1, r_boundary_node ) != expected_flag )
@@ -90,7 +90,7 @@ inline ScalarType compute_nusselt_fv(
 
     Kokkos::parallel_reduce(
         "nusselt_fv_count",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 1, 1 }, { nsd, nx_fv - 1, ny_fv - 1 } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 1, 1 }, { nsd, nx_fv - 1, ny_fv - 1 } ),
         KOKKOS_LAMBDA( const int sd, const int x, const int y, int& cnt ) {
             if ( boundary_mask( sd, 1, 1, r_boundary_node ) != expected_flag )
                 return;
@@ -142,7 +142,7 @@ inline ScalarType compute_boundary_heat_flux_integral(
 
     Kokkos::parallel_reduce(
         "nusselt_surface_integral",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 0, 0 }, { num_subdomains, nx - 1, nx - 1 } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0 }, { num_subdomains, nx - 1, nx - 1 } ),
         KOKKOS_LAMBDA( const int sd, const int x_cell, const int y_cell, ScalarType& sum ) {
             // Skip subdomains that are not at the actual boundary (radial subdomain decomposition).
             if ( boundary_mask( sd, x_cell, y_cell, r_boundary_node ) != expected_flag )

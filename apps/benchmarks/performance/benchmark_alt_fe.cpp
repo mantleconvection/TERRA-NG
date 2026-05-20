@@ -64,7 +64,7 @@ void fe_kernel_mdrange( FieldView out, const FieldView in )
 
     Kokkos::parallel_for(
         "fe_kernel_mdrange",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { A, NX - 1, NY - 1, NZ - 1 } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 }, { A, NX - 1, NY - 1, NZ - 1 } ),
         KOKKOS_LAMBDA( int a, int i, int j, int k ) {
             for ( int di = 0; di <= 1; ++di )
                 for ( int dj = 0; dj <= 1; ++dj )

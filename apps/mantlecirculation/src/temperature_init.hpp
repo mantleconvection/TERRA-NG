@@ -83,7 +83,7 @@ void initialize_temperature_fields(
                 const ScalarType factor_2 = static_cast< ScalarType >( init_temp.sph_factor_2 );
                 Kokkos::parallel_for(
                     "combine spherical harmonics",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >(
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                         { 0, 0, 0 },
                         { static_cast< int >( sph_coeffs.extent( 0 ) ),
                           static_cast< int >( sph_coeffs.extent( 1 ) ),

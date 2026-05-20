@@ -134,7 +134,7 @@ void compute_cell_centers(
     grid::Grid4DDataVec< ScalarType, 3 > fv_grid = dst.grid_data();
     Kokkos::parallel_for(
         "l2_project_into_fv_function",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 1, 1, 1 },
             { fv_grid.extent( 0 ), fv_grid.extent( 1 ) - 1, fv_grid.extent( 2 ) - 1, fv_grid.extent( 3 ) - 1 } ),
         KOKKOS_LAMBDA(

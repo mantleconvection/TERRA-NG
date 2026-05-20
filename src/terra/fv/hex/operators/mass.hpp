@@ -48,7 +48,7 @@ class Mass
 
         Kokkos::parallel_for(
             "matvec",
-            Kokkos::MDRangePolicy(
+            Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                 { 0, 1, 1, 1 },
                 { src.grid_data().extent( 0 ),
                   src.grid_data().extent( 1 ) - 1,
