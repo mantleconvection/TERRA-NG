@@ -119,7 +119,9 @@ void assign_masked_else_keep_old(
 {
     Kokkos::parallel_for(
         "assign_masked",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { dst.extent( 0 ), dst.extent( 1 ), dst.extent( 2 ), dst.extent( 3 ) } ),
+        Kokkos::MDRangePolicy<Kokkos::Rank<4, Kokkos::Iterate::Right, Kokkos::Iterate::Right>>(
+        	{ 0, 0, 0, 0 }, { dst.extent( 0 ), dst.extent( 1 ), dst.extent( 2 ), dst.extent( 3 ) }
+        ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             const ScalarType mask_val = util::has_flag( mask_grid( local_subdomain, i, j, k ), mask_value ) ? 1.0 : 0.0;
             dst( local_subdomain, i, j, k, vector_component ) =
@@ -138,7 +140,9 @@ void lincomb(
 {
     Kokkos::parallel_for(
         "lincomb 1 arg (Grid4DDataScalar)",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { y.extent( 0 ), y.extent( 1 ), y.extent( 2 ), y.extent( 3 ) } ),
+        Kokkos::MDRangePolicy<Kokkos::Rank<4, Kokkos::Iterate::Right, Kokkos::Iterate::Right>>(
+        	{ 0, 0, 0, 0 }, { y.extent( 0 ), y.extent( 1 ), y.extent( 2 ), y.extent( 3 ) }
+        ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             y( local_subdomain, i, j, k ) = c_0 + c_1 * x_1( local_subdomain, i, j, k );
         } );
@@ -157,7 +161,9 @@ void lincomb(
 {
     Kokkos::parallel_for(
         "lincomb 2 args (Grid4DDataScalar)",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { y.extent( 0 ), y.extent( 1 ), y.extent( 2 ), y.extent( 3 ) } ),
+        Kokkos::MDRangePolicy<Kokkos::Rank<4, Kokkos::Iterate::Right, Kokkos::Iterate::Right>>(
+        	{ 0, 0, 0, 0 }, { y.extent( 0 ), y.extent( 1 ), y.extent( 2 ), y.extent( 3 ) }
+        ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             y( local_subdomain, i, j, k ) =
                 c_0 + c_1 * x_1( local_subdomain, i, j, k ) + c_2 * x_2( local_subdomain, i, j, k );
@@ -179,7 +185,9 @@ void lincomb(
 {
     Kokkos::parallel_for(
         "lincomb 3 args (Grid4DDataScalar)",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { y.extent( 0 ), y.extent( 1 ), y.extent( 2 ), y.extent( 3 ) } ),
+        Kokkos::MDRangePolicy<Kokkos::Rank<4, Kokkos::Iterate::Right, Kokkos::Iterate::Right>>(
+        	{ 0, 0, 0, 0 }, { y.extent( 0 ), y.extent( 1 ), y.extent( 2 ), y.extent( 3 ) }
+        ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             y( local_subdomain, i, j, k ) = c_0 + c_1 * x_1( local_subdomain, i, j, k ) +
                                             c_2 * x_2( local_subdomain, i, j, k ) +
