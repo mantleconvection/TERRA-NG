@@ -84,17 +84,14 @@ double measure_run_time( int executions, OperatorT& A, const SrcOf< OperatorT >&
 
 
 template<
-	typename VectorType>
+	typename VectorType,
+	typename VectorContainerType>
 double measure_run_time_linalg(
-	int 			executions,
-	VectorType&		res,
-	const double 		c0,
-	const VectorType&	v1,
-	const double 		c1,
-	const VectorType&	v2,
-	const double 		c2,
-	const VectorType&	v3,
-	const double 		c3)
+	int 				executions,
+	VectorType&			res,
+	const double 			c0,
+	const VectorContainerType&	vecs,
+	const std::vector<double>&	coefs)
 {
     Kokkos::Timer timer;
 
@@ -104,12 +101,11 @@ double measure_run_time_linalg(
 
     for ( int i = 0; i < executions; ++i )
     {
-	terra::kernels::common::lincomb(
+    	terra::linalg::lincomb(
 			res,
-			c0,
-			c1, v1,
-			c2, v2,
-			c3, v3
+			coefs,
+			vecs,
+			c0
 	);
         //There are fences in the timing, which might not be okay.
     }
@@ -149,20 +145,21 @@ BenchmarkData
     const auto dofs_scalar = kernels::common::count_masked< long >( mask_data, grid::NodeOwnershipFlag::OWNED );
     const auto dofs_vec    = 3 * dofs_scalar;
 
-    const double c0 = 2.7182, c1 = 3.1415, c2 = 0.5772, c3 = 1.4142;
+    const double c0 = 2.7182;
+    std::vector<double> coefs = {3.1415, 0.5772, 1.4142};
 
     VectorQ1Scalar<double> y("y", domain, mask_data);
-    VectorQ1Scalar<double> v1("v1", domain, mask_data);
-    VectorQ1Scalar<double> v2("v2", domain, mask_data);
-    VectorQ1Scalar<double> v3("v3", domain, mask_data);
-
     linalg::randomize(y);
-    linalg::randomize(v1);
-    linalg::randomize(v2);
-    linalg::randomize(v3);
+
+    std::vector<VectorQ1Scalar<double> > vecs;
+    for(int i = 0; i != 3; ++i)
+    {
+    	    vecs.emplace_back("v1", domain, mask_data);
+	    linalg::randomize(vecs.back());
+    }
 
     util::Timer t("linalg kernel - double");
-    double      duration = measure_run_time_linalg(executions, y, c0, v1, c1, v2, c2, v3, c3);
+    double      duration = measure_run_time_linalg(executions, y, c0, vecs, coefs);
     long        dofs     = dofs_vec;  //Very suspicious.
 
     return BenchmarkData{ lat_level, dofs, duration };
