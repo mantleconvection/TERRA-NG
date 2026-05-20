@@ -96,7 +96,7 @@ inline Grid4DDataScalar< ShellBoundaryFlag > setup_boundary_mask_data( const Dis
 
     Kokkos::parallel_for(
         "set_boundary_flags",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy<Kokkos::Rank<4, Kokkos::Iterate::Right, Kokkos::Iterate::Right>>(
             { 0, 0, 0, 0 },
             { mask_data.extent( 0 ), mask_data.extent( 1 ), mask_data.extent( 2 ), mask_data.extent( 3 ) } ),
         KOKKOS_LAMBDA( const int local_subdomain_id, const int x, const int y, const int r ) {
@@ -113,7 +113,9 @@ inline Grid4DDataScalar< ShellBoundaryFlag > setup_boundary_mask_data( const Dis
         {
             Kokkos::parallel_for(
                 "set_boundary_flags",
-                Kokkos::MDRangePolicy( { 0, 0 }, { mask_data.extent( 1 ), mask_data.extent( 2 ) } ),
+                Kokkos::MDRangePolicy<Kokkos::Rank<2, Kokkos::Iterate::Right, Kokkos::Iterate::Right>>(
+                	{ 0, 0 }, { mask_data.extent( 1 ), mask_data.extent( 2 ) }
+                ),
                 KOKKOS_LAMBDA( const int x, const int y ) {
                     mask_data( local_subdomain_id, x, y, 0 ) = ShellBoundaryFlag::CMB;
                 } );
@@ -123,8 +125,10 @@ inline Grid4DDataScalar< ShellBoundaryFlag > setup_boundary_mask_data( const Dis
         {
            //Set here proper bounds.
             Kokkos::parallel_for(
+                Kokkos::MDRangePolicy<Kokkos::Rank<2, Kokkos::Iterate::Right, Kokkos::Iterate::Right>>(
+                	{ 0, 0 }, { mask_data.extent( 1 ), mask_data.extent( 2 ) }
+                ),
                 "set_boundary_flags",
-                Kokkos::MDRangePolicy( { 0, 0 }, { mask_data.extent( 1 ), mask_data.extent( 2 ) } ),
                 KOKKOS_LAMBDA( const int x, const int y ) {
                     mask_data( local_subdomain_id, x, y, mask_data.extent( 3 ) - 1 ) = ShellBoundaryFlag::SURFACE;
                 } );
