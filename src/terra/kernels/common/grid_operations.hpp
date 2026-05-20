@@ -44,7 +44,8 @@ void scale( const grid::Grid4DDataScalar< ScalarType >& x, ScalarType value )
 {
     Kokkos::parallel_for(
         "scale (Grid3DDataScalar)",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) { x( local_subdomain, i, j, k ) *= value; } );
 
     Kokkos::fence();
@@ -59,7 +60,8 @@ void assign_masked_else_keep_old(
 {
     Kokkos::parallel_for(
         "assign_masked",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { dst.extent( 0 ), dst.extent( 1 ), dst.extent( 2 ), dst.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { dst.extent( 0 ), dst.extent( 1 ), dst.extent( 2 ), dst.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             const ScalarType mask_val = util::has_flag( mask_grid( local_subdomain, i, j, k ), mask_value ) ? 1.0 : 0.0;
             dst( local_subdomain, i, j, k ) = mask_val * value + ( 1.0 - mask_val ) * dst( local_subdomain, i, j, k );
@@ -77,7 +79,8 @@ void assign_masked_else_keep_old(
 {
     Kokkos::parallel_for(
         "assign_masked",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { dst.extent( 0 ), dst.extent( 1 ), dst.extent( 2 ), dst.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { dst.extent( 0 ), dst.extent( 1 ), dst.extent( 2 ), dst.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             const ScalarType mask_val = util::has_flag( mask_grid( local_subdomain, i, j, k ), mask_value ) ? 1.0 : 0.0;
             dst( local_subdomain, i, j, k ) =
@@ -241,7 +244,8 @@ void invert_inplace( const grid::Grid4DDataScalar< ScalarType >& y )
 {
     Kokkos::parallel_for(
         "invert",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { y.extent( 0 ), y.extent( 1 ), y.extent( 2 ), y.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { y.extent( 0 ), y.extent( 1 ), y.extent( 2 ), y.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             y( local_subdomain, i, j, k ) = 1.0 / y( local_subdomain, i, j, k );
         } );
@@ -263,7 +267,8 @@ void mult_elementwise_inplace(
 {
     Kokkos::parallel_for(
         "mult_elementwise_inplace",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { y.extent( 0 ), y.extent( 1 ), y.extent( 2 ), y.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { y.extent( 0 ), y.extent( 1 ), y.extent( 2 ), y.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             y( local_subdomain, i, j, k ) *= x( local_subdomain, i, j, k );
         } );
@@ -286,7 +291,8 @@ ScalarType min_entry( const grid::Grid4DDataScalar< ScalarType >& x, MPI_Comm co
     ScalarType min_val = 0.0;
     Kokkos::parallel_reduce(
         "min_entry",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_min ) {
             ScalarType val = x( local_subdomain, i, j, k );
             local_min      = Kokkos::min( local_min, val );
@@ -306,7 +312,8 @@ ScalarType min_abs_entry( const grid::Grid4DDataScalar< ScalarType >& x, MPI_Com
     ScalarType min_mag = 0.0;
     Kokkos::parallel_reduce(
         "min_abs_entry",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_min ) {
             ScalarType val = Kokkos::abs( x( local_subdomain, i, j, k ) );
             local_min      = Kokkos::min( local_min, val );
@@ -326,7 +333,8 @@ ScalarType max_abs_entry( const grid::Grid4DDataScalar< ScalarType >& x, MPI_Com
     ScalarType max_mag = 0.0;
     Kokkos::parallel_reduce(
         "max_abs_entry",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_max ) {
             ScalarType val = Kokkos::abs( x( local_subdomain, i, j, k ) );
             local_max      = Kokkos::max( local_max, val );
@@ -364,7 +372,8 @@ ScalarType max_abs_entry(
     ScalarType max_mag = 0.0;
     Kokkos::parallel_reduce(
         "max_abs_entry",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_max ) {
             if ( util::has_flag( mask( local_subdomain, i, j, k ), mask_value ) )
             {
@@ -391,7 +400,7 @@ ScalarType max_abs_entry_subset(
     ScalarType max_mag = 0.0;
     Kokkos::parallel_reduce(
         "max_abs_entry",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { start( 0 ), start( 1 ), start( 2 ), start( 3 ) },
             { end_excl( 0 ), end_excl( 1 ), end_excl( 2 ), end_excl( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_max ) {
@@ -413,7 +422,8 @@ ScalarType max_vector_magnitude( const grid::Grid4DDataVec< ScalarType, VecDim >
     ScalarType max_mag = 0.0;
     Kokkos::parallel_reduce(
         "max_vector_magnitude",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_max ) {
             ScalarType val = 0;
             for ( int d = 0; d < VecDim; ++d )
@@ -439,7 +449,7 @@ void vector_magnitude(
 {
     Kokkos::parallel_for(
         "vector_magnitude",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 },
             { vectorial_data_in.extent( 0 ),
               vectorial_data_in.extent( 1 ),
@@ -471,7 +481,7 @@ void extract_vector_component(
 
     Kokkos::parallel_for(
         "extract_vector_component",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 },
             { vectorial_data_in.extent( 0 ),
               vectorial_data_in.extent( 1 ),
@@ -497,7 +507,7 @@ void set_vector_component(
 
     Kokkos::parallel_for(
         "set_vector_component",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 },
             { vectorial_data.extent( 0 ),
               vectorial_data.extent( 1 ),
@@ -516,7 +526,8 @@ ScalarType sum_of_absolutes( const grid::Grid4DDataScalar< ScalarType >& x, MPI_
     ScalarType sum_abs = 0.0;
     Kokkos::parallel_reduce(
         "sum_of_absolutes",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_sum_abs ) {
             ScalarType val = Kokkos::abs( x( local_subdomain, i, j, k ) );
             local_sum_abs  = local_sum_abs + val;
@@ -539,7 +550,7 @@ ScalarType count_masked( const grid::Grid4DDataScalar< FlagType >& mask,
 
     Kokkos::parallel_reduce(
         "masked_sum",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 }, { mask.extent( 0 ), mask.extent( 1 ), mask.extent( 2 ), mask.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_sum ) {
             const ScalarType mask_val = util::has_flag( mask( local_subdomain, i, j, k ), mask_value ) ?
@@ -567,7 +578,8 @@ ScalarType masked_sum(
 
     Kokkos::parallel_reduce(
         "masked_sum",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_sum ) {
             const ScalarType mask_val = util::has_flag( mask( local_subdomain, i, j, k ), mask_value ) ? 1.0 : 0.0;
             ScalarType       val      = x( local_subdomain, i, j, k ) * mask_val;
@@ -595,7 +607,8 @@ ScalarType masked_sum(
 
     Kokkos::parallel_reduce(
         "masked_sum",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_sum ) {
             ScalarType mask_val = 1.0;
             mask_val *= util::has_flag( mask0( local_subdomain, i, j, k ), mask0_value ) ? 1.0 : 0.0;
@@ -621,7 +634,8 @@ ScalarType dot_product( const grid::Grid4DDataScalar< ScalarType >& x,
 
     Kokkos::parallel_reduce(
         "dot_product",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_dot_prod ) {
             ScalarType val = x( local_subdomain, i, j, k ) * y( local_subdomain, i, j, k );
             local_dot_prod = local_dot_prod + val;
@@ -647,7 +661,8 @@ ScalarType masked_dot_product(
 
     Kokkos::parallel_reduce(
         "masked_dot_product",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_dot_prod ) {
             const ScalarType mask_val = util::has_flag( mask( local_subdomain, i, j, k ), mask_value ) ? 1.0 : 0.0;
             ScalarType       val      = x( local_subdomain, i, j, k ) * y( local_subdomain, i, j, k ) * mask_val;
@@ -692,7 +707,7 @@ ScalarType dot_product_subset(
 
     Kokkos::parallel_reduce(
         "masked_dot_product",
-        Kokkos::MDRangePolicy(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { start( 0 ), start( 1 ), start( 2 ), start( 3 ) },
             { end_excl( 0 ), end_excl( 1 ), end_excl( 2 ), end_excl( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, ScalarType& local_dot_prod ) {
@@ -715,7 +730,8 @@ bool has_nan_or_inf( const grid::Grid4DDataScalar< ScalarType >& x, MPI_Comm com
 
     Kokkos::parallel_reduce(
         "masked_dot_product",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k, bool& local_has_nan_or_inf ) {
             local_has_nan_or_inf = local_has_nan_or_inf || ( Kokkos::isnan( x( local_subdomain, i, j, k ) ) ||
                                                              Kokkos::isinf( x( local_subdomain, i, j, k ) ) );
@@ -745,7 +761,8 @@ void cast( const grid::Grid4DDataScalar< ScalarTypeDst >& dst, const grid::Grid4
 {
     Kokkos::parallel_for(
         "cast",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { dst.extent( 0 ), dst.extent( 1 ), dst.extent( 2 ), dst.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { dst.extent( 0 ), dst.extent( 1 ), dst.extent( 2 ), dst.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             dst( local_subdomain, i, j, k ) = static_cast< ScalarTypeDst >( src( local_subdomain, i, j, k ) );
         } );
@@ -763,7 +780,8 @@ void rand( const grid::Grid4DDataScalar< ScalarTypeDst >& dst )
     Kokkos::Random_XorShift64_Pool<> random_pool( /*seed=*/12345 );
     Kokkos::parallel_for(
         "rand",
-        Kokkos::MDRangePolicy( { 0, 0, 0, 0 }, { dst.extent( 0 ), dst.extent( 1 ), dst.extent( 2 ), dst.extent( 3 ) } ),
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+            { 0, 0, 0, 0 }, { dst.extent( 0 ), dst.extent( 1 ), dst.extent( 2 ), dst.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
             auto generator                  = random_pool.get_state();
             dst( local_subdomain, i, j, k ) = static_cast< ScalarTypeDst >( generator.drand() );
