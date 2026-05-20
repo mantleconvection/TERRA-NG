@@ -125,10 +125,10 @@ inline Grid4DDataScalar< ShellBoundaryFlag > setup_boundary_mask_data( const Dis
         {
            //Set here proper bounds.
             Kokkos::parallel_for(
+                "set_boundary_flags",
                 Kokkos::MDRangePolicy<Kokkos::Rank<2, Kokkos::Iterate::Right, Kokkos::Iterate::Right>>(
                 	{ 0, 0 }, { mask_data.extent( 1 ), mask_data.extent( 2 ) }
                 ),
-                "set_boundary_flags",
                 KOKKOS_LAMBDA( const int x, const int y ) {
                     mask_data( local_subdomain_id, x, y, mask_data.extent( 3 ) - 1 ) = ShellBoundaryFlag::SURFACE;
                 } );
