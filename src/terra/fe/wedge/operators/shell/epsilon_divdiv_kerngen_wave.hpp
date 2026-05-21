@@ -91,41 +91,6 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
     ScratchK      k_sh     ( shmem, NXY, NLEV );          shmem += NXY * NLEV;
     ScratchR      r_sh     ( shmem, NLEV );               shmem += NLEV;
 
-    // ---------- cooperative LDS load (64 lanes) ----------
-    // Lateral coords (4 corners of the 1x1 lateral cell). First 4 lanes load.
-    Kokkos::parallel_for( Kokkos::ThreadVectorRange( team, 4 * NXY ), [&]( int n ) {
-    	const int last_dim = n % 4;
-
-    	//Protects against an invalid access in `grid_`.
-    	if(last_dim == 3)
-	{
-		return;
-	};
-
-    	const int n1 = n / 4;
-
-    	//dxn is only 0/1, so we can do some bit magic on `n` instead.
-        const int dxn = n1 % 2, dyn = n / 8;
-        const int xi  = x_cell + dxn;
-        const int yi  = y_cell + dyn;
-
-        if ( xi <= hex_lat_ && yi <= hex_lat_ )
-        {
-            coords_sh( n, last_dim ) = grid_( local_subdomain_id, xi, yi, last_dim );
-        }
-        else
-        {
-            coords_sh( n, last_dim ) = 0.0;
-        }
-    } );
-
-    // Radial heights (17 levels).
-    Kokkos::parallel_for( Kokkos::ThreadVectorRange( team, NLEV ), [&]( int lvl ) {
-        const int rr = r0 + lvl;
-        r_sh( lvl )  = ( rr <= hex_rad_ ) ? radii_( local_subdomain_id, rr ) : 0.0;
-    } );
-
-
     // src + k loads: NXY*NLEV = 68 work items spread across 64 lanes.
     constexpr int TOTAL_PAIRS = NXY * NLEV;
     Kokkos::parallel_for( Kokkos::ThreadVectorRange( team, TOTAL_PAIRS ), [&]( int t ) {
