@@ -254,7 +254,7 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
 	else
 	{
 		at_boundary_tmp = false;
-		at_surface_tmp = false
+		at_surface_tmp = false;
 	}
 	const bool at_cmb = at_cmb_tmp;
 	const bool at_surface = at_surface_tmp;
