@@ -32,7 +32,10 @@ size_t team_shmem_size_dn_wave() const
     constexpr int nlev = kWaveCellsPerWave + 1;      // 17 radial layers (16 cells need r_0..r_16)
     // coords_sh(nxy,3) + src_sh(nxy,3,nlev) + k_sh(nxy,nlev) + r_sh(nlev)
     const size_t nscalars =
-        size_t( nxy ) * 3 + size_t( nxy ) * 3 * nlev + size_t( nxy ) * nlev + size_t( nlev );
+        size_t( nxy ) * 3		//coords_sh
+        + size_t( nxy ) * 3 * nlev
+        + size_t( nxy ) * nlev
+        + size_t( nlev );
     return sizeof( ScalarType ) * nscalars;
 }
 
@@ -81,26 +84,38 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
     using ScratchR =
         Kokkos::View< double*, Kokkos::LayoutRight, typename Team::scratch_memory_space, Kokkos::MemoryUnmanaged >;
 
-    ScratchCoords coords_sh( shmem, NXY, 3 );             shmem += NXY * 3;
-    ScratchSrc    src_sh   ( shmem, NXY, 3, NLEV );       shmem += NXY * 3 * NLEV;
+    //ScratchCoords coords_sh( shmem, NXY, 3 );             shmem += NXY * 4;
+    //ScratchSrc    src_sh   ( shmem, NXY, 3, NLEV );       shmem += NXY * 3 * NLEV;
+    ScratchCoords coords_sh( shmem, 3, NXY );             shmem += NXY * 3;		//Modified dimension 
+    ScratchSrc    src_sh   ( shmem, 3, NXY, NLEV );       shmem += NXY * 3 * NLEV;  	//Modified dimensions.
     ScratchK      k_sh     ( shmem, NXY, NLEV );          shmem += NXY * NLEV;
     ScratchR      r_sh     ( shmem, NLEV );               shmem += NLEV;
 
     // ---------- cooperative LDS load (64 lanes) ----------
     // Lateral coords (4 corners of the 1x1 lateral cell). First 4 lanes load.
-    Kokkos::parallel_for( Kokkos::ThreadVectorRange( team, NXY ), [&]( int n ) {
-        const int dxn = n % 2, dyn = n / 2;
+    Kokkos::parallel_for( Kokkos::ThreadVectorRange( team, 4 * NXY ), [&]( int n ) {
+    	const int last_dim = n % 4;
+
+    	//Protects against an invalid access in `grid_`.
+    	if(last_dim == 3)
+	{
+		return;
+	};
+
+    	const int n1 = n / 4;
+
+    	//dxn is only 0/1, so we can do some bit magic on `n` instead.
+        const int dxn = n1 % 2, dyn = n / 8;
         const int xi  = x_cell + dxn;
         const int yi  = y_cell + dyn;
+
         if ( xi <= hex_lat_ && yi <= hex_lat_ )
         {
-            coords_sh( n, 0 ) = grid_( local_subdomain_id, xi, yi, 0 );
-            coords_sh( n, 1 ) = grid_( local_subdomain_id, xi, yi, 1 );
-            coords_sh( n, 2 ) = grid_( local_subdomain_id, xi, yi, 2 );
+            coords_sh( n, last_dim ) = grid_( local_subdomain_id, xi, yi, last_dim );
         }
         else
         {
-            coords_sh( n, 0 ) = coords_sh( n, 1 ) = coords_sh( n, 2 ) = 0.0;
+            coords_sh( n, last_dim ) = 0.0;
         }
     } );
 
@@ -114,23 +129,69 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
     // src + k loads: NXY*NLEV = 68 work items spread across 64 lanes.
     constexpr int TOTAL_PAIRS = NXY * NLEV;
     Kokkos::parallel_for( Kokkos::ThreadVectorRange( team, TOTAL_PAIRS ), [&]( int t ) {
-        const int node = t / NLEV;
-        const int lvl  = t % NLEV;
-        const int dxn  = node % 2, dyn = node / 2;
-        const int xi   = x_cell + dxn;
-        const int yi   = y_cell + dyn;
+        const int node = t / NLEV;  	// (0...NXY)
+        const int lvl  = t % NLEV;	// (0...NLEV)
         const int rr   = r0 + lvl;
-        if ( xi <= hex_lat_ && yi <= hex_lat_ && rr <= hex_rad_ )
-        {
-            k_sh( node, lvl )      = k_( local_subdomain_id, xi, yi, rr );
-            src_sh( node, 0, lvl ) = src_( local_subdomain_id, xi, yi, rr, 0 );
-            src_sh( node, 1, lvl ) = src_( local_subdomain_id, xi, yi, rr, 1 );
-            src_sh( node, 2, lvl ) = src_( local_subdomain_id, xi, yi, rr, 2 );
+
+        if(rr <= hex_rad_)
+	{
+		if(node == 0)
+		{
+        		r_sh( lvl )  = radii_( local_subdomain_id, rr );
+        	};
+
+        	const int dxn  = node % 2, dyn = node / 2;
+        	const int xi   = x_cell + dxn;
+        	const int yi   = y_cell + dyn;
+        	if ( xi <= hex_lat_ && yi <= hex_lat_)
+        	{
+            		k_sh( node, lvl )      = k_( local_subdomain_id, xi, yi, rr );
+            		src_sh( node, 0, lvl ) = src_( local_subdomain_id, xi, yi, rr, 0 );
+            		src_sh( node, 1, lvl ) = src_( local_subdomain_id, xi, yi, rr, 1 );
+            		src_sh( node, 2, lvl ) = src_( local_subdomain_id, xi, yi, rr, 2 );
+
+            		if((node % 4) == 0)
+			{
+            			coords_sh(0, node) = grid_( local_subdomain_id, xi, yi, 0 );
+            			coords_sh(1, node) = grid_( local_subdomain_id, xi, yi, 1 );
+            			coords_sh(2, node) = grid_( local_subdomain_id, xi, yi, 2 );
+            		};
+            	}
+            	else
+            	{
+            		k_sh( node, lvl )      = 0.0;
+
+            		src_sh( node, 0, lvl ) = 0.0;
+            		src_sh( node, 1, lvl ) = 0.0;
+            		src_sh( node, 2, lvl ) = 0.0;
+
+            		if((node % 4) == 0)
+			{
+            			coords_sh(0, node) = 0.0;
+            			coords_sh(1, node) = 0.0;
+            			coords_sh(2, node) = 0.0;
+            		};
+            	}
         }
         else
         {
-            k_sh( node, lvl )      = 0.0;
-            src_sh( node, 0, lvl ) = src_sh( node, 1, lvl ) = src_sh( node, 2, lvl ) = 0.0;
+        	if(node == 0)
+		{
+			r_sh(lvl) = 0.0;
+		};
+
+		if((node % 4) == 0)
+		{
+            		k_sh( node, lvl )      = 0.0;
+            		src_sh( node, 0, lvl ) = 0.0;
+            		src_sh( node, 1, lvl ) = 0.0;
+            		src_sh( node, 2, lvl ) = 0.0;
+
+            		//This currently writes multiple times to the same location.
+            		coords_sh(0, node) = 0.0;
+            		coords_sh(1, node) = 0.0;
+            		coords_sh(2, node) = 0.0;
+            	};
         }
     } );
 
@@ -183,9 +244,22 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
         const double r_1 = r_sh( cell_in_wave + 1 );
 
         // Boundary state (uniform across the cell's 8 lanes).
-        const bool at_cmb     = cell_valid && has_flag( local_subdomain_id, x_cell, y_cell, r_cell,     CMB );
-        const bool at_surface = cell_valid && has_flag( local_subdomain_id, x_cell, y_cell, r_cell + 1, SURFACE );
-        const bool at_boundary = at_cmb || at_surface;
+        bool at_cmb_tmp, at_surface_tmp, at_boundary_tmp;
+        if(cell_valid)
+	{
+		//Add a special function that handles the NO_FLAG case.
+        	at_cmb_tmp     = has_flag( local_subdomain_id, x_cell, y_cell, r_cell,     CMB );
+        	at_surface_tmp = has_flag( local_subdomain_id, x_cell, y_cell, r_cell + 1, SURFACE );
+	}
+	else
+	{
+		at_boundary_tmp = false;
+		at_surface_tmp = false
+	}
+	const bool at_cmb = at_cmb_tmp;
+	const bool at_surface = at_surface_tmp;
+	const bool at_boundary = at_cmb_tmp || at_surface_tmp;
+
         bool treat_boundary_dirichlet = false;
         if ( at_boundary )
         {
@@ -213,6 +287,7 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
                 const double half_dr = 0.5 * ( r_1 - r_0 );
                 const double r_mid   = 0.5 * ( r_0 + r_1 );
 
+                //Loading it only once might be good.
                 const double J_0_0 = r_mid * ( -coords_sh( v0, 0 ) + coords_sh( v1, 0 ) );
                 const double J_0_1 = r_mid * ( -coords_sh( v0, 0 ) + coords_sh( v2, 0 ) );
                 const double J_0_2 =
