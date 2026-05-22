@@ -128,9 +128,10 @@ BenchmarkData
         coeff_double.grid_data(),
         bcs,
         false );
-    // Default DN path (now thread-per-wedge). Env vars override:
+    // Default DN path. On HIP/AMD, env vars opt into experimental paths:
     //   EPSDIVDIV_HEX=1  → hex 2x2x2 Gauss path
     //   EPSDIVDIV_WAVE=1 → wave-parallel wedge path
+#ifdef __HIP_PLATFORM_AMD__
     if ( std::getenv( "EPSDIVDIV_HEX" ) != nullptr )
     {
         A.set_kernel_path( decltype( A )::KernelPath::FastDirichletNeumannHex );
@@ -140,6 +141,7 @@ BenchmarkData
         A.set_kernel_path( decltype( A )::KernelPath::FastDirichletNeumannWave );
     }
     else
+#endif
     {
         A.set_kernel_path( decltype( A )::KernelPath::FastDirichletNeumann );
     }
