@@ -97,6 +97,7 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
      *  domains. */
     constexpr int TOTAL_PAIRS = NXY * NLEV;
     Kokkos::parallel_for( Kokkos::ThreadVectorRange( team, TOTAL_PAIRS ), [&]( int t ) {
+        static_assert(NLEV >= 2);
         const int node = t / NLEV; // (0...NXY)
         const int lvl  = t % NLEV; // (0...NLEV)
         const int rr   = r0 + lvl;
