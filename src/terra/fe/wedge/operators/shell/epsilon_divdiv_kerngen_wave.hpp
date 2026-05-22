@@ -9,7 +9,7 @@
 //   - team_shmem_size_dn_wave() helper for scratch sizing
 //   - run_team_fast_dirichlet_neumann_wave<Diagonal>() team entry point
 //
-// See epsilon_divdiv_kerngen_wave.md for the full design notes.
+// See doc/epsdivdiv_benchmarks/wave_and_hex_kernels.md for the full design notes.
 
 #pragma once
 

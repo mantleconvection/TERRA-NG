@@ -15,7 +15,7 @@
 // minimum "fully integrated" rule that gives a full-rank local stiffness on
 // any non-degenerate hex.
 //
-// See epsilon_divdiv_hex.md for the full design notes.
+// See doc/epsdivdiv_benchmarks/wave_and_hex_kernels.md for the full design notes.
 
 #pragma once
 
