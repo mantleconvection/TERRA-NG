@@ -20,6 +20,8 @@
 #include "linalg/vector_q1.hpp"
 #include "util/timer.hpp"
 
+#include <cstdlib>   // for std::getenv (wave-parallel DN path opt-in)
+
 namespace terra::fe::wedge::operators::shell {
 
 using grid::shell::get_boundary_condition_flag;
@@ -70,6 +72,21 @@ class EpsilonDivDivKerngen
     using LocalMatrixStorage      = linalg::solvers::LocalMatrixStorage< ScalarType, LocalMatrixDim >;
     using Team                    = Kokkos::TeamPolicy<>::member_type;
 
+    /**
+     * @brief Kernel path selected on host.
+     *
+     * This value is computed whenever BCs or stored-matrix mode change and is then
+     * used by `apply_impl()` to select which kernel launch to issue.
+     */
+    enum class KernelPath
+    {
+        Slow,
+        FastDirichletNeumann,
+        FastFreeslip,
+        FastDirichletNeumannWave,   // wave-parallel experimental DN path (wedge subdivision)
+        FastDirichletNeumannHex,    // hex 1-pt Gauss experimental DN path
+    };
+
   private:
     // Optional element-local matrix storage (GCA/coarsening/explicit local-matrix mode)
     LocalMatrixStorage local_matrix_storage_;
@@ -119,18 +136,6 @@ class EpsilonDivDivKerngen
     ScalarT r_max_;
     ScalarT r_min_;
 
-    /**
-     * @brief Kernel path selected on host.
-     *
-     * This value is computed whenever BCs or stored-matrix mode change and is then
-     * used by `apply_impl()` to select which kernel launch to issue.
-     */
-    enum class KernelPath
-    {
-        Slow,
-        FastDirichletNeumann,
-        FastFreeslip,
-    };
     KernelPath kernel_path_ = KernelPath::FastDirichletNeumann;
 
     // Rotation null-space penalty (active only for fs/fs)
@@ -267,9 +272,12 @@ class EpsilonDivDivKerngen
                       << "), r_passes=" << r_passes_ << std::endl;
         util::logroot << "[EpsilonDivDiv] number of tiles (x,y,r)=(" << lat_tiles_ << "," << lat_tiles_ << ","
                       << r_tiles_ << "), team_size=" << team_size_ << ", blocks=" << blocks_ << std::endl;
-        const char* path_name = ( kernel_path_ == KernelPath::Slow )         ? "slow" :
-                                ( kernel_path_ == KernelPath::FastFreeslip ) ? "fast-freeslip" :
-                                                                               "fast-dirichlet-neumann";
+        const char* path_name =
+            ( kernel_path_ == KernelPath::Slow )                     ? "slow" :
+            ( kernel_path_ == KernelPath::FastFreeslip )             ? "fast-freeslip" :
+            ( kernel_path_ == KernelPath::FastDirichletNeumannWave ) ? "fast-dirichlet-neumann-wave" :
+            ( kernel_path_ == KernelPath::FastDirichletNeumannHex )  ? "fast-dirichlet-neumann-hex" :
+                                                                       "fast-dirichlet-neumann";
         util::logroot << "[EpsilonDivDiv] kernel path = " << path_name << std::endl;
 #endif
         init_penalty();
@@ -426,6 +434,12 @@ class EpsilonDivDivKerngen
         update_kernel_path_flag_host_only();
     }
 
+    /// @brief Override the kernel path. Bypasses the host-side rules in
+    /// update_kernel_path_flag_host_only(); will be re-derived if BCs or
+    /// stored-matrix mode change.
+    void set_kernel_path( KernelPath p ) { kernel_path_ = p; }
+    KernelPath kernel_path() const { return kernel_path_; }
+
     const grid::Grid4DDataScalar< ScalarType >& k_grid_data() { return k_; }
     const grid::shell::DistributedDomain&       get_domain() const { return domain_; }
     grid::Grid2DDataScalar< ScalarT >           get_radii() const { return radii_; }
@@ -457,9 +471,11 @@ class EpsilonDivDivKerngen
         update_kernel_path_flag_host_only();
 
         util::logroot << "[EpsilonDivDiv] (set_stored_matrix_mode) kernel path = "
-                      << ( ( kernel_path_ == KernelPath::Slow )         ? "slow" :
-                           ( kernel_path_ == KernelPath::FastFreeslip ) ? "fast-freeslip" :
-                                                                          "fast-dirichlet-neumann" )
+                      << ( ( kernel_path_ == KernelPath::Slow )                     ? "slow" :
+                           ( kernel_path_ == KernelPath::FastFreeslip )             ? "fast-freeslip" :
+                           ( kernel_path_ == KernelPath::FastDirichletNeumannWave ) ? "fast-dirichlet-neumann-wave" :
+                           ( kernel_path_ == KernelPath::FastDirichletNeumannHex )  ? "fast-dirichlet-neumann-hex" :
+                                                                                      "fast-dirichlet-neumann" )
                       << std::endl;
     }
 
@@ -558,9 +574,69 @@ class EpsilonDivDivKerngen
                     } );
             }
         }
+        else if ( kernel_path_ == KernelPath::FastDirichletNeumannWave )
+        {
+            // Wave-parallel DN path: each wave (60 of 64 lanes active) processes
+            // 10 radial cells via team_size=10 threads × vector_length=6 vector
+            // lanes (one lane per active wedge node).
+            const int r_stacks = ( hex_rad_ + kWaveCellsPerWave - 1 ) / kWaveCellsPerWave;
+            const int wave_blocks =
+                local_subdomains_ * ( hex_lat_ ) * ( hex_lat_ ) * r_stacks;
+            using LB = Kokkos::LaunchBounds< 64, 1 >;
+            Kokkos::TeamPolicy< LB > wv_policy(
+                wave_blocks, /*team_size=*/10, /*vector_length=*/6 );
+            wv_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn_wave() ) );
+            if ( diagonal_ )
+            {
+                Kokkos::parallel_for(
+                    "epsilon_divdiv_apply_kernel_fast_dn_wave_diag", wv_policy,
+                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                        this->template run_team_fast_dirichlet_neumann_wave< true >( team );
+                    } );
+            }
+            else
+            {
+                Kokkos::parallel_for(
+                    "epsilon_divdiv_apply_kernel_fast_dn_wave_matvec", wv_policy,
+                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                        this->template run_team_fast_dirichlet_neumann_wave< false >( team );
+                    } );
+            }
+        }
+        else if ( kernel_path_ == KernelPath::FastDirichletNeumannHex )
+        {
+            // Hex 1-pt Gauss DN path: each wave (64 lanes) processes 16 radial cells
+            // (2 blocks × 8 cells, 8 lanes per hex). league_size: one team per
+            // (subdomain, x_cell, y_cell, r_stack).
+            const int r_stacks = ( hex_rad_ + kHexCellsPerWave - 1 ) / kHexCellsPerWave;
+            const int hex_blocks =
+                local_subdomains_ * ( hex_lat_ ) * ( hex_lat_ ) * r_stacks;
+            using LB = Kokkos::LaunchBounds< 64, 1 >;
+            Kokkos::TeamPolicy< LB > hx_policy(
+                hex_blocks, /*team_size=*/1, /*vector_length=*/64 );
+            hx_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn_hex() ) );
+            if ( diagonal_ )
+            {
+                Kokkos::parallel_for(
+                    "epsilon_divdiv_apply_kernel_fast_dn_hex_diag", hx_policy,
+                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                        this->template run_team_fast_dirichlet_neumann_hex< true >( team );
+                    } );
+            }
+            else
+            {
+                Kokkos::parallel_for(
+                    "epsilon_divdiv_apply_kernel_fast_dn_hex_matvec", hx_policy,
+                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                        this->template run_team_fast_dirichlet_neumann_hex< false >( team );
+                    } );
+            }
+        }
         else
         {
-            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > dn_policy( blocks_, team_size_ );
+            // Thread-per-wedge layout: 2 threads per cell, each handling one wedge.
+            // team_size doubles vs the legacy thread-per-cell layout (e.g. 128 → 256).
+            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 256, 1 > > dn_policy( blocks_, team_size_ * 2 );
             dn_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn( team_size_ ) ) );
             if ( diagonal_ )
             {
@@ -746,6 +822,16 @@ class EpsilonDivDivKerngen
         return sizeof( ScalarType ) * nscalars;
     }
 
+    // Wave-parallel DN kernel: constants, scratch sizing, and the
+    // run_team_fast_dirichlet_neumann_wave<Diagonal>() member function
+    // are defined in this separate file (included in the class body).
+#include "epsilon_divdiv_kerngen_wave.hpp"
+
+    // Hex 1-pt Gauss DN kernel: constants, scratch sizing, and the
+    // run_team_fast_dirichlet_neumann_hex<Diagonal>() member function
+    // are defined in this separate file (included in the class body).
+#include "epsilon_divdiv_hex.hpp"
+
   private:
     /**
      * @brief Decode a team league rank / team rank into:
@@ -841,15 +927,44 @@ class EpsilonDivDivKerngen
     template < bool Diagonal >
     KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann( const Team& team ) const
     {
-        int local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell;
-        decode_team_indices( team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
+        // Thread-per-wedge layout: team_rank bit 0 = wedge index, rest = cell tid.
+        // Decode cell tid via the same scheme as decode_team_indices but on tid >> 1.
+        int       tmp_lr      = team.league_rank();
+        const int r_tile_id   = tmp_lr % r_tiles_;
+        tmp_lr               /= r_tiles_;
+        const int lat_y_id    = tmp_lr % lat_tiles_;
+        tmp_lr               /= lat_tiles_;
+        const int lat_x_id    = tmp_lr % lat_tiles_;
+        tmp_lr               /= lat_tiles_;
+        const int local_subdomain_id = tmp_lr;
+
+        const int x0 = lat_x_id * lat_tile_;
+        const int y0 = lat_y_id * lat_tile_;
+        const int r0 = r_tile_id * r_tile_block_;
+
+        // Put w in the HIGH bit of team_rank so threads 0..team_size_-1 all do
+        // w=0 and threads team_size_..2*team_size_-1 all do w=1. This keeps
+        // each 64-lane wavefront uniform in w (no warp divergence on the
+        // template specialization branch below).
+        const int raw_tid = team.team_rank();
+        const int w       = raw_tid / team_size_;
+        const int tid     = raw_tid % team_size_;
+
+        const int tr = tid % r_tile_;
+        const int tx = ( tid / r_tile_ ) % lat_tile_;
+        const int ty = tid / ( r_tile_ * lat_tile_ );
+
+        const int x_cell = x0 + tx;
+        const int y_cell = y0 + ty;
 
         if ( tr >= r_tile_ )
             return;
 
+        // Runtime w_filter: no compile-time wedge specialization.
         operator_fast_dirichlet_neumann_path< Diagonal >(
-            team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell );
+            team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, w );
     }
+
 
     /**
      * @brief Team entry for fast free-slip matrix-free path.
@@ -1113,7 +1228,8 @@ class EpsilonDivDivKerngen
         const int   ty,
         const int   tr,
         const int   x_cell,
-        const int   y_cell ) const
+        const int   y_cell,
+        const int   w_filter = -1 ) const
     {
         const int nlev = r_tile_block_ + 1;
         const int nxy  = ( lat_tile_ + 1 ) * ( lat_tile_ + 1 );
@@ -1243,7 +1359,11 @@ class EpsilonDivDivKerngen
             const int surface_shift =
                 ( ( at_boundary && treat_boundary_dirichlet && ( !Diagonal ) && at_surface ) ? 3 : 0 );
 
-            for ( int w = 0; w < 2; ++w )
+            // w_filter == -1 → run both wedges (legacy behaviour);
+            // w_filter == 0 or 1 → run only that wedge (thread-per-wedge layout).
+            const int w_start = ( w_filter < 0 ) ? 0 : w_filter;
+            const int w_end   = ( w_filter < 0 ) ? 2 : w_filter + 1;
+            for ( int w = w_start; w < w_end; ++w )
             {
                 const int v0 = w == 0 ? n00 : n11;
                 const int v1 = w == 0 ? n10 : n01;

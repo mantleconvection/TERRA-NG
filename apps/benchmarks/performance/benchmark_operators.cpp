@@ -1,6 +1,8 @@
 
 #include <kernels/common/grid_operations.hpp>
 
+#include <cstdlib>
+
 #include "fe/wedge/operators/shell/epsilon_divdiv_kerngen.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
@@ -126,6 +128,21 @@ BenchmarkData
         coeff_double.grid_data(),
         bcs,
         false );
+    // Default DN path (now thread-per-wedge). Env vars override:
+    //   EPSDIVDIV_HEX=1  → hex 2x2x2 Gauss path
+    //   EPSDIVDIV_WAVE=1 → wave-parallel wedge path
+    if ( std::getenv( "EPSDIVDIV_HEX" ) != nullptr )
+    {
+        A.set_kernel_path( decltype( A )::KernelPath::FastDirichletNeumannHex );
+    }
+    else if ( std::getenv( "EPSDIVDIV_WAVE" ) != nullptr )
+    {
+        A.set_kernel_path( decltype( A )::KernelPath::FastDirichletNeumannWave );
+    }
+    else
+    {
+        A.set_kernel_path( decltype( A )::KernelPath::FastDirichletNeumann );
+    }
     util::Timer t( "EpsDivDivKerngen - double" );
     double      duration = measure_run_time( executions, A, src_vec_double, dst_vec_double );
     long        dofs     = dofs_vec;
