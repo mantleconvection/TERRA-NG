@@ -207,7 +207,7 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
             const double r_1 = r_sh( cell_in_wave + 1 );
 
             // Boundary state (uniform across the cell's 8 lanes).
-            bool at_cmb_tmp, at_surface_tmp, at_boundary_tmp;
+            bool at_cmb_tmp, at_surface_tmp;
             if ( cell_valid )
             {
                 //Add a special function that handles the NO_FLAG case.
