@@ -26,3 +26,4 @@ target_sources(terra
         shear_heating_simple.hpp
         )
 
+add_subdirectory(optimized_laplace)
