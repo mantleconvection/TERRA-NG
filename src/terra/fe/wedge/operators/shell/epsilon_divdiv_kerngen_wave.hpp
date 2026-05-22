@@ -83,9 +83,9 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
     using ScratchR =
         Kokkos::View< double*, Kokkos::LayoutRight, typename Team::scratch_memory_space, Kokkos::MemoryUnmanaged >;
 
-    ScratchCoords coords_sh( shmem, NXY, 3 );
+    ScratchCoords coords_sh( shmem, 3, NXY );
     shmem += NXY * 3;
-    ScratchSrc src_sh( shmem, NXY, 3, NLEV );
+    ScratchSrc src_sh( shmem, 3, NXY, NLEV );
     shmem += NXY * 3 * NLEV;
     ScratchK k_sh( shmem, NXY, NLEV );
     shmem += NXY * NLEV;
@@ -117,7 +117,7 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
                 //Distributed load of `coords_sh(node, :)`.
                 if ( lvl < 3 )
                 {
-                    coords_sh( node, lvl ) = grid_( local_subdomain_id, xi, yi, lvl );
+                    coords_sh( lvl, node) = grid_( local_subdomain_id, xi, yi, lvl );
                 }
             }
             else
@@ -129,7 +129,7 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
 
                 if ( lvl < 3 )
                 {
-                    coords_sh( node, lvl ) = 0.0;
+                    coords_sh( lvl, node) = 0.0;
                 }
             }
 
@@ -153,7 +153,7 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
 
             if ( lvl < 3 )
             {
-                coords_sh( node, lvl ) = 0.0;
+                coords_sh( lvl, node ) = 0.0;
             }
         }
     } );
@@ -250,18 +250,18 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
                     const double r_mid   = 0.5 * ( r_0 + r_1 );
 
                     //Loading it only once might be good.
-                    const double J_0_0 = r_mid * ( -coords_sh( v0, 0 ) + coords_sh( v1, 0 ) );
-                    const double J_0_1 = r_mid * ( -coords_sh( v0, 0 ) + coords_sh( v2, 0 ) );
+                    const double J_0_0 = r_mid * ( -coords_sh( 0, v0 ) + coords_sh( 0, v1 ) );
+                    const double J_0_1 = r_mid * ( -coords_sh( 0, v0 ) + coords_sh( 0, v2 ) );
                     const double J_0_2 =
-                        half_dr * ( ONE_THIRD * ( coords_sh( v0, 0 ) + coords_sh( v1, 0 ) + coords_sh( v2, 0 ) ) );
-                    const double J_1_0 = r_mid * ( -coords_sh( v0, 1 ) + coords_sh( v1, 1 ) );
-                    const double J_1_1 = r_mid * ( -coords_sh( v0, 1 ) + coords_sh( v2, 1 ) );
+                        half_dr * ( ONE_THIRD * ( coords_sh( 0, v0 ) + coords_sh( 0, v1 ) + coords_sh( 0, v2 ) ) );
+                    const double J_1_0 = r_mid * ( -coords_sh( 1, v0 ) + coords_sh( 1, v1 ) );
+                    const double J_1_1 = r_mid * ( -coords_sh( 1, v0 ) + coords_sh( 1, v2 ) );
                     const double J_1_2 =
-                        half_dr * ( ONE_THIRD * ( coords_sh( v0, 1 ) + coords_sh( v1, 1 ) + coords_sh( v2, 1 ) ) );
-                    const double J_2_0 = r_mid * ( -coords_sh( v0, 2 ) + coords_sh( v1, 2 ) );
-                    const double J_2_1 = r_mid * ( -coords_sh( v0, 2 ) + coords_sh( v2, 2 ) );
+                        half_dr * ( ONE_THIRD * ( coords_sh( 1, v0 ) + coords_sh( 1, v1 ) + coords_sh( 1, v2 ) ) );
+                    const double J_2_0 = r_mid * ( -coords_sh( 2, v0 ) + coords_sh( 2, v1 ) );
+                    const double J_2_1 = r_mid * ( -coords_sh( 2, v0 ) + coords_sh( 2, v2 ) );
                     const double J_2_2 =
-                        half_dr * ( ONE_THIRD * ( coords_sh( v0, 2 ) + coords_sh( v1, 2 ) + coords_sh( v2, 2 ) ) );
+                        half_dr * ( ONE_THIRD * ( coords_sh( 2, v0 ) + coords_sh( 2, v1 ) + coords_sh( 2, v2 ) ) );
 
                     const double J_det = J_0_0 * J_1_1 * J_2_2 - J_0_0 * J_1_2 * J_2_1 - J_0_1 * J_1_0 * J_2_2 +
                                          J_0_1 * J_1_2 * J_2_0 + J_0_2 * J_1_0 * J_2_1 - J_0_2 * J_1_1 * J_2_0;
@@ -300,9 +300,9 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
                     {
                         const int    snid = WEDGE_NODE_OFF[w][node_in_cell][0] + 2 * WEDGE_NODE_OFF[w][node_in_cell][1];
                         const int    slvl = cell_in_wave + WEDGE_NODE_OFF[w][node_in_cell][2];
-                        const double s0   = src_sh( snid, 0, slvl );
-                        const double s1   = src_sh( snid, 1, slvl );
-                        const double s2   = src_sh( snid, 2, slvl );
+                        const double s0   = src_sh( 0, snid, slvl );
+                        const double s1   = src_sh( 1, snid, slvl );
+                        const double s2   = src_sh( 2, snid, slvl );
 
                         p_gu00 = g0 * s0;
                         p_gu10 = 0.5 * ( g1 * s0 + g0 * s1 );
@@ -350,9 +350,9 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
 
                         const int    snid = WEDGE_NODE_OFF[w][node_in_cell][0] + 2 * WEDGE_NODE_OFF[w][node_in_cell][1];
                         const int    slvl = cell_in_wave + WEDGE_NODE_OFF[w][node_in_cell][2];
-                        const double sv0  = src_sh( snid, 0, slvl );
-                        const double sv1  = src_sh( snid, 1, slvl );
-                        const double sv2  = src_sh( snid, 2, slvl );
+                        const double sv0  = src_sh( 0, snid, slvl );
+                        const double sv1  = src_sh( 1, snid, slvl );
+                        const double sv2  = src_sh( 2, snid, slvl );
 
                         const int ddx = WEDGE_NODE_OFF[w][node_in_cell][0];
                         const int ddy = WEDGE_NODE_OFF[w][node_in_cell][1];
@@ -379,9 +379,9 @@ KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann_wave( const Team& te
 
                         const int    snid = WEDGE_NODE_OFF[w][node_in_cell][0] + 2 * WEDGE_NODE_OFF[w][node_in_cell][1];
                         const int    slvl = cell_in_wave + WEDGE_NODE_OFF[w][node_in_cell][2];
-                        const double sv0  = src_sh( snid, 0, slvl );
-                        const double sv1  = src_sh( snid, 1, slvl );
-                        const double sv2  = src_sh( snid, 2, slvl );
+                        const double sv0  = src_sh( 0, snid, slvl );
+                        const double sv1  = src_sh( 1, snid, slvl );
+                        const double sv2  = src_sh( 2, snid, slvl );
 
                         const int ddx = WEDGE_NODE_OFF[w][node_in_cell][0];
                         const int ddy = WEDGE_NODE_OFF[w][node_in_cell][1];
