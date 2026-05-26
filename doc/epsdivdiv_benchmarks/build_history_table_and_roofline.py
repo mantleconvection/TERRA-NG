@@ -161,10 +161,14 @@ phases=[("v00a","baseline"),
         ("v08","data layout & tiling"),
         ("v10","register / occupancy tuning")]
 pts=[(rowsby[v],lbl) for v,lbl in phases]
-# trajectory: one arrow per phase
+# trajectory: one arrow per phase. shrinkA/shrinkB pull the ends back from the
+# markers so the (filled) arrowhead is not hidden behind the destination marker.
 for (a,_),(b,_) in zip(pts[:-1], pts[1:]):
+    rad = -0.22 if (a['v']=='v08' and b['v']=='v10') else 0.22  # flip the v08->v10 arc
     ax.annotate("", xy=(b['ai'],b['gflops']), xytext=(a['ai'],a['gflops']),
-                arrowprops=dict(arrowstyle="->", color="0.55", lw=1.6, alpha=.8))
+                arrowprops=dict(arrowstyle="-|>", color="0.35", lw=2.8, alpha=.9,
+                                mutation_scale=32, shrinkA=15, shrinkB=17,
+                                connectionstyle=f"arc3,rad={rad}"))
 markers=['o','s','^','D','*']
 colors=cm.plasma(np.linspace(0.1,0.9,len(pts)))
 ver_handles=[]
@@ -185,7 +189,7 @@ roof_leg=ax.legend(handles=[hbm_line,peak_line], loc="lower right",
 ax.add_artist(roof_leg)
 ax.legend(handles=ver_handles, loc="lower right", bbox_to_anchor=(0.99,0.14),
           fontsize=10, framealpha=.95, title="Optimization phase (endpoint throughput)",
-          title_fontsize=10)
+          title_fontsize=10, markerscale=0.7)
 plt.tight_layout()
 out=f"{DOC}/roofline_history_remeasured_h100.png"
 plt.savefig(out, dpi=140, bbox_inches="tight"); print("\nSaved figure:", out)
