@@ -1,0 +1,6 @@
+phase,versions,endpoint,gdofs_per_s,gain,ai_dram,gflops,regs,dram_bytes,spill_bytes
+"baseline",v00a,v00a,0.01211,—,4.772,1551,255,13565286846976,293741403308032
+"1. arithmetic reduction",v00a-v02b,v02b,0.1116,9.2x,0.090,124,255,6191732425728,5927222640640
+"2. teams + shared memory",v03-v05,v05,8.788,78.7x,27.781,8022,108,16603415808,165591121920
+"3. data layout & tiling",v06-v08,v08,11.86,1.3x,14.267,4913,118,14671568384,197803376640
+"4. register / occupancy tuning",v09-v10,v10,17.1,1.4x,14.712,6879,96,13816907008,29171384320

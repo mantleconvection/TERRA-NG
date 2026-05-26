@@ -114,6 +114,36 @@ with open(f"{DOC}/history_stats_remeasured.md","w") as f:
         f.write(f"| {r['v']} | {r['gd']:.3f} | {r['gflops']:.0f} | {r['ai']:.2f} | {r['pct']:.0f} | "
                 f"{r['regs']} | {r['shm']/1024:.1f} | {r['dram']/1e9:.2f} | {r['spill']/1e6:.1f} | {r['dur']*1e3:.2f} |\n")
 
+# --- tightened phase-summary table (matches the roofline figure) ---
+phase_def=[("baseline","v00a","v00a"),
+           ("1. arithmetic reduction","v00a-v02b","v02b"),
+           ("2. teams + shared memory","v03-v05","v05"),
+           ("3. data layout & tiling","v06-v08","v08"),
+           ("4. register / occupancy tuning","v09-v10","v10")]
+rb={r['v']:r for r in rows}
+print("\n=== Tightened phase history ===")
+ph=f"{'phase':32}{'versions':12}{'end':6}{'Gdof/s':>8}{'gain':>7}{'AI':>6}{'GFLOP/s':>9}{'regs':>5}{'DRAM_GB':>9}{'spill_MB':>10}"
+print(ph); print("-"*len(ph))
+prev=None; phase_rows=[]
+for name,vr,end in phase_def:
+    r=rb[end]; gain=(r['gd']/prev) if prev else None; prev=r['gd']
+    gtxt=f"{gain:.1f}x" if gain else "—"
+    print(f"{name:32}{vr:12}{end:6}{r['gd']:>8.3f}{gtxt:>7}{r['ai']:>6.2f}{r['gflops']:>9.0f}{r['regs']:>5}{r['dram']/1e9:>9.2f}{r['spill']/1e6:>10.1f}")
+    phase_rows.append((name,vr,end,r,gtxt))
+cum=rb['v10']['gd']/rb['v00a']['gd']
+print(f"cumulative v00a -> v10: {cum:.0f}x")
+with open(f"{DOC}/history_phases.md","w") as f:
+    f.write("| Phase | Versions | Endpoint | Gdof/s | Gain | AI (F/B) | GFLOP/s | regs | DRAM GB | spill MB |\n")
+    f.write("|---|---|---|---|---|---|---|---|---|---|\n")
+    for name,vr,end,r,gtxt in phase_rows:
+        f.write(f"| {name} | {vr} | {end} | {r['gd']:.3f} | {gtxt} | {r['ai']:.2f} | {r['gflops']:.0f} | "
+                f"{r['regs']} | {r['dram']/1e9:.2f} | {r['spill']/1e6:.1f} |\n")
+    f.write(f"\nCumulative v00a → v10: **{cum:.0f}×**\n")
+with open(f"{DOC}/history_phases.csv","w") as f:
+    f.write("phase,versions,endpoint,gdofs_per_s,gain,ai_dram,gflops,regs,dram_bytes,spill_bytes\n")
+    for name,vr,end,r,gtxt in phase_rows:
+        f.write(f'"{name}",{vr},{end},{r["gd"]:.4g},{gtxt},{r["ai"]:.3f},{r["gflops"]:.0f},{r["regs"]},{int(r["dram"])},{int(r["spill"])}\n')
+
 # --- roofline-history figure ---
 ai_axis = np.logspace(-2, 2, 500)
 fig, ax = plt.subplots(figsize=(13,9))
