@@ -96,21 +96,7 @@ enum class BenchmarkType : int
 };
 
 constexpr auto all_benchmark_types = {
-    // Full EpsDivDiv optimization history (chronological) + the current op last,
-    // so one run re-measures the whole history on the present machine/toolchain.
-    BenchmarkType::EpsDivDivSimpleDouble,            // v00a
-    BenchmarkType::EpsDivDivDouble,                  // v00b fused
-    BenchmarkType::EpsDivDivKerngenV01Initial,       // v01
-    BenchmarkType::EpsDivDivKerngenV02SplitDimij,    // v02
-    BenchmarkType::EpsDivDivKerngenV02bSingleQuadpoint, // v02b
-    BenchmarkType::EpsDivDivKerngenV03TeamsPrecomp,  // v03
-    BenchmarkType::EpsDivDivKerngenV04ShmemCoords,   // v04
-    BenchmarkType::EpsDivDivKerngenV05ShmemSrcK,     // v05
-    BenchmarkType::EpsDivDivKerngenV06XyTiling,      // v06
-    BenchmarkType::EpsDivDivKerngenV07SplitPaths,    // v07
-    BenchmarkType::EpsDivDivKerngenV08ScalarCoalesced,  // v08
-    BenchmarkType::EpsDivDivKerngenV09SeparateScatter,  // v09
-    BenchmarkType::EpsDivDivKerngenV10SeqRpasses,    // v10
+    // Reduced to the production `current` op only (for the tile-sweep profiling).
     BenchmarkType::EpsDivDivKerngenDouble,           // current / newest
 };
 
@@ -152,6 +138,11 @@ struct Parameters
     int max_level                   = 6;
     int executions                  = 5;
     int refinement_level_subdomains = 0;
+    // Tile-sweep overrides for the production EpsDivDivKerngen kernel.
+    // 0 = use the hardcoded default (lat=4, r=16, r_passes=2).
+    int lat_tile  = 0;
+    int r_tile    = 0;
+    int r_passes  = 0;
 };
 
 template < OperatorLike OperatorT >
@@ -541,8 +532,23 @@ int main( int argc, char** argv )
         "Refinement level applied to form the subdomains." );
     util::add_option_with_default(
         app, "--executions", parameters.executions, "Number of matrix-vector multiplications to be executed." );
+    util::add_option_with_default(
+        app, "--lat-tile", parameters.lat_tile,
+        "EpsDivDivKerngen lateral tile size override (0 = default 4)." );
+    util::add_option_with_default(
+        app, "--r-tile", parameters.r_tile,
+        "EpsDivDivKerngen radial tile size override (0 = default 16)." );
+    util::add_option_with_default(
+        app, "--r-passes", parameters.r_passes,
+        "EpsDivDivKerngen radial-passes override (0 = default 2)." );
 
     CLI11_PARSE( app, argc, argv );
+
+    // Plumb tile overrides into the kernel's inline globals (used by the
+    // EpsDivDivKerngen ctor when running on the HIP/CUDA execution space).
+    terra::fe::wedge::operators::shell::g_epsdivdiv_lat_tile_override = parameters.lat_tile;
+    terra::fe::wedge::operators::shell::g_epsdivdiv_r_tile_override   = parameters.r_tile;
+    terra::fe::wedge::operators::shell::g_epsdivdiv_r_passes_override = parameters.r_passes;
 
     if ( parameters.min_level < 1 )
     {

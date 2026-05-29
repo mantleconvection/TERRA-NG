@@ -35,6 +35,13 @@ using terra::grid::shell::BoundaryConditions;
 using terra::grid::shell::ShellBoundaryFlag;
 using terra::linalg::trafo::trafo_mat_cartesian_to_normal_tangential;
 
+// Optional sweep-harness overrides for the EpsDivDivKerngen GPU tile config.
+// 0 = use the hardcoded production default (lat=4, r=16, r_passes=2). The
+// benchmark binary sets these from CLI args (--lat-tile, --r-tile, --r-passes).
+inline int g_epsdivdiv_lat_tile_override = 0;
+inline int g_epsdivdiv_r_tile_override   = 0;
+inline int g_epsdivdiv_r_passes_override = 0;
+
 /**
  * @brief Matrix-free / matrix-based epsilon-div-div operator on wedge elements in a spherical shell.
  *
@@ -269,9 +276,10 @@ class EpsilonDivDivKerngen
         else
         {
             // A/B test: cross-branch peak tile (was 4/8/2 on mt-sweeps default).
-            lat_tile_ = 4;
-            r_tile_   = 16;
-            r_passes_ = 2;
+            // Sweep-harness overrides via CLI; 0 = keep default.
+            lat_tile_ = g_epsdivdiv_lat_tile_override > 0 ? g_epsdivdiv_lat_tile_override : 4;
+            r_tile_   = g_epsdivdiv_r_tile_override   > 0 ? g_epsdivdiv_r_tile_override   : 16;
+            r_passes_ = g_epsdivdiv_r_passes_override > 0 ? g_epsdivdiv_r_passes_override : 2;
         }
         r_tile_block_ = r_tile_ * r_passes_;
 
