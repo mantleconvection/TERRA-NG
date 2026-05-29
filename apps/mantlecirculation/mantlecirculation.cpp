@@ -324,6 +324,13 @@ Result<> run( const Parameters& prm )
     // Maybe a good sanity check.
     int pad_width = std::to_string( timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 ).length();
     xdmf_output->set_write_counter( timestep_initial, pad_width );
+    xdmf_output->set_is_dimensional( prm.devel_parameters.output_dimensional );
+
+    if ( prm.io_parameters.output_pressure )
+    {
+        xdmf_output_pressure->set_write_counter( timestep_initial, pad_width );
+        xdmf_output_pressure->set_is_dimensional( prm.devel_parameters.output_dimensional );
+    }
 
     logroot << "Writing initial XDMF ..." << std::endl;
 

@@ -14,6 +14,8 @@
 
 namespace terra::io {
 
+static constexpr int32_t checkpoint_version = 2;
+
 /// @brief XDMF output that simultaneously serves for visualization with software like Paraview and as a simulation
 /// checkpoint.
 ///
@@ -208,12 +210,16 @@ class XDMFOutput
     /// first write() call.
     void set_write_counter( int write_counter, int pad_width )
     {
-        pad_width_ = pad_width;
+        write_counter_ = write_counter;
+        pad_width_     = pad_width;
 
         std::ostringstream oss;
-        oss << std::setw( pad_width ) << std::setfill( '0' ) << write_counter;
+        oss << std::setw( pad_width ) << std::setfill( '0' ) << write_counter_;
         write_counter_str_ = oss.str();
     }
+
+    /// @brief Sets metadata flag whether output is dimensional or not
+    void set_is_dimensional( const bool is_dimensional ) { is_dimensional_ = is_dimensional; }
 
     /// @brief Adds a new scalar data grid to be written out.
     ///
@@ -453,7 +459,7 @@ class XDMFOutput
         auto domain = XML( "Domain" );
         auto grid   = XML( "Grid", { { "Name", "Grid" }, { "GridType", "Uniform" } } );
 
-	grid.add_child( XML( "Time", { { "Value", std::to_string( write_counter_ ) } } ) );
+        grid.add_child( XML( "Time", { { "Value", std::to_string( write_counter_ ) } } ) );
 
         auto geometry =
             XML( "Geometry", { { "Type", "XYZ" } } )
@@ -927,7 +933,7 @@ class XDMFOutput
             checkpoint_metadata_stream.write( reinterpret_cast< const char* >( &value ), sizeof( double ) );
         };
 
-        write_i32( 1 ); // version
+        write_i32( checkpoint_version ); // version
         write_i32( distributed_domain_.domain_info().num_subdomains_per_diamond_side() );
         write_i32( distributed_domain_.domain_info().num_subdomains_in_radial_direction() );
 
@@ -941,6 +947,8 @@ class XDMFOutput
         }
 
         write_i32( static_cast< int32_t >( output_type_points_ ) );
+
+        write_i32( static_cast< int32_t >( is_dimensional_ ) ); // new in version 2: is_dimensional (0 or 1)
 
         write_i32(
             device_data_views_scalar_float_.size() + device_data_views_scalar_double_.size() +
@@ -1109,6 +1117,7 @@ class XDMFOutput
     int         write_counter_        = 0;
     int         pad_width_            = 0;
     bool        first_write_happened_ = false;
+    bool        is_dimensional_       = false;
 
     int64_t number_of_nodes_offset_      = -1;
     int64_t number_of_elements_offset_   = -1;
@@ -1129,6 +1138,7 @@ struct CheckpointMetadata
     int32_t size_x{};
     int32_t size_y{};
     int32_t size_r{};
+    int32_t is_dimensional{ -1 };
 
     std::vector< double > radii;
 
@@ -1241,6 +1251,13 @@ struct CheckpointMetadata
             return read_error;
     }
 
+    if ( metadata.version > 1 )
+    {
+        // new in version 2: flag to indicate whether contents are dimensional or nondimensional
+        if ( read_i32( metadata.is_dimensional ) )
+            return read_error;
+    }
+
     int32_t num_grid_data_files;
     if ( read_i32( num_grid_data_files ) )
         return read_error;
@@ -1312,10 +1329,10 @@ template < typename GridDataType >
 
     const auto& checkpoint_metadata = checkpoint_metadata_result.unwrap();
 
-    if ( !( checkpoint_metadata.version == 0 || checkpoint_metadata.version == 1 ) )
+    if ( !( checkpoint_metadata.version == 0 || checkpoint_metadata.version == 1 || checkpoint_metadata.version == 2 ) )
     {
         return {
-            "Supported checkpoint verions: 0, 1. This checkpoint has version " +
+            "Supported checkpoint versions: 0, 1, 2. This checkpoint has version " +
             std::to_string( checkpoint_metadata.version ) + "." };
     }
 
