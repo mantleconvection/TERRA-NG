@@ -20,6 +20,8 @@
 #include "linalg/vector_q1.hpp"
 #include "util/timer.hpp"
 
+#include <cstdlib>   // for std::getenv (wave-parallel DN path opt-in)
+
 namespace terra::fe::wedge::operators::shell {
 
 using grid::shell::get_boundary_condition_flag;
@@ -32,6 +34,13 @@ using terra::grid::shell::BoundaryConditionFlag;
 using terra::grid::shell::BoundaryConditions;
 using terra::grid::shell::ShellBoundaryFlag;
 using terra::linalg::trafo::trafo_mat_cartesian_to_normal_tangential;
+
+// Optional sweep-harness overrides for the EpsDivDivKerngen GPU tile config.
+// 0 = use the hardcoded production default (lat=4, r=16, r_passes=2). The
+// benchmark binary sets these from CLI args (--lat-tile, --r-tile, --r-passes).
+inline int g_epsdivdiv_lat_tile_override = 0;
+inline int g_epsdivdiv_r_tile_override   = 0;
+inline int g_epsdivdiv_r_passes_override = 0;
 
 /**
  * @brief Matrix-free / matrix-based epsilon-div-div operator on wedge elements in a spherical shell.
@@ -70,6 +79,23 @@ class EpsilonDivDivKerngen
     using LocalMatrixStorage      = linalg::solvers::LocalMatrixStorage< ScalarType, LocalMatrixDim >;
     using Team                    = Kokkos::TeamPolicy<>::member_type;
 
+    /**
+     * @brief Kernel path selected on host.
+     *
+     * This value is computed whenever BCs or stored-matrix mode change and is then
+     * used by `apply_impl()` to select which kernel launch to issue.
+     */
+    enum class KernelPath
+    {
+        Slow,
+        FastDirichletNeumann,
+        FastFreeslip,
+#ifdef __HIP_PLATFORM_AMD__
+        FastDirichletNeumannWave,   // wave-parallel experimental DN path (HIP/AMD layout)
+        FastDirichletNeumannHex,    // hex 1-pt Gauss experimental DN path (HIP only)
+#endif
+    };
+
   private:
     // Optional element-local matrix storage (GCA/coarsening/explicit local-matrix mode)
     LocalMatrixStorage local_matrix_storage_;
@@ -83,6 +109,22 @@ class EpsilonDivDivKerngen
     BoundaryConditions                                       bcs_;   ///< CMB and SURFACE boundary conditions
 
     bool diagonal_; ///< If true, apply diagonal-only action
+    /// When true, replace the per-cell coefficient with a per-wedge constant.
+    /// Mean kind chosen by eta_homogenization_mean_:
+    ///   1 = harmonic mean of eta  (k_eval = harmonic mean of k=eta)
+    ///   2 = arithmetic mean of eta (k_eval = arithmetic mean of k=eta)
+    ///   3 = geometric mean of eta  (k_eval = geometric mean of k=eta)
+    /// All match ASPECT MaterialAveraging::{harmonic,arithmetic,geometric}.
+    /// Default mode = harmonic.  Default off.
+    bool homogenize_eta_per_cell_ = false;
+    int  eta_homogenization_mean_ = 1;
+
+    /// When true, read a per-cell-constant coefficient from k_q0_ at the
+    /// operator's own cell index (subdomain, x_cell, y_cell, r_cell) —
+    /// direct lookup, no level translation.  Caller supplies a Q0 field at
+    /// the operator's own MG level.
+    bool                                 use_q0_coefficient_ = false;
+    grid::Grid4DDataScalar< ScalarType > k_q0_;
 
     linalg::OperatorApplyMode         operator_apply_mode_;
     linalg::OperatorCommunicationMode operator_communication_mode_;
@@ -119,23 +161,11 @@ class EpsilonDivDivKerngen
     ScalarT r_max_;
     ScalarT r_min_;
 
-    /**
-     * @brief Kernel path selected on host.
-     *
-     * This value is computed whenever BCs or stored-matrix mode change and is then
-     * used by `apply_impl()` to select which kernel launch to issue.
-     */
-    enum class KernelPath
-    {
-        Slow,
-        FastDirichletNeumann,
-        FastFreeslip,
-    };
     KernelPath kernel_path_ = KernelPath::FastDirichletNeumann;
 
     // Rotation null-space penalty (active only for fs/fs)
     bool                                              penalty_active_  = false;
-    ScalarT                                           penalty_epsilon_ = 1.0;
+    ScalarT                                           penalty_epsilon_ = 1e-7;
     grid::Grid4DDataVec< ScalarType, VecDim >         null_modes_[3];
     grid::Grid4DDataScalar< grid::NodeOwnershipFlag > ownership_mask_;
 
@@ -245,9 +275,11 @@ class EpsilonDivDivKerngen
 #endif
         else
         {
-            lat_tile_ = 4;
-            r_tile_   = 8;
-            r_passes_ = 2;
+            // A/B test: cross-branch peak tile (was 4/8/2 on mt-sweeps default).
+            // Sweep-harness overrides via CLI; 0 = keep default.
+            lat_tile_ = g_epsdivdiv_lat_tile_override > 0 ? g_epsdivdiv_lat_tile_override : 4;
+            r_tile_   = g_epsdivdiv_r_tile_override   > 0 ? g_epsdivdiv_r_tile_override   : 16;
+            r_passes_ = g_epsdivdiv_r_passes_override > 0 ? g_epsdivdiv_r_passes_override : 2;
         }
         r_tile_block_ = r_tile_ * r_passes_;
 
@@ -267,9 +299,14 @@ class EpsilonDivDivKerngen
                       << "), r_passes=" << r_passes_ << std::endl;
         util::logroot << "[EpsilonDivDiv] number of tiles (x,y,r)=(" << lat_tiles_ << "," << lat_tiles_ << ","
                       << r_tiles_ << "), team_size=" << team_size_ << ", blocks=" << blocks_ << std::endl;
-        const char* path_name = ( kernel_path_ == KernelPath::Slow )         ? "slow" :
-                                ( kernel_path_ == KernelPath::FastFreeslip ) ? "fast-freeslip" :
-                                                                               "fast-dirichlet-neumann";
+        const char* path_name =
+            ( kernel_path_ == KernelPath::Slow )                     ? "slow" :
+            ( kernel_path_ == KernelPath::FastFreeslip )             ? "fast-freeslip" :
+#ifdef __HIP_PLATFORM_AMD__
+            ( kernel_path_ == KernelPath::FastDirichletNeumannWave ) ? "fast-dirichlet-neumann-wave" :
+            ( kernel_path_ == KernelPath::FastDirichletNeumannHex )  ? "fast-dirichlet-neumann-hex" :
+#endif
+                                                                       "fast-dirichlet-neumann";
         util::logroot << "[EpsilonDivDiv] kernel path = " << path_name << std::endl;
 #endif
         init_penalty();
@@ -417,6 +454,23 @@ class EpsilonDivDivKerngen
 
     void set_diagonal( bool v ) { diagonal_ = v; }
 
+    /// Toggle per-cell coefficient homogenization (mean kind via set_eta_homogenization_mean).
+    void set_homogenize_eta_per_cell( bool v ) { homogenize_eta_per_cell_ = v; }
+    /// Set the per-cell mean kind: 1=harmonic-of-eta, 2=arithmetic-of-eta, 3=geometric-of-eta.
+    void set_eta_homogenization_mean( int m ) { eta_homogenization_mean_ = m; }
+    /// Configure the operator to read a per-cell-constant coefficient from a
+    /// Q0 cell-centered viscosity field at the operator's own MG level
+    /// (direct index lookup, no translation).  Caller must build a Q0 field
+    /// sized for this operator's mesh; for a velocity-level operator that
+    /// means broadcasting the pressure-level Q0 into a velocity-level Q0 so
+    /// each pressure cell's 8 velocity sub-cells share the value.
+    void set_q0_coefficient_field( const grid::Grid4DDataScalar< ScalarType >& k_q0 )
+    {
+        k_q0_              = k_q0;
+        use_q0_coefficient_ = true;
+    }
+    void clear_q0_coefficient_field() { use_q0_coefficient_ = false; }
+
     void set_boundary_conditions( BoundaryConditions bcs )
     {
         bcs_[0] = bcs[0];
@@ -425,6 +479,12 @@ class EpsilonDivDivKerngen
         // Recompute host-side dispatch mode whenever BCs change
         update_kernel_path_flag_host_only();
     }
+
+    /// @brief Override the kernel path. Bypasses the host-side rules in
+    /// update_kernel_path_flag_host_only(); will be re-derived if BCs or
+    /// stored-matrix mode change.
+    void set_kernel_path( KernelPath p ) { kernel_path_ = p; }
+    KernelPath kernel_path() const { return kernel_path_; }
 
     const grid::Grid4DDataScalar< ScalarType >& k_grid_data() { return k_; }
     const grid::shell::DistributedDomain&       get_domain() const { return domain_; }
@@ -457,9 +517,13 @@ class EpsilonDivDivKerngen
         update_kernel_path_flag_host_only();
 
         util::logroot << "[EpsilonDivDiv] (set_stored_matrix_mode) kernel path = "
-                      << ( ( kernel_path_ == KernelPath::Slow )         ? "slow" :
-                           ( kernel_path_ == KernelPath::FastFreeslip ) ? "fast-freeslip" :
-                                                                          "fast-dirichlet-neumann" )
+                      << ( ( kernel_path_ == KernelPath::Slow )                     ? "slow" :
+                           ( kernel_path_ == KernelPath::FastFreeslip )             ? "fast-freeslip" :
+#ifdef __HIP_PLATFORM_AMD__
+                           ( kernel_path_ == KernelPath::FastDirichletNeumannWave ) ? "fast-dirichlet-neumann-wave" :
+                           ( kernel_path_ == KernelPath::FastDirichletNeumannHex )  ? "fast-dirichlet-neumann-hex" :
+#endif
+                                                                                      "fast-dirichlet-neumann" )
                       << std::endl;
     }
 
@@ -558,9 +622,72 @@ class EpsilonDivDivKerngen
                     } );
             }
         }
+#ifdef __HIP_PLATFORM_AMD__
+        else if ( kernel_path_ == KernelPath::FastDirichletNeumannWave )
+        {
+            // Wave-parallel DN path: each wave (60 of 64 lanes active) processes
+            // 10 radial cells via team_size=10 threads × vector_length=6 vector
+            // lanes (one lane per active wedge node).
+            const int r_stacks = ( hex_rad_ + kWaveCellsPerWave - 1 ) / kWaveCellsPerWave;
+            const int wave_blocks =
+                local_subdomains_ * ( hex_lat_ ) * ( hex_lat_ ) * r_stacks;
+            using LB = Kokkos::LaunchBounds< 64, 1 >;
+            Kokkos::TeamPolicy< LB > wv_policy(
+                wave_blocks, /*team_size=*/10, /*vector_length=*/6 );
+            wv_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn_wave() ) );
+            if ( diagonal_ )
+            {
+                Kokkos::parallel_for(
+                    "epsilon_divdiv_apply_kernel_fast_dn_wave_diag", wv_policy,
+                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                        this->template run_team_fast_dirichlet_neumann_wave< true >( team );
+                    } );
+            }
+            else
+            {
+                Kokkos::parallel_for(
+                    "epsilon_divdiv_apply_kernel_fast_dn_wave_matvec", wv_policy,
+                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                        this->template run_team_fast_dirichlet_neumann_wave< false >( team );
+                    } );
+            }
+        }
+        else if ( kernel_path_ == KernelPath::FastDirichletNeumannHex )
+        {
+            // Hex 1-pt Gauss DN path: each wave (64 lanes) processes 16 radial cells
+            // (2 blocks × 8 cells, 8 lanes per hex). league_size: one team per
+            // (subdomain, x_cell, y_cell, r_stack).
+            const int r_stacks = ( hex_rad_ + kHexCellsPerWave - 1 ) / kHexCellsPerWave;
+            const int hex_blocks =
+                local_subdomains_ * ( hex_lat_ ) * ( hex_lat_ ) * r_stacks;
+            using LB = Kokkos::LaunchBounds< 64, 1 >;
+            Kokkos::TeamPolicy< LB > hx_policy(
+                hex_blocks, /*team_size=*/1, /*vector_length=*/64 );
+            hx_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn_hex() ) );
+            if ( diagonal_ )
+            {
+                Kokkos::parallel_for(
+                    "epsilon_divdiv_apply_kernel_fast_dn_hex_diag", hx_policy,
+                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                        this->template run_team_fast_dirichlet_neumann_hex< true >( team );
+                    } );
+            }
+            else
+            {
+                Kokkos::parallel_for(
+                    "epsilon_divdiv_apply_kernel_fast_dn_hex_matvec", hx_policy,
+                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                        this->template run_team_fast_dirichlet_neumann_hex< false >( team );
+                    } );
+            }
+        }
+#endif
         else
         {
-            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > dn_policy( blocks_, team_size_ );
+            // A/B test: full revert to cross-branch dispatch (LB<512,2>, no team doubling).
+            // Paired with run_team_fast_dirichlet_neumann calling operator_fast_dirichlet_neumann_path
+            // with w_filter=-1 so each thread sequentially computes both wedges (compile-time loop).
+            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 512, 2 > > dn_policy( blocks_, team_size_ );
             dn_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn( team_size_ ) ) );
             if ( diagonal_ )
             {
@@ -746,6 +873,15 @@ class EpsilonDivDivKerngen
         return sizeof( ScalarType ) * nscalars;
     }
 
+    // HIP/AMD-characteristic experimental DN paths: wave-parallel (60-of-64
+    // active wave-lane layout) and hex 1-pt Gauss (uses __shfl_xor). Kept in
+    // their own subdirectory and gated on __HIP_PLATFORM_AMD__ so the CUDA
+    // backend does not try to compile them.
+#ifdef __HIP_PLATFORM_AMD__
+#include "hip/epsilon_divdiv_kerngen_wave.hpp"
+#include "hip/epsilon_divdiv_hex.hpp"
+#endif
+
   private:
     /**
      * @brief Decode a team league rank / team rank into:
@@ -841,6 +977,9 @@ class EpsilonDivDivKerngen
     template < bool Diagonal >
     KOKKOS_INLINE_FUNCTION void run_team_fast_dirichlet_neumann( const Team& team ) const
     {
+        // A/B test: legacy thread-per-cell layout. Use decode_team_indices like
+        // the cross-branch version and pass w_filter=-1 so the inner kernel runs
+        // both wedges in the compile-time `for (w=0;w<2;++w)` loop.
         int local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell;
         decode_team_indices( team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
 
@@ -848,8 +987,9 @@ class EpsilonDivDivKerngen
             return;
 
         operator_fast_dirichlet_neumann_path< Diagonal >(
-            team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell );
+            team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, /*w_filter=*/-1 );
     }
+
 
     /**
      * @brief Team entry for fast free-slip matrix-free path.
@@ -1113,7 +1253,8 @@ class EpsilonDivDivKerngen
         const int   ty,
         const int   tr,
         const int   x_cell,
-        const int   y_cell ) const
+        const int   y_cell,
+        const int   w_filter = -1 ) const
     {
         const int nlev = r_tile_block_ + 1;
         const int nxy  = ( lat_tile_ + 1 ) * ( lat_tile_ + 1 );
@@ -1243,20 +1384,46 @@ class EpsilonDivDivKerngen
             const int surface_shift =
                 ( ( at_boundary && treat_boundary_dirichlet && ( !Diagonal ) && at_surface ) ? 3 : 0 );
 
-            for ( int w = 0; w < 2; ++w )
+            // w_filter == -1 → run both wedges (legacy behaviour);
+            // w_filter == 0 or 1 → run only that wedge (thread-per-wedge layout).
+            const int w_start = ( w_filter < 0 ) ? 0 : w_filter;
+            const int w_end   = ( w_filter < 0 ) ? 2 : w_filter + 1;
+            for ( int w = w_start; w < w_end; ++w )
             {
                 const int v0 = w == 0 ? n00 : n11;
                 const int v1 = w == 0 ? n10 : n01;
                 const int v2 = w == 0 ? n01 : n10;
 
-                double k_sum = 0.0;
-#pragma unroll
-                for ( int node = 0; node < 6; ++node )
+                double k_eval;
+                if ( use_q0_coefficient_ )
                 {
-                    const int nid = node_id( tx + WEDGE_NODE_OFF[w][node][0], ty + WEDGE_NODE_OFF[w][node][1] );
-                    k_sum += k_sh( nid, lvl0 + WEDGE_NODE_OFF[w][node][2] );
+                    // Q0 cell-centered eta on the pressure mesh; parent of
+                    // velocity-cell (x_cell, y_cell, r_cell) is half-index.
+                    k_eval = k_q0_( local_subdomain_id, x_cell, y_cell, r_cell );
                 }
-                const double k_eval = ONE_SIXTH * k_sum;
+                else
+                {
+                    double k_sum     = 0.0;
+                    double inv_k_sum = 0.0;
+                    double log_k_sum = 0.0;
+#pragma unroll
+                    for ( int node = 0; node < 6; ++node )
+                    {
+                        const int nid = node_id( tx + WEDGE_NODE_OFF[w][node][0], ty + WEDGE_NODE_OFF[w][node][1] );
+                        const double k_corner = k_sh( nid, lvl0 + WEDGE_NODE_OFF[w][node][2] );
+                        k_sum += k_corner;
+                        inv_k_sum += 1.0 / k_corner;
+                        log_k_sum += Kokkos::log( k_corner );
+                    }
+                    if ( !homogenize_eta_per_cell_ )
+                        k_eval = ONE_SIXTH * k_sum;
+                    else if ( eta_homogenization_mean_ == 2 )
+                        k_eval = ONE_SIXTH * k_sum;
+                    else if ( eta_homogenization_mean_ == 3 )
+                        k_eval = Kokkos::exp( log_k_sum * ONE_SIXTH );
+                    else
+                        k_eval = 6.0 / inv_k_sum;
+                }
 
                 double kwJ;
 
@@ -1652,19 +1819,39 @@ class EpsilonDivDivKerngen
                 const int v1 = w == 0 ? n10 : n01;
                 const int v2 = w == 0 ? n01 : n10;
 
-                double k_sum = 0.0;
-#pragma unroll
-                for ( int node = 0; node < 6; ++node )
+                double k_eval;
+                if ( use_q0_coefficient_ )
                 {
-                    const int ddx = WEDGE_NODE_OFF[w][node][0];
-                    const int ddy = WEDGE_NODE_OFF[w][node][1];
-                    const int ddr = WEDGE_NODE_OFF[w][node][2];
-
-                    const int nid = node_id( tx + ddx, ty + ddy );
-                    const int lvl = lvl0 + ddr;
-                    k_sum += k_sh( nid, lvl );
+                    k_eval = k_q0_( local_subdomain_id, x_cell, y_cell, r_cell );
                 }
-                const double k_eval = ONE_SIXTH * k_sum;
+                else
+                {
+                    double k_sum     = 0.0;
+                    double inv_k_sum = 0.0;
+                    double log_k_sum = 0.0;
+#pragma unroll
+                    for ( int node = 0; node < 6; ++node )
+                    {
+                        const int ddx = WEDGE_NODE_OFF[w][node][0];
+                        const int ddy = WEDGE_NODE_OFF[w][node][1];
+                        const int ddr = WEDGE_NODE_OFF[w][node][2];
+
+                        const int    nid      = node_id( tx + ddx, ty + ddy );
+                        const int    lvl      = lvl0 + ddr;
+                        const double k_corner = k_sh( nid, lvl );
+                        k_sum += k_corner;
+                        inv_k_sum += 1.0 / k_corner;
+                        log_k_sum += Kokkos::log( k_corner );
+                    }
+                    if ( !homogenize_eta_per_cell_ )
+                        k_eval = ONE_SIXTH * k_sum;
+                    else if ( eta_homogenization_mean_ == 2 )
+                        k_eval = ONE_SIXTH * k_sum;
+                    else if ( eta_homogenization_mean_ == 3 )
+                        k_eval = Kokkos::exp( log_k_sum * ONE_SIXTH );
+                    else
+                        k_eval = 6.0 / inv_k_sum;
+                }
 
                 double wJ = 0.0;
                 double i00, i01, i02;
@@ -2081,9 +2268,36 @@ class EpsilonDivDivKerngen
         const dense::Mat< ScalarType, VecDim, VecDim > J_inv_transposed = J.inv_transposed( det );
 
         ScalarType k_eval = 0.0;
-        for ( int k = 0; k < num_nodes_per_wedge; k++ )
+        if ( homogenize_eta_per_cell_ )
         {
-            k_eval += shape( k, quad_point ) * k_local_hex[wedge]( k );
+            // ASPECT-style: harmonic/arithmetic/geometric mean of k=eta over
+            // the 6 wedge corners, applied as a constant at every QP.
+            const ScalarType inv_N = ScalarType( 1 ) / ScalarType( num_nodes_per_wedge );
+            if ( eta_homogenization_mean_ == 2 )
+            {
+                ScalarType s = 0;
+                for ( int k = 0; k < num_nodes_per_wedge; k++ ) s += k_local_hex[wedge]( k );
+                k_eval = s * inv_N;
+            }
+            else if ( eta_homogenization_mean_ == 3 )
+            {
+                ScalarType log_sum = 0;
+                for ( int k = 0; k < num_nodes_per_wedge; k++ ) log_sum += Kokkos::log( k_local_hex[wedge]( k ) );
+                k_eval = Kokkos::exp( log_sum * inv_N );
+            }
+            else
+            {
+                ScalarType inv_sum = 0;
+                for ( int k = 0; k < num_nodes_per_wedge; k++ ) inv_sum += ScalarType( 1 ) / k_local_hex[wedge]( k );
+                k_eval = ScalarType( num_nodes_per_wedge ) / inv_sum;
+            }
+        }
+        else
+        {
+            for ( int k = 0; k < num_nodes_per_wedge; k++ )
+            {
+                k_eval += shape( k, quad_point ) * k_local_hex[wedge]( k );
+            }
         }
 
         for ( int k = 0; k < num_nodes_per_wedge; k++ )
@@ -2113,7 +2327,26 @@ class EpsilonDivDivKerngen
         const ScalarT r_2 = radii_( local_subdomain_id, r_cell + 1 );
 
         dense::Vec< ScalarT, 6 > k_local_hex[num_wedges_per_hex_cell];
-        extract_local_wedge_scalar_coefficients( k_local_hex, local_subdomain_id, x_cell, y_cell, r_cell, k_ );
+        if ( use_q0_coefficient_ )
+        {
+            // Q0 cell-centered eta: override the nodal-extracted corners with
+            // the per-cell constant.  Both wedges share the same value.  This
+            // makes any downstream per-QP shape interpolation produce the
+            // same constant, so the slow path (and GCA assembly which uses
+            // it) sees the Q0 eta consistently with the fast paths.
+            const ScalarT k_cell = k_q0_( local_subdomain_id, x_cell, y_cell, r_cell );
+            for ( int w = 0; w < num_wedges_per_hex_cell; ++w )
+            {
+                for ( int n = 0; n < num_nodes_per_wedge; ++n )
+                {
+                    k_local_hex[w]( n ) = k_cell;
+                }
+            }
+        }
+        else
+        {
+            extract_local_wedge_scalar_coefficients( k_local_hex, local_subdomain_id, x_cell, y_cell, r_cell, k_ );
+        }
 
         dense::Mat< ScalarT, LocalMatrixDim, LocalMatrixDim > A = {};
 

@@ -245,6 +245,7 @@ class SUPGSolver : public EnergySolver< ScalarType >
 
             if ( print_convergence )
             {
+                util::logroot << "[SUPG energy FGMRES convergence]" << std::endl;
                 table_->query_rows_equals( "tag", "fgmres_solver" ).print_pretty();
             }
             table_->clear();
@@ -824,6 +825,7 @@ class EVSolver : public EnergySolver< ScalarType >
 
             if ( print_convergence )
             {
+                util::logroot << "[EV energy FGMRES convergence]" << std::endl;
                 table_->query_rows_equals( "tag", "fgmres_solver" ).print_pretty();
             }
             table_->clear();
