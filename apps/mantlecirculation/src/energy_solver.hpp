@@ -189,8 +189,11 @@ class SUPGSolver : public EnergySolver< ScalarType >
     {
         // SUPG: implicit diffusion, dt only constrained by advection CFL.
         const auto max_vel      = kernels::common::max_vector_magnitude( velocity_.grid_data() );
-        const auto dt_advection = ( max_vel > ScalarType( 1e-12 ) ) ? ( h_ / max_vel ) : ScalarType( 1e-3 );
-        const auto dt           = prm_.time_stepping_parameters.dt_scaling * dt_advection;
+        const auto dt_advection = h_ / max_vel;
+        const auto dt           = std::clamp(
+            prm_.time_stepping_parameters.dt_scaling * dt_advection,
+            prm_.time_stepping_parameters.dt_min,
+            prm_.time_stepping_parameters.dt_max );
 
         util::logroot << "Computing dt (SUPG advection CFL) ..." << std::endl;
         util::logroot << "    max_vel (cm/a) :             " << max_vel * prm_.physics_parameters.calc_cm_per_year
@@ -442,8 +445,11 @@ class EVSolver : public EnergySolver< ScalarType >
     ScalarType compute_dt() override
     {
         const auto max_vel      = kernels::common::max_vector_magnitude( velocity_.grid_data() );
-        const auto dt_advection = ( max_vel > ScalarType( 1e-12 ) ) ? ( h_ / max_vel ) : ScalarType( 1e-3 );
-        const auto dt           = prm_.time_stepping_parameters.dt_scaling * dt_advection;
+        const auto dt_advection = h_ / max_vel;
+        const auto dt           = std::clamp(
+            prm_.time_stepping_parameters.dt_scaling * dt_advection,
+            prm_.time_stepping_parameters.dt_min,
+            prm_.time_stepping_parameters.dt_max );
 
         util::logroot << "Computing dt (EV advection CFL) ..." << std::endl;
         util::logroot << "    max_vel (cm/a) :             " << max_vel * prm_.physics_parameters.calc_cm_per_year
@@ -986,7 +992,8 @@ class FCTSolver : public EnergySolver< ScalarType >
             coords_shell_,
             coords_radii_,
             prm_.physics_parameters.thermal_diffusivity );
-        const auto dt = prm_.time_stepping_parameters.dt_scaling * dt_stable;
+        const auto dt =
+            std::min( prm_.time_stepping_parameters.dt_scaling * dt_stable, prm_.time_stepping_parameters.dt_max );
 
         util::logroot << "Computing dt (FCT stable) ..." << std::endl;
         util::logroot << "    dt_stable:                     " << dt_stable * prm_.physics_parameters.calc_time_Ma

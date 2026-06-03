@@ -259,6 +259,10 @@ struct TimeSteppingParameters
     double dt_scaling = 0.5;
     double t_end_Ma   = 100.0;
     double t_end      = 1.0;
+    double dt_max_Ma  = 5.0;
+    double dt_min_Ma  = 0.1;
+    double dt_max     = 1.0;
+    double dt_min     = 1.0;
 
     int max_timesteps = 10;
 
@@ -349,6 +353,8 @@ inline void nondimensionalise( Parameters& prm )
 
     // Nondimensionalise time
     time.t_end = time.t_end_Ma / phys.calc_time_Ma;
+    time.dt_max = time.dt_max_Ma / phys.calc_time_Ma;
+    time.dt_min = time.dt_min_Ma / phys.calc_time_Ma;
 
     if ( !devel.set_nondimensional_numbers )
     {
@@ -597,6 +603,11 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     add_option_with_default( app, "--t-end", parameters.time_stepping_parameters.t_end_Ma )
         ->group( "Time Discretization" )
         ->description( "Final time in Ma." );
+    add_option_with_default( app, "--dt-max", parameters.time_stepping_parameters.dt_max_Ma )
+        ->group( "Time Discretization" )
+        ->description( "Maximum/minimum time step size in Ma" );
+    add_option_with_default( app, "--dt-min", parameters.time_stepping_parameters.dt_min_Ma )
+        ->group( "Time Discretization" )
     add_option_with_default( app, "--max-timesteps", parameters.time_stepping_parameters.max_timesteps )
         ->group( "Time Discretization" )
         ->description(
