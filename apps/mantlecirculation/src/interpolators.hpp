@@ -70,6 +70,7 @@ struct InitialConditionInterpolator
 struct ConductiveProfileInterpolator
 {
     ScalarType                     r_min_, r_max_, eps_;
+    ScalarType                     T_min_;
     Grid3DDataVec< ScalarType, 3 > grid_;
     Grid2DDataScalar< ScalarType > radii_;
     Grid4DDataScalar< ScalarType > data_;
@@ -89,7 +90,7 @@ struct ConductiveProfileInterpolator
             return;
         }
 
-        const ScalarType T_ref = r_min_ * r_max_ / radius - r_min_;
+        const ScalarType T_ref = ( r_min_ * r_max_ / radius - r_min_ ) / ( r_max_ - r_min_ ) + T_min_;
 
         ScalarType T_val = T_ref;
         if ( has_sph_ )

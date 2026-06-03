@@ -102,6 +102,7 @@ void initialize_temperature_fields(
                 domain.domain_info().radii().front(),
                 domain.domain_info().radii().back(),
                 init_temp.sph_epsilon,
+                prm.boundary_parameters.temperature_min,
                 coords_shell,
                 coords_radii,
                 T.grid_data(),
@@ -126,6 +127,8 @@ void initialize_temperature_fields(
             FVInitialConditionInterpolator{
                 domain.domain_info().radii().front(),
                 domain.domain_info().radii().back(),
+                prm.boundary_parameters.temperature_min,
+                prm.boundary_parameters.temperature_max,
                 fv_cell_centers.grid_data(),
                 T_fct.grid_data() } );
         Kokkos::fence();
@@ -133,7 +136,11 @@ void initialize_temperature_fields(
         Kokkos::parallel_for(
             "adding noise to temp (FCT)",
             grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ),
-            FVNoiseAdder{ T_fct.grid_data(), Kokkos::Random_XorShift64_Pool<>( 12345 ) } );
+            FVNoiseAdder{
+                prm.boundary_parameters.temperature_min,
+                prm.boundary_parameters.temperature_max,
+                T_fct.grid_data(),
+                Kokkos::Random_XorShift64_Pool<>( 12345 ) } );
         Kokkos::fence();
     }
 
@@ -163,7 +170,8 @@ void compute_reference_conductive_profile(
     linalg::VectorQ1Scalar< ScalarType >&       T_ref,
     const grid::shell::DistributedDomain&       domain,
     const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
-    const grid::Grid2DDataScalar< ScalarType >& coords_radii )
+    const grid::Grid2DDataScalar< ScalarType >& coords_radii,
+    const Parameters&                           prm )
 {
     Kokkos::parallel_for(
         "conductive profile T_ref",
@@ -172,6 +180,7 @@ void compute_reference_conductive_profile(
             domain.domain_info().radii().front(),
             domain.domain_info().radii().back(),
             ScalarType( 0 ),
+            prm.boundary_parameters.temperature_min,
             coords_shell,
             coords_radii,
             T_ref.grid_data(),

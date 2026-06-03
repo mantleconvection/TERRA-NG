@@ -69,48 +69,45 @@ inline Result<> write_xdmf(
     Grid4DDataScalar< ScalarType >&                Viscosity_data,
     Grid4DDataScalar< ScalarType >&                Pressure_data )
 {
-    if ( write_output && !prm.io_parameters.no_xdmf )
+    logroot << "Writing XDMF output ..." << std::endl;
+
+    if ( prm.devel_parameters.output_dimensional )
     {
-        logroot << "Writing XDMF output ..." << std::endl;
+        // Redimensionalise ...
+        scale( Temperature_data, prm.boundary_parameters.delta_T_K );
+        scale( Velocity_data, prm.physics_parameters.calc_cm_per_year );
+        scale( Viscosity_data, prm.physics_parameters.viscosity_parameters.reference_viscosity );
 
-        if ( prm.devel_parameters.output_dimensional )
+        xdmf_output->write();
+
+        // ... and nondimensionalise again.
+        scale( Temperature_data, 1.0 / prm.boundary_parameters.delta_T_K );
+        scale( Velocity_data, 1.0 / prm.physics_parameters.calc_cm_per_year );
+        scale( Viscosity_data, 1.0 / prm.physics_parameters.viscosity_parameters.reference_viscosity );
+
+        // Redim, write and nondim pressure
+        if ( xdmf_output_pressure )
         {
-            // Redimensionalise ...
-            scale( Temperature_data, prm.boundary_parameters.delta_T_K );
-            scale( Velocity_data, prm.physics_parameters.calc_cm_per_year );
-            scale( Viscosity_data, prm.physics_parameters.viscosity_parameters.reference_viscosity );
+            scale(
+                Pressure_data,
+                ( prm.physics_parameters.viscosity_parameters.reference_viscosity *
+                  prm.physics_parameters.characteristic_velocity ) /
+                    prm.mesh_parameters.mantle_thickness_m );
 
-            xdmf_output->write();
+            xdmf_output_pressure->write();
 
-            // ... and nondimensionalise again.
-            scale( Temperature_data, 1.0 / prm.boundary_parameters.delta_T_K );
-            scale( Velocity_data, 1.0 / prm.physics_parameters.calc_cm_per_year );
-            scale( Viscosity_data, 1.0 / prm.physics_parameters.viscosity_parameters.reference_viscosity );
-
-            // Redim, write and nondim pressure
-            if ( xdmf_output_pressure )
-            {
-                scale(
-                    Pressure_data,
+            scale(
+                Pressure_data,
+                prm.mesh_parameters.mantle_thickness_m /
                     ( prm.physics_parameters.viscosity_parameters.reference_viscosity *
-                      prm.physics_parameters.characteristic_velocity ) /
-                        prm.mesh_parameters.mantle_thickness_m );
-
-                xdmf_output_pressure->write();
-
-                scale(
-                    Pressure_data,
-                    prm.mesh_parameters.mantle_thickness_m /
-                        ( prm.physics_parameters.viscosity_parameters.reference_viscosity *
-                          prm.physics_parameters.characteristic_velocity ) );
-            }
+                      prm.physics_parameters.characteristic_velocity ) );
         }
-        else
-        {
-            xdmf_output->write();
-            if ( xdmf_output_pressure )
-                xdmf_output_pressure->write();
-        }
+    }
+    else
+    {
+        xdmf_output->write();
+        if ( xdmf_output_pressure )
+            xdmf_output_pressure->write();
     }
 
     return { Ok{} };

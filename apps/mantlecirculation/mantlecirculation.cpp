@@ -278,18 +278,18 @@ Result<> run( const Parameters& prm )
     // Reference conductive temperature profile (also used for the Nusselt number).
     VectorQ1Scalar< ScalarType > T_ref( "T_ref", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
     compute_reference_conductive_profile(
-        T_ref, ( *domains[velocity_level] ), coords_shell[velocity_level], coords_radii[velocity_level] );
+        T_ref, ( *domains[velocity_level] ), coords_shell[velocity_level], coords_radii[velocity_level], prm );
 
     xdmf_output->add( T_ref.grid_data() );
-    xdmf_output->add( T.grid_data() );                   // Temperature
-    xdmf_output->add( u.block_1().grid_data() );         // Velocity
-    xdmf_output->add( eta[velocity_level].grid_data() ); // Viscosity
+    xdmf_output->add( T.grid_data() );                 // Temperature
+    xdmf_output->add( u.block_1().grid_data() );       // Velocity
+    xdmf_output->add( stokes.eta_fine().grid_data() ); // Viscosity
 
     if ( prm.io_parameters.output_pressure )
     {
         xdmf_output_pressure.emplace(
             prm.io_parameters.outdir + "/" + prm.io_parameters.xdmf_dir + "_p",
-            domains[pressure_level],
+            ( *domains[pressure_level] ),
             coords_shell[pressure_level],
             coords_radii[pressure_level] );
 
@@ -310,6 +310,7 @@ Result<> run( const Parameters& prm )
             coords_shell[velocity_level],
             coords_radii[velocity_level],
             prm );
+
         // Refresh viscosity from the loaded T: the IC-based eta computed
         // earlier would otherwise drive the first Stokes solve with a stale
         // viscosity field and produce an unphysical velocity at restart.
@@ -331,25 +332,6 @@ Result<> run( const Parameters& prm )
         xdmf_output_pressure->set_write_counter( timestep_initial, pad_width );
         xdmf_output_pressure->set_is_dimensional( prm.devel_parameters.output_dimensional );
     }
-
-    logroot << "Writing initial XDMF ..." << std::endl;
-
-    // Write to xdmf
-    write_xdmf(
-        xdmf_output,
-        xdmf_output_pressure,
-        prm,
-        T.grid_data(),
-        u.block_1().grid_data(),
-        eta[velocity_level].grid_data(),
-        u.block_2().grid_data() );
-
-    logroot << "Writing initial radial profiles ..." << std::endl;
-
-    compute_and_write_radial_profiles(
-        T, subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep_initial );
-    compute_and_write_radial_profiles(
-        eta[velocity_level], subdomain_shell_idx, domains[velocity_level], prm.io_parameters, timestep_initial );
 
     ScalarType simulated_time    = ScalarType( 0 );
     ScalarType simulated_time_Ma = ScalarType( 0 );
@@ -413,13 +395,22 @@ Result<> run( const Parameters& prm )
     // xdmf_output.write() call.
     if ( auto* nu_h_view = energy->nu_h_nodal_view() )
     {
-        xdmf_output.add( nu_h_view->grid_data() );
+        xdmf_output->add( nu_h_view->grid_data() );
     }
 
     if ( !prm.io_parameters.no_xdmf )
     {
         logroot << "Writing initial XDMF ..." << std::endl;
-        xdmf_output.write();
+
+        // Write to xdmf
+        write_xdmf(
+            xdmf_output,
+            xdmf_output_pressure,
+            prm,
+            T.grid_data(),
+            u.block_1().grid_data(),
+            stokes.eta_fine().grid_data(),
+            u.block_2().grid_data() );
     }
 
     if ( !prm.io_parameters.no_radial_profiles )
@@ -467,8 +458,8 @@ Result<> run( const Parameters& prm )
             ( *domains[velocity_level] ),
             T_fct,
             boundary_mask_data[velocity_level],
-            prm.boundary_conditions_parameters.temperature_surface,
-            prm.boundary_conditions_parameters.temperature_cmb,
+            prm.boundary_parameters.temperature_min,
+            prm.boundary_parameters.temperature_max,
             prm.mesh_parameters.radius_min,
             prm.mesh_parameters.radius_max,
             true );
@@ -520,15 +511,18 @@ Result<> run( const Parameters& prm )
 
         const bool write_output = ( timestep % prm.io_parameters.output_frequency == 0 );
 
-        // Write to xdmf
-        write_xdmf(
-            xdmf_output,
-            xdmf_output_pressure,
-            prm,
-            T.grid_data(),
-            u.block_1().grid_data(),
-            eta[velocity_level].grid_data(),
-            u.block_2().grid_data() );
+        if ( write_output && !prm.io_parameters.no_xdmf )
+        {
+            // Write to xdmf
+            write_xdmf(
+                xdmf_output,
+                xdmf_output_pressure,
+                prm,
+                T.grid_data(),
+                u.block_1().grid_data(),
+                stokes.eta_fine().grid_data(),
+                u.block_2().grid_data() );
+        }
 
         // Energy-solver-specific diagnostics dump first — refreshes EV
         // diagnostic views (lap_diag_) so the radial-profile pass below sees
@@ -584,8 +578,8 @@ Result<> run( const Parameters& prm )
                 ( *domains[velocity_level] ),
                 T_fct,
                 boundary_mask_data[velocity_level],
-                prm.boundary_conditions_parameters.temperature_surface,
-                prm.boundary_conditions_parameters.temperature_cmb,
+                prm.boundary_parameters.temperature_min,
+                prm.boundary_parameters.temperature_max,
                 prm.mesh_parameters.radius_min,
                 prm.mesh_parameters.radius_max,
                 /*at_surface=*/true );

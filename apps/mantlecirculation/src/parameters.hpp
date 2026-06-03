@@ -669,7 +669,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
            "Space-separated list of length num_mg_levels-1. Example: \"2 2 1 1\". "
            "Empty (default) = classical MG with all levels on MPI_COMM_WORLD." )
         ->group( "Stokes Solver" )
-        ->expected( 0, -1 );
+        ->expected( 0, -1 )
+        ->default_val( parameters.stokes_solver_parameters.viscous_pc_agglom_factors );
 
     /////////////////////
     /// Energy solver ///

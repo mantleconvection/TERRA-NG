@@ -129,7 +129,7 @@ class SUPGSolver : public EnergySolver< ScalarType >
             coords_radii_,
             boundary_mask_,
             velocity_,
-            prm_.physics_parameters.diffusivity,
+            prm_.physics_parameters.thermal_diffusivity,
             ScalarType( 0 ),
             /*treat_boundary=*/true );
 
@@ -139,7 +139,7 @@ class SUPGSolver : public EnergySolver< ScalarType >
             coords_radii_,
             boundary_mask_,
             velocity_,
-            prm_.physics_parameters.diffusivity,
+            prm_.physics_parameters.thermal_diffusivity,
             ScalarType( 0 ),
             /*treat_boundary=*/false );
 
@@ -149,7 +149,7 @@ class SUPGSolver : public EnergySolver< ScalarType >
             coords_radii_,
             boundary_mask_,
             velocity_,
-            prm_.physics_parameters.diffusivity,
+            prm_.physics_parameters.thermal_diffusivity,
             ScalarType( 0 ),
             /*treat_boundary=*/false,
             /*diagonal=*/true );
@@ -193,7 +193,7 @@ class SUPGSolver : public EnergySolver< ScalarType >
         const auto dt           = prm_.time_stepping_parameters.dt_scaling * dt_advection;
 
         util::logroot << "Computing dt (SUPG advection CFL) ..." << std::endl;
-        util::logroot << "    max_vel (cm/a) :             " << max_vel * prm_.phyiscs_parameters.calc_cm_per_year
+        util::logroot << "    max_vel (cm/a) :             " << max_vel * prm_.physics_parameters.calc_cm_per_year
                       << std::endl;
         util::logroot << "    h (m) :                      " << h_ * prm_.mesh_parameters.radius_surface_m << std::endl;
         util::logroot << "=>  dt (= dt_scaling * h/v_max): " << dt * prm_.physics_parameters.calc_time_Ma << " Ma"
@@ -234,9 +234,8 @@ class SUPGSolver : public EnergySolver< ScalarType >
             {
                 auto       g_grid    = g_.grid_data();
                 auto       mask      = boundary_mask_;
-                const auto T_cmb_val = static_cast< ScalarType >( prm_.boundary_conditions_parameters.temperature_cmb );
-                const auto T_top_val =
-                    static_cast< ScalarType >( prm_.boundary_conditions_parameters.temperature_surface );
+                const auto T_cmb_val = static_cast< ScalarType >( prm_.boundary_parameters.temperature_max );
+                const auto T_top_val = static_cast< ScalarType >( prm_.boundary_parameters.temperature_min );
                 Kokkos::parallel_for(
                     "supg_dirichlet_g",
                     grid::shell::local_domain_md_range_policy_nodes( *domain_ ),
@@ -347,7 +346,7 @@ class EVSolver : public EnergySolver< ScalarType >
             coords_radii_,
             boundary_mask_,
             velocity_,
-            prm_.physics_parameters.diffusivity,
+            prm_.physics_parameters.thermal_diffusivity,
             ScalarType( 0 ),
             /*treat_boundary=*/true );
         A_->set_supg_enabled( false );
@@ -358,7 +357,7 @@ class EVSolver : public EnergySolver< ScalarType >
             coords_radii_,
             boundary_mask_,
             velocity_,
-            prm_.physics_parameters.diffusivity,
+            prm_.physics_parameters.thermal_diffusivity,
             ScalarType( 0 ),
             /*treat_boundary=*/false );
         A_neumann_->set_supg_enabled( false );
@@ -369,7 +368,7 @@ class EVSolver : public EnergySolver< ScalarType >
             coords_radii_,
             boundary_mask_,
             velocity_,
-            prm_.physics_parameters.diffusivity,
+            prm_.physics_parameters.thermal_diffusivity,
             ScalarType( 0 ),
             /*treat_boundary=*/false,
             /*diagonal=*/true );
@@ -383,7 +382,7 @@ class EVSolver : public EnergySolver< ScalarType >
         // exchange.
         kappa_wedge_ = grid::Grid5DDataScalar< ScalarType >(
             "ev_kappa_wedge", num_sub, nx_c, nx_c, nr_c, fe::wedge::num_wedges_per_hex_cell );
-        kernels::common::set_constant( kappa_wedge_, prm_.physics_parameters.diffusivity );
+        kernels::common::set_constant( kappa_wedge_, prm_.physics_parameters.thermal_diffusivity );
         A_kappa_ = std::make_unique< EVDiffOp >( *domain_, coords_shell_, coords_radii_, kappa_wedge_ );
 
         // Global lumped mass M_lumped = M · 1, used to invert the global
@@ -755,10 +754,9 @@ class EVSolver : public EnergySolver< ScalarType >
             linalg::invert_entries( diag_ );
         }
 
-        const ScalarType gamma =
-            prm_.physics_parameters.constant_internal_heating ?
-                static_cast< ScalarType >( prm_.physics_parameters.constant_internal_heating_value ) :
-                ScalarType( 0 );
+        const ScalarType gamma = prm_.physics_parameters.internal_heating ?
+                                     static_cast< ScalarType >( prm_.physics_parameters.internal_heating_rate ) :
+                                     ScalarType( 0 );
 
         for ( int i = 0; i < prm_.time_stepping_parameters.energy_substeps; ++i )
         {
@@ -853,9 +851,8 @@ class EVSolver : public EnergySolver< ScalarType >
             {
                 auto       g_grid    = g_.grid_data();
                 auto       mask      = boundary_mask_;
-                const auto T_cmb_val = static_cast< ScalarType >( prm_.boundary_conditions_parameters.temperature_cmb );
-                const auto T_top_val =
-                    static_cast< ScalarType >( prm_.boundary_conditions_parameters.temperature_surface );
+                const auto T_cmb_val = static_cast< ScalarType >( prm_.boundary_parameters.temperature_max );
+                const auto T_top_val = static_cast< ScalarType >( prm_.boundary_parameters.temperature_min );
                 Kokkos::parallel_for(
                     "ev_dirichlet_g",
                     grid::shell::local_domain_md_range_policy_nodes( *domain_ ),
@@ -988,13 +985,13 @@ class FCTSolver : public EnergySolver< ScalarType >
             fv_cell_centers_.grid_data(),
             coords_shell_,
             coords_radii_,
-            prm_.physics_parameters.diffusivity );
+            prm_.physics_parameters.thermal_diffusivity );
         const auto dt = prm_.time_stepping_parameters.dt_scaling * dt_stable;
 
         util::logroot << "Computing dt (FCT stable) ..." << std::endl;
         util::logroot << "    dt_stable:                     " << dt_stable * prm_.physics_parameters.calc_time_Ma
                       << " Ma" << std::endl;
-        util::logroot << "=>  dt (= dt_stable * dt_scaling): " << dt * prm_physics_parameters.calc_time_Ma << " Ma"
+        util::logroot << "=>  dt (= dt_stable * dt_scaling): " << dt * prm_.physics_parameters.calc_time_Ma << " Ma"
                       << std::endl;
         return dt;
     }
@@ -1013,9 +1010,9 @@ class FCTSolver : public EnergySolver< ScalarType >
 
                 {
                     util::Timer timer_fct_source_step( "fct_explicit_step_updating_source_term" );
-                    if ( prm_.physics_parameters.constant_internal_heating )
+                    if ( prm_.physics_parameters.internal_heating )
                     {
-                        linalg::assign( T_source_, prm_.physics_parameters.constant_internal_heating_value );
+                        linalg::assign( T_source_, prm_.physics_parameters.internal_heating_rate );
                     }
                     timer_fct_source_step.stop();
 
@@ -1029,7 +1026,7 @@ class FCTSolver : public EnergySolver< ScalarType >
                         coords_radii_,
                         dt,
                         fv_fct_bufs_,
-                        prm_.physics_parameters.diffusivity,
+                        prm_.physics_parameters.thermal_diffusivity,
                         T_source_.grid_data(),
                         /*subtract_divergence=*/true,
                         boundary_mask_,
@@ -1051,8 +1048,8 @@ class FCTSolver : public EnergySolver< ScalarType >
             // Enforce Dirichlet BCs on the Q1 temperature.
             auto       T_grid    = T_.grid_data();
             auto       mask      = boundary_mask_;
-            const auto T_cmb_val = static_cast< ScalarType >( prm_.boundary_conditions_parameters.temperature_cmb );
-            const auto T_top_val = static_cast< ScalarType >( prm_.boundary_conditions_parameters.temperature_surface );
+            const auto T_cmb_val = static_cast< ScalarType >( prm_.boundary_parameters.temperature_min );
+            const auto T_top_val = static_cast< ScalarType >( prm_.boundary_parameters.temperature_max );
             Kokkos::parallel_for(
                 "enforce_T_dirichlet_bcs",
                 grid::shell::local_domain_md_range_policy_nodes( *domain_ ),
