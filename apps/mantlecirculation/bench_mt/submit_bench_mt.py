@@ -1,97 +1,151 @@
 #!/usr/bin/env python3
 """
-Strong-scale benchmark driver for the mantle-circulation app on JUWELS Booster.
+Strong-scale benchmark driver for the *operator* microbenchmark on LUMI-G.
 
-For each (MT-level, n_gpus) cell in the sweep:
+Runs the `benchmark_operators` app (matvec throughput for the production
+EpsDivDivKerngen operator) at an increasing MT model size. For each
+(MT-level, n_gpus) cell in the sweep:
   - emit a per-cell sbatch script under bench_mt/jobs/
   - submit via sbatch
-  - the resulting outdir is bench_mt/outputs/MT<...>_g<n>/
+  - the app writes its CSV / timer-tree under bench_mt/outputs/MT<...>_g<n>/{csv,tts}/
 
-MT-level convention: MT(N) where N = 2 * number_of_radial_cells = 2^mesh_max
-(implied by --radial-extra-levels=-1, so radial cells = 2^(mesh_max - 1)).
+MT-level convention: MT(N) where N = 2^level is the lateral (and, for this app,
+also the radial) resolution. benchmark_operators builds the domain with
+`create_uniform(level, level, ..., sdr, sdr)` so lateral and radial use the SAME
+refinement level and the SAME subdomain refinement -- there is no radial-extra
+offset like the full mc app has.
 
 Usage:
     python3 submit_bench_mt.py            # submit the default sweep
     python3 submit_bench_mt.py --dry-run  # just print what would be submitted
+    python3 submit_bench_mt.py --levels 8 9    # only those mesh levels
 """
 
 from __future__ import annotations
 
 import argparse
-import math
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-BENCH_DIR     = Path(__file__).resolve().parent
-APP_DIR       = BENCH_DIR.parent
-BINARY        = Path("/p/home/jusers/boehm2/juwels/terraneo-build/apps/mantlecirculation/mantlecirculation")
-BENCH_CONFIG  = BENCH_DIR / "config_bench_A3.toml"
-JOB_DIR       = BENCH_DIR / "jobs"
-OUTPUT_ROOT   = BENCH_DIR / "outputs"
+BENCH_DIR   = Path(__file__).resolve().parent
+APP_DIR     = BENCH_DIR.parent
+# benchmark_operators binary (LUMI PFS build). Override with $BENCH_OPERATORS_BIN.
+BINARY      = Path(os.environ.get(
+    "BENCH_OPERATORS_BIN",
+    "/pfs/lustrep3/users/bohmfabi/terraneo-build/apps/benchmarks/performance/benchmark_operators"))
+JOB_DIR     = BENCH_DIR / "jobs"
+OUTPUT_ROOT = BENCH_DIR / "outputs"
 
-# (mesh_max, list of GPU counts to test). mesh_max -> MT label = 2^mesh_max.
+# (level, list of GPU counts to test). level -> MT label = 2^level.
 DEFAULT_SWEEP: list[tuple[int, list[int]]] = [
-    # (mesh_max, [n_gpus])
-    (5,  [1, 2, 4, 8]),                  # MT32    (rad=16,  lat=32)
-    (6,  [1, 2, 4, 8, 16]),              # MT64    (rad=32,  lat=64)
-    (7,  [4, 8, 16, 32]),                # MT128   (rad=64,  lat=128)
-    (8,  [16, 32, 64, 128, 256]),        # MT256   (rad=128, lat=256)
-    (9,  [64, 128, 256, 512]),           # MT512   (rad=256, lat=512)
-    (10, [256, 512, 1024, 2048]),        # MT1024  (rad=512, lat=1024)
+    # (level, [n_gpus])
+    (5,  [1, 2, 4, 8]),                  # MT32    (lat=rad=32)
+    (6,  [1, 2, 4, 8, 16]),              # MT64    (lat=rad=64)
+    (7,  [4, 8, 16, 32]),                # MT128   (lat=rad=128)
+    (8,  [16, 32, 64, 128, 256]),        # MT256   (lat=rad=256)
+    (9,  [64, 128, 256, 512]),           # MT512   (lat=rad=512)
+    (10, [256, 512, 1024, 2048]),        # MT1024  (lat=rad=1024)
 ]
 
-GPUS_PER_NODE  = 4
-ACCOUNT        = "walberlamovinggeo"
+# Measured owned-DOF counts per level (from the strong sweep CSVs). Used to map a
+# target dofs/GCD to a base GPU count and to print the achieved fill. level 11
+# extrapolated at x7.99.
+DOFS_PER_LEVEL = {
+    5: 1013958, 6: 7987590, 7: 63406854, 8: 505284102,
+    9: 4034399238, 10: 32243718150, 11: 257627107000,
+}
 
-# JUWELS Booster: --partition=booster caps at 384 nodes per job; >384 needs --partition=largebooster
-# (same hardware, different policy). The 2048-GPU MT1024 cell is 512 nodes -> largebooster.
-BOOSTER_NODE_CAP = 384
+# --- Weak-scaling diagonals (constant work per GCD) ---
+# Hold dofs/GCD (and subdomains/GCD) fixed by stepping the model up one level
+# (x8 dofs) and the GCD count up x8 together. Anchored at level 7: the fill is
+# dofs(7)/base_gpus, and choose_sdr then keeps level - sdr and subdomains/GCD
+# constant along the whole diagonal -> n_gpus = base_gpus * 8^(level-7).
+#   base_gpus 1 -> ~63 M/GCD, 2 -> ~32 M, 4 -> ~16 M, 8 -> ~8 M, ...
+WEAK_BASE_LEVEL    = 7
+WEAK_MAX_LEVEL     = 10                  # 10 -> up to 512 GCDs at 63 M/GCD
+WEAK_DEFAULT_FILLS = [63, 32, 16, 8]     # target M-dofs/GCD diagonals to emit
+WEAK_MAX_GPUS      = 2048                # skip points beyond this (256 nodes)
 
-# Walltime: MT32..MT256 fit comfortably in 15 min; MT512/MT1024 cells at low
-# GPU counts can take >15 min (observed: MT512_g64, MT1024_g256, MT1024_g512
-# all timed out at 15 min on the first sweep), so give the two largest models
-# a 30-min budget.
-def time_limit_for(mesh_max: int) -> str:
-    return "00:30:00" if mesh_max >= 9 else "00:15:00"
+def weak_base_gpus(fill_mdofs: int, base_level: int = WEAK_BASE_LEVEL) -> int:
+    """GCD count at the anchor level giving ~fill_mdofs dofs/GCD."""
+    return max(1, round(DOFS_PER_LEVEL[base_level] / (fill_mdofs * 1e6)))
 
-# Total subdomain count = 10 * 4^lat_sdr * 2^rad_sdr
-# (lat sdr subdivides 2 axes per level -> x4; rad sdr subdivides 1 axis -> x2).
-# We restrict rad_sdr in {max(0, lat_sdr-1), lat_sdr} so the radial direction
-# is never refined more than the lateral. Allowing rad_sdr=lat_sdr (in addition
-# to lat_sdr-1) gives a 2x granularity step alongside the 8x lat-step, which
-# avoids over-decomposing just to land on a rank-balanced count.
-def subdomains_for(lat_sdr: int, rad_sdr: int) -> int:
-    return 10 * (4 ** lat_sdr) * (2 ** rad_sdr)
+def weak_cells(fills: list[int], base_level: int, max_level: int,
+               max_gpus: int) -> list[tuple[int, int]]:
+    cells: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for fill in fills:
+        m = weak_base_gpus(fill, base_level)
+        for L in range(base_level, max_level + 1):
+            n = m * 8 ** (L - base_level)
+            if n > max_gpus:
+                break
+            if (L, n) not in seen:
+                seen.add((L, n))
+                cells.append((L, n))
+    return sorted(cells)
 
-# Pick the (lat_sdr, rad_sdr) with smallest total subdomain count s.t.
-# subdomains >= n_gpus and divides n_gpus evenly.
-def choose_lat_rad(n_gpus: int) -> tuple[int, int]:
-    candidates = []
-    for lat in range(0, 5):
-        for rad in {max(0, lat - 1), lat}:
-            candidates.append((subdomains_for(lat, rad), lat, rad))
-    candidates.sort()
-    for subs, lat, rad in candidates:
+# --- Radial-only weak-scaling diagonal ---
+# Fix the lateral mesh; grow ONLY the radial direction. Each step k adds one radial
+# diamond level (rad_level = lat_level + k -> x2 dofs) AND one radial subdomain
+# level (rad_sdr = base + k -> x2 subdomains), with GPUs x2. dofs/GCD and
+# subdomains/GCD stay fixed, isolating radial scaling at 2x (vs 8x) granularity.
+# Anchor (lat 8, lat_sdr 1, base 8 GCD) gives ~63 M dofs/GCD, 10 subdomains/GCD.
+RADIAL_LAT_LEVEL   = 8
+RADIAL_LAT_SDR     = 1
+RADIAL_BASE_RADSDR = 1
+RADIAL_BASE_GPUS   = 8
+
+def radial_steps(max_gpus: int) -> list[int]:
+    steps, k = [], 0
+    while RADIAL_BASE_GPUS * 2 ** k <= max_gpus:
+        steps.append(k)
+        k += 1
+    return steps
+
+# Matvec repetitions per timing (matches the remeasure_history / 2gcd configs).
+DEFAULT_EXECUTIONS = 5
+# Untimed warmup matvecs before the timed region (amortizes launch/alloc overhead).
+DEFAULT_WARMUP = 5
+
+# LUMI-G: each node has 8 GCDs (4 MI250X * 2). standard-g allocates GPUs; we
+# bind one rank per GCD. Account / partition can be overridden via env.
+GPUS_PER_NODE = 8
+ACCOUNT       = os.environ.get("SLURM_ACCOUNT", "project_465002367")
+PARTITION     = "standard-g"
+
+# NUMA-aware CPU cores, one per GCD, in the canonical LUMI GCD order. For a
+# partial node we take the first `tasks_per_node` entries (matches the proven
+# 2-GCD config that used map_cpu:49,57).
+CPU_BIND_ORDER = [49, 57, 17, 25, 1, 9, 33, 41]
+
+# Walltime: the operator microbenchmark is a handful of matvecs, so it is fast;
+# give the two largest models a little more for domain setup / allocation.
+def time_limit_for(level: int) -> str:
+    return "00:30:00" if level >= 9 else "00:15:00"
+
+# benchmark_operators applies one subdomain-refinement level to BOTH axes:
+# total subdomains = 10 * 4^sdr (lateral, x4/level) * 2^sdr (radial, x2/level)
+#                  = 10 * 8^sdr.
+def subdomains_for(sdr: int) -> int:
+    return 10 * (8 ** sdr)
+
+# Pick the smallest sdr s.t. subdomains >= n_gpus and divides n_gpus evenly
+# (balanced rank distribution, least over-decomposition).
+def choose_sdr(n_gpus: int) -> int:
+    for sdr in range(0, 7):
+        subs = subdomains_for(sdr)
         if subs >= n_gpus and subs % n_gpus == 0:
-            return lat, rad
-    raise ValueError(f"no balanced (lat_sdr, rad_sdr) found for n_gpus={n_gpus}")
-
-# Validate per the runtime guards in parameters.hpp:
-#   mesh_min + radial_extra_levels >= 0          -> mesh_min >= 1
-#   mesh_min >= lat_sdr
-#   mesh_min + radial_extra_levels >= rad_sdr    -> mesh_min >= rad_sdr + 1
-# (the last with radial_extra_levels = -1). mesh_min >= 2 keeps a non-trivial
-# MG hierarchy.
-def choose_mesh_min(lat_sdr: int, rad_sdr: int) -> int:
-    return max(2, lat_sdr, rad_sdr + 1)
+            return sdr
+    raise ValueError(f"no balanced subdomain refinement found for n_gpus={n_gpus}")
 
 def gpu_to_node_layout(n_gpus: int) -> tuple[int, int]:
     """Map a target n_gpus to (#nodes, #ntasks_per_node).
 
-    Up to 4 GPUs we pack onto a single node; beyond that we use full nodes
-    (4 GPUs each).
+    Up to 8 GCDs we pack onto a single node; beyond that we use full nodes
+    (8 GCDs each).
     """
     if n_gpus <= GPUS_PER_NODE:
         return (1, n_gpus)
@@ -99,66 +153,102 @@ def gpu_to_node_layout(n_gpus: int) -> tuple[int, int]:
         raise ValueError(f"n_gpus={n_gpus} is not a multiple of {GPUS_PER_NODE} for >1 nodes")
     return (n_gpus // GPUS_PER_NODE, GPUS_PER_NODE)
 
-def render_job_script(mesh_max: int, n_gpus: int) -> tuple[Path, Path, dict]:
-    mt_label         = 2 ** mesh_max
-    cell_tag         = f"MT{mt_label}_g{n_gpus}"
-    job_path         = JOB_DIR / f"bench_{cell_tag}.sh"
-    out_path         = OUTPUT_ROOT / cell_tag
-    nodes, tpn   = gpu_to_node_layout(n_gpus)
-    lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
-    mesh_min     = choose_mesh_min(lat_sdr, rad_sdr)
-    radial_extra = -1
-
-    info = dict(
-        cell_tag=cell_tag, mt_label=mt_label,
-        mesh_max=mesh_max, mesh_min=mesh_min,
-        lat_sdr=lat_sdr, rad_sdr=rad_sdr, radial_extra=radial_extra,
-        n_gpus=n_gpus, nodes=nodes, tasks_per_node=tpn,
-    )
-
-    cmdline_args = (
-        f"--config {BENCH_CONFIG} "
-        f"--outdir {out_path} "
-        f"--outdir-overwrite "
-        f"--refinement-level-mesh-min {mesh_min} "
-        f"--refinement-level-mesh-max {mesh_max} "
-        f"--lat-sdr {lat_sdr} "
-        f"--rad-sdr {rad_sdr} "
-        f"--radial-extra-levels {radial_extra} "
-        f"--no-xdmf --no-radial-profiles"
-    )
-
-    partition  = "largebooster" if nodes > BOOSTER_NODE_CAP else "booster"
-    time_limit = time_limit_for(mesh_max)
-
+def write_lumi_job(cell_tag: str, out_path: Path, nodes: int, tpn: int,
+                   time_limit: str, bench_args: str, echo_line: str) -> Path:
+    """Write the shared LUMI-G sbatch script for one benchmark_operators cell."""
+    job_path = JOB_DIR / f"bench_{cell_tag}.sh"
+    cpu_bind = "map_cpu:" + ",".join(str(c) for c in CPU_BIND_ORDER[:tpn])
     script = f"""#!/bin/bash -l
 #SBATCH --job-name=bench_{cell_tag}
 #SBATCH --output=bench_{cell_tag}.o%j
 #SBATCH --error=bench_{cell_tag}.e%j
 #SBATCH -D {JOB_DIR}
-#SBATCH --partition={partition}
+#SBATCH --partition={PARTITION}
 #SBATCH --account={ACCOUNT}
 #SBATCH --nodes={nodes}
 #SBATCH --ntasks-per-node={tpn}
-#SBATCH --cpus-per-task=12
-#SBATCH --gres=gpu:{tpn}
+#SBATCH --gpus-per-node={tpn}
 #SBATCH --time={time_limit}
 
-echo "Cell: {cell_tag}  mesh_max={mesh_max}  mesh_min={mesh_min}  lat_sdr={lat_sdr}  rad_sdr={rad_sdr}  radial_extra={radial_extra}  n_gpus={n_gpus}  nodes={nodes}x{tpn}  partition={partition}"
+echo "{echo_line}"
 
-module load Stages/2025
-module load CUDA/12
-module load NVHPC/25.5-CUDA-12
-module load OpenMPI/4.1.8
+export MPICH_GPU_SUPPORT_ENABLED=1
+export OMP_NUM_THREADS=1
+ulimit -c 0
 
-export OMPI_MCA_pml=ucx
-export UCX_TLS=rc,sm,cuda_copy,cuda_ipc
+# Per-GCD GPU binding wrapper (maps SLURM_LOCALID -> ROCR_VISIBLE_DEVICES).
+SELECT_GPU=${{SLURM_SUBMIT_DIR}}/select_gpu_${{SLURM_JOB_ID}}.sh
+cat > ${{SELECT_GPU}} << 'INNER'
+#!/bin/bash
+export ROCR_VISIBLE_DEVICES=$SLURM_LOCALID
+exec "$@"
+INNER
+chmod +x ${{SELECT_GPU}}
 
-srun --gpu-bind=closest {BINARY} {cmdline_args}
+# benchmark_operators writes csv/ and tts/ relative to CWD.
+mkdir -p {out_path}/csv {out_path}/tts
+cd {out_path}
+
+srun --cpu-bind={cpu_bind} ${{SELECT_GPU}} {BINARY} {bench_args}
+
+rm -f ${{SELECT_GPU}}
 """
-
     job_path.write_text(script)
     job_path.chmod(0o755)
+    return job_path
+
+def render_job_script(level: int, n_gpus: int, executions: int, warmup: int) -> tuple[Path, Path, dict]:
+    mt_label   = 2 ** level
+    cell_tag   = f"MT{mt_label}_g{n_gpus}"
+    out_path   = OUTPUT_ROOT / cell_tag
+    nodes, tpn = gpu_to_node_layout(n_gpus)
+    sdr        = choose_sdr(n_gpus)
+
+    info = dict(
+        cell_tag=cell_tag, mt_label=mt_label,
+        level=level, sdr=sdr, executions=executions,
+        n_gpus=n_gpus, nodes=nodes, tasks_per_node=tpn,
+    )
+    bench_args = (
+        f"--min-level {level} --max-level {level} "
+        f"--refinement-level-subdomains {sdr} --executions {executions} --warmup {warmup}"
+    )
+    echo_line = (f"Cell: {cell_tag}  level={level}  sdr={sdr}  subdomains={subdomains_for(sdr)}  "
+                 f"executions={executions}  n_gpus={n_gpus}  nodes={nodes}x{tpn}  partition={PARTITION}")
+    job_path = write_lumi_job(cell_tag, out_path, nodes, tpn,
+                              time_limit_for(level), bench_args, echo_line)
+    return job_path, out_path, info
+
+def render_radial_job_script(k: int, executions: int, warmup: int) -> tuple[Path, Path, dict]:
+    """One step of the radial-only weak diagonal: lateral fixed, radial level and
+    radial subdomains grow by k, GPUs by 2**k. dofs and GCDs both x2 per step."""
+    lat_level  = RADIAL_LAT_LEVEL
+    lat_sdr    = RADIAL_LAT_SDR
+    rad_level  = lat_level + k
+    rad_sdr    = RADIAL_BASE_RADSDR + k
+    n_gpus     = RADIAL_BASE_GPUS * 2 ** k
+    nodes, tpn = gpu_to_node_layout(n_gpus)
+    subdomains = 10 * 4 ** lat_sdr * 2 ** rad_sdr
+    cell_tag   = f"RAD_l{lat_level}r{rad_level}_g{n_gpus}"
+    out_path   = OUTPUT_ROOT / cell_tag
+
+    info = dict(
+        cell_tag=cell_tag, lat_level=lat_level, rad_level=rad_level,
+        lat_sdr=lat_sdr, rad_sdr=rad_sdr, radial_extra=k, executions=executions,
+        n_gpus=n_gpus, nodes=nodes, tasks_per_node=tpn,
+        subdom_per_gcd=subdomains // n_gpus,
+    )
+    bench_args = (
+        f"--min-level {lat_level} --max-level {lat_level} "
+        f"--radial-extra-levels {k} --lat-sdr {lat_sdr} --rad-sdr {rad_sdr} "
+        f"--executions {executions} --warmup {warmup}"
+    )
+    echo_line = (f"Cell: {cell_tag}  lat_level={lat_level}  rad_level={rad_level}  "
+                 f"lat_sdr={lat_sdr}  rad_sdr={rad_sdr}  subdomains={subdomains}  "
+                 f"n_gpus={n_gpus}  nodes={nodes}x{tpn}  partition={PARTITION}")
+    # radial mesh can be deep; give the larger radial levels the longer budget.
+    job_path = write_lumi_job(cell_tag, out_path, nodes, tpn,
+                              time_limit_for(rad_level), bench_args, echo_line)
     return job_path, out_path, info
 
 def main(argv):
@@ -166,26 +256,76 @@ def main(argv):
     p.add_argument("--dry-run", action="store_true",
                    help="only emit the job scripts; don't sbatch")
     p.add_argument("--levels", type=int, nargs="+", default=None,
-                   help="override which mesh_max levels to submit (default: full sweep)")
+                   help="override which mesh levels to submit (default: full sweep)")
+    p.add_argument("--executions", type=int, default=DEFAULT_EXECUTIONS,
+                   help=f"matvec repetitions per timing (default: {DEFAULT_EXECUTIONS})")
+    p.add_argument("--warmup", type=int, default=DEFAULT_WARMUP,
+                   help=f"untimed warmup matvecs before timing (default: {DEFAULT_WARMUP})")
+    p.add_argument("--weak", action="store_true",
+                   help="weak-scaling diagonals at constant dofs/GCD "
+                        "(n_gpus = base * 8^(level-7)) instead of the strong grid")
+    p.add_argument("--weak-fills", type=int, nargs="+", default=WEAK_DEFAULT_FILLS,
+                   help=f"target dofs/GCD per diagonal, in millions "
+                        f"(default: {WEAK_DEFAULT_FILLS})")
+    p.add_argument("--weak-max-level", type=int, default=WEAK_MAX_LEVEL,
+                   help=f"top level for --weak (default: {WEAK_MAX_LEVEL}; "
+                        f"each +1 level is x8 GCDs)")
+    p.add_argument("--weak-max-gpus", type=int, default=WEAK_MAX_GPUS,
+                   help=f"skip --weak / --weak-radial points above this many GCDs "
+                        f"(default: {WEAK_MAX_GPUS} = 256 nodes)")
+    p.add_argument("--weak-radial", action="store_true",
+                   help="radial-only weak-scaling diagonal: lateral mesh fixed, radial "
+                        "level+subdomains and GPUs x2 per step (dofs x2/step, constant dofs/GCD)")
     args = p.parse_args(argv)
 
     JOB_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
-    cells = []
-    for mesh_max, gpu_list in DEFAULT_SWEEP:
-        if args.levels is not None and mesh_max not in args.levels:
-            continue
-        for n_gpus in gpu_list:
-            cells.append((mesh_max, n_gpus))
-
-    print(f"Sweep covers {len(cells)} cells:")
-    for (mesh_max, n_gpus) in cells:
-        print(f"  mesh_max={mesh_max}  MT{2**mesh_max}  n_gpus={n_gpus}")
+    # Build a render list of (kind, item): 'iso' -> (level, n_gpus); 'radial' -> step k.
+    if args.weak_radial:
+        steps = radial_steps(args.weak_max_gpus)
+        render_list = [("radial", k) for k in steps]
+        print(f"radial-only weak-scaling diagonal (lateral fixed at level {RADIAL_LAT_LEVEL}, "
+              f"lat_sdr {RADIAL_LAT_SDR}): {len(steps)} cells")
+        dpg0 = DOFS_PER_LEVEL.get(RADIAL_LAT_LEVEL)
+        for k in steps:
+            n = RADIAL_BASE_GPUS * 2 ** k
+            rl, rs = RADIAL_LAT_LEVEL + k, RADIAL_BASE_RADSDR + k
+            nodes, _ = gpu_to_node_layout(n)
+            subdom = 10 * 4 ** RADIAL_LAT_SDR * 2 ** rs
+            dpg_s = f"  dofs/GCD={dpg0 * 2**k / n / 1e6:5.1f}M" if dpg0 else ""
+            print(f"  k={k}  rad_level={rl:2}  rad_sdr={rs}  n_gpus={n:5}  nodes={nodes:4}"
+                  f"  subdom/GCD={subdom // n}{dpg_s}")
+    else:
+        if args.weak:
+            cells = weak_cells(args.weak_fills, WEAK_BASE_LEVEL,
+                               args.weak_max_level, args.weak_max_gpus)
+        else:
+            cells = [(level, n_gpus)
+                     for level, gpu_list in DEFAULT_SWEEP
+                     for n_gpus in gpu_list]
+        if args.levels is not None:
+            cells = [(level, n_gpus) for (level, n_gpus) in cells if level in args.levels]
+        render_list = [("iso", c) for c in cells]
+        if args.weak:
+            print(f"weak-scaling diagonals (fills {args.weak_fills} M-dofs/GCD): {len(cells)} cells")
+        else:
+            print(f"strong-scaling grid: {len(cells)} cells")
+        for (level, n_gpus) in cells:
+            sdr = choose_sdr(n_gpus)
+            nodes, _ = gpu_to_node_layout(n_gpus)
+            dpg = DOFS_PER_LEVEL.get(level)
+            dpg_s = f"  dofs/GCD={dpg / n_gpus / 1e6:5.1f}M" if dpg else ""
+            print(f"  level={level:2}  MT{2**level:<5}  n_gpus={n_gpus:5}  nodes={nodes:4}"
+                  f"  sdr={sdr}  subdom/GCD={10 * 8**sdr // n_gpus}{dpg_s}")
 
     submitted = []
-    for (mesh_max, n_gpus) in cells:
-        job_path, out_path, info = render_job_script(mesh_max, n_gpus)
+    for kind, item in render_list:
+        if kind == "radial":
+            job_path, out_path, info = render_radial_job_script(item, args.executions, args.warmup)
+        else:
+            level, n_gpus = item
+            job_path, out_path, info = render_job_script(level, n_gpus, args.executions, args.warmup)
         if args.dry_run:
             print(f"  [dry-run] would submit: {job_path}")
         else:
@@ -199,17 +339,22 @@ def main(argv):
 
     if submitted and not args.dry_run:
         # Persist a manifest so collect_bench_mt.py can map cells -> job ids.
-        manifest = JOB_DIR / "manifest.txt"
+        # One manifest per mode so the three sweeps don't clobber each other.
+        if args.weak_radial:
+            manifest = JOB_DIR / "manifest_radial.txt"
+            header = ("# cell_tag\tjob_id\tlat_level\trad_level\tlat_sdr\trad_sdr"
+                      "\texecutions\tn_gpus\tnodes\ttasks_per_node\n")
+            fields = ["lat_level", "rad_level", "lat_sdr", "rad_sdr",
+                      "executions", "n_gpus", "nodes", "tasks_per_node"]
+        else:
+            manifest = JOB_DIR / ("manifest_weak.txt" if args.weak else "manifest.txt")
+            header = "# cell_tag\tjob_id\tlevel\tsdr\texecutions\tn_gpus\tnodes\ttasks_per_node\n"
+            fields = ["level", "sdr", "executions", "n_gpus", "nodes", "tasks_per_node"]
         with open(manifest, "w") as f:
-            f.write("# cell_tag\tjob_id\tmesh_max\tlat_sdr\trad_sdr\tmesh_min\tradial_extra\tn_gpus\tnodes\ttasks_per_node\n")
+            f.write(header)
             for info, jobid in submitted:
-                f.write("\t".join([
-                    info["cell_tag"], jobid,
-                    str(info["mesh_max"]),
-                    str(info["lat_sdr"]), str(info["rad_sdr"]),
-                    str(info["mesh_min"]), str(info["radial_extra"]),
-                    str(info["n_gpus"]), str(info["nodes"]), str(info["tasks_per_node"]),
-                ]) + "\n")
+                f.write("\t".join([info["cell_tag"], jobid] +
+                                  [str(info[k]) for k in fields]) + "\n")
         print(f"\nWrote manifest: {manifest}")
 
 if __name__ == "__main__":
