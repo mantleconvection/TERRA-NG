@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import subprocess
 import sys
@@ -87,23 +88,40 @@ def weak_cells(fills: list[int], base_level: int, max_level: int,
                 cells.append((L, n))
     return sorted(cells)
 
-# --- Radial-only weak-scaling diagonal ---
+# --- Radial-only weak-scaling diagonals ---
 # Fix the lateral mesh; grow ONLY the radial direction. Each step k adds one radial
 # diamond level (rad_level = lat_level + k -> x2 dofs) AND one radial subdomain
-# level (rad_sdr = base + k -> x2 subdomains), with GPUs x2. dofs/GCD and
-# subdomains/GCD stay fixed, isolating radial scaling at 2x (vs 8x) granularity.
-# Anchor (lat 8, lat_sdr 1, base 8 GCD) gives ~63 M dofs/GCD, 10 subdomains/GCD.
-RADIAL_LAT_LEVEL   = 8
-RADIAL_LAT_SDR     = 1
-RADIAL_BASE_RADSDR = 1
-RADIAL_BASE_GPUS   = 8
+# level (rad_sdr += 1 -> x2 subdomains), with GPUs x2. dofs/GCD and subdomains/GCD
+# stay fixed, isolating radial scaling at 2x (vs 8x) granularity.
+#
+# The fill (dofs/GCD) is set by the base GCD count at the anchor (rad_level =
+# lat_level): dofs(lat 8 isotropic)/base_gpus. base_gpus is snapped to a power of
+# two and base_rad_sdr chosen so subdom/GCD = 10 is held across all fills
+# (base_gpus = 4^lat_sdr * 2^rad_sdr). With lat 8 / lat_sdr 1:
+#   base 8 -> 63 M/GCD, 16 -> 32 M, 32 -> 16 M, 64 -> 8 M, ...
+RADIAL_LAT_LEVEL     = 8
+RADIAL_LAT_SDR       = 1
+RADIAL_DEFAULT_FILLS = [63, 32, 16, 8]    # target M-dofs/GCD radial diagonals
 
-def radial_steps(max_gpus: int) -> list[int]:
-    steps, k = [], 0
-    while RADIAL_BASE_GPUS * 2 ** k <= max_gpus:
-        steps.append(k)
-        k += 1
-    return steps
+def radial_base(fill_mdofs: int) -> tuple[int, int]:
+    """(base_gpus, base_rad_sdr) at the anchor for a target dofs/GCD."""
+    target       = DOFS_PER_LEVEL[RADIAL_LAT_LEVEL] / (fill_mdofs * 1e6)
+    base_gpus    = 1 << max(0, round(math.log2(target)))
+    base_rad_sdr = (base_gpus.bit_length() - 1) - 2 * RADIAL_LAT_SDR
+    return base_gpus, max(0, base_rad_sdr)
+
+def radial_cells(fills: list[int], max_gpus: int) -> list[dict]:
+    cells: list[dict] = []
+    for fill in fills:
+        base_gpus, base_rad_sdr = radial_base(fill)
+        k = 0
+        while base_gpus * 2 ** k <= max_gpus:
+            cells.append(dict(
+                lat_level=RADIAL_LAT_LEVEL, lat_sdr=RADIAL_LAT_SDR,
+                rad_level=RADIAL_LAT_LEVEL + k, rad_sdr=base_rad_sdr + k,
+                radial_extra=k, n_gpus=base_gpus * 2 ** k, fill=fill))
+            k += 1
+    return cells
 
 # Matvec repetitions per timing (matches the remeasure_history / 2gcd configs).
 DEFAULT_EXECUTIONS = 5
@@ -219,14 +237,15 @@ def render_job_script(level: int, n_gpus: int, executions: int, warmup: int) -> 
                               time_limit_for(level), bench_args, echo_line)
     return job_path, out_path, info
 
-def render_radial_job_script(k: int, executions: int, warmup: int) -> tuple[Path, Path, dict]:
-    """One step of the radial-only weak diagonal: lateral fixed, radial level and
+def render_radial_job_script(cell: dict, executions: int, warmup: int) -> tuple[Path, Path, dict]:
+    """One step of a radial-only weak diagonal: lateral fixed, radial level and
     radial subdomains grow by k, GPUs by 2**k. dofs and GCDs both x2 per step."""
-    lat_level  = RADIAL_LAT_LEVEL
-    lat_sdr    = RADIAL_LAT_SDR
-    rad_level  = lat_level + k
-    rad_sdr    = RADIAL_BASE_RADSDR + k
-    n_gpus     = RADIAL_BASE_GPUS * 2 ** k
+    lat_level  = cell["lat_level"]
+    lat_sdr    = cell["lat_sdr"]
+    rad_level  = cell["rad_level"]
+    rad_sdr    = cell["rad_sdr"]
+    k          = cell["radial_extra"]
+    n_gpus     = cell["n_gpus"]
     nodes, tpn = gpu_to_node_layout(n_gpus)
     subdomains = 10 * 4 ** lat_sdr * 2 ** rad_sdr
     cell_tag   = f"RAD_l{lat_level}r{rad_level}_g{n_gpus}"
@@ -274,28 +293,30 @@ def main(argv):
                    help=f"skip --weak / --weak-radial points above this many GCDs "
                         f"(default: {WEAK_MAX_GPUS} = 256 nodes)")
     p.add_argument("--weak-radial", action="store_true",
-                   help="radial-only weak-scaling diagonal: lateral mesh fixed, radial "
+                   help="radial-only weak-scaling diagonals: lateral mesh fixed, radial "
                         "level+subdomains and GPUs x2 per step (dofs x2/step, constant dofs/GCD)")
+    p.add_argument("--weak-radial-fills", type=int, nargs="+", default=RADIAL_DEFAULT_FILLS,
+                   help=f"target dofs/GCD per radial diagonal, in millions "
+                        f"(default: {RADIAL_DEFAULT_FILLS})")
     args = p.parse_args(argv)
 
     JOB_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
-    # Build a render list of (kind, item): 'iso' -> (level, n_gpus); 'radial' -> step k.
+    # Build a render list of (kind, item): 'iso' -> (level, n_gpus); 'radial' -> cell dict.
     if args.weak_radial:
-        steps = radial_steps(args.weak_max_gpus)
-        render_list = [("radial", k) for k in steps]
-        print(f"radial-only weak-scaling diagonal (lateral fixed at level {RADIAL_LAT_LEVEL}, "
-              f"lat_sdr {RADIAL_LAT_SDR}): {len(steps)} cells")
+        cells = radial_cells(args.weak_radial_fills, args.weak_max_gpus)
+        render_list = [("radial", c) for c in cells]
+        print(f"radial-only weak-scaling diagonals (lateral fixed at level {RADIAL_LAT_LEVEL}, "
+              f"lat_sdr {RADIAL_LAT_SDR}; fills {args.weak_radial_fills} M-dofs/GCD): {len(cells)} cells")
         dpg0 = DOFS_PER_LEVEL.get(RADIAL_LAT_LEVEL)
-        for k in steps:
-            n = RADIAL_BASE_GPUS * 2 ** k
-            rl, rs = RADIAL_LAT_LEVEL + k, RADIAL_BASE_RADSDR + k
+        for c in cells:
+            n = c["n_gpus"]
             nodes, _ = gpu_to_node_layout(n)
-            subdom = 10 * 4 ** RADIAL_LAT_SDR * 2 ** rs
-            dpg_s = f"  dofs/GCD={dpg0 * 2**k / n / 1e6:5.1f}M" if dpg0 else ""
-            print(f"  k={k}  rad_level={rl:2}  rad_sdr={rs}  n_gpus={n:5}  nodes={nodes:4}"
-                  f"  subdom/GCD={subdom // n}{dpg_s}")
+            subdom = 10 * 4 ** c["lat_sdr"] * 2 ** c["rad_sdr"]
+            dpg_s = f"  dofs/GCD={dpg0 * 2**c['radial_extra'] / n / 1e6:5.1f}M" if dpg0 else ""
+            print(f"  fill={c['fill']:2}M  rad_level={c['rad_level']:2}  rad_sdr={c['rad_sdr']}  "
+                  f"n_gpus={n:5}  nodes={nodes:4}  subdom/GCD={subdom // n}{dpg_s}")
     else:
         if args.weak:
             cells = weak_cells(args.weak_fills, WEAK_BASE_LEVEL,
