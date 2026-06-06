@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Strong-scale benchmark driver for the *operator* microbenchmark on LUMI-G.
+Strong-scale benchmark driver for the *operator* microbenchmark on JUWELS Booster.
 
 Runs the `benchmark_operators` app (matvec throughput for the production
 EpsDivDivKerngen operator) at an increasing MT model size. For each
@@ -32,10 +32,10 @@ from pathlib import Path
 
 BENCH_DIR   = Path(__file__).resolve().parent
 APP_DIR     = BENCH_DIR.parent
-# benchmark_operators binary (LUMI PFS build). Override with $BENCH_OPERATORS_BIN.
+# benchmark_operators binary (JUWELS Booster build). Override with $BENCH_OPERATORS_BIN.
 BINARY      = Path(os.environ.get(
     "BENCH_OPERATORS_BIN",
-    "/pfs/lustrep3/users/bohmfabi/terraneo-build/apps/benchmarks/performance/benchmark_operators"))
+    "/p/home/jusers/boehm2/juwels/terraneo-build/apps/benchmarks/performance/benchmark_operators"))
 JOB_DIR     = BENCH_DIR / "jobs"
 OUTPUT_ROOT = BENCH_DIR / "outputs"
 
@@ -94,19 +94,21 @@ def weak_cells(fills: list[int], base_level: int, max_level: int,
 # level (rad_sdr += 1 -> x2 subdomains), with GPUs x2. dofs/GCD and subdomains/GCD
 # stay fixed, isolating radial scaling at 2x (vs 8x) granularity.
 #
-# The fill (dofs/GCD) is set by the base GCD count at the anchor (rad_level =
+# The fill (dofs/GCD) is set by the base GPU count at the anchor (rad_level =
 # lat_level): dofs(lat 8 isotropic)/base_gpus. base_gpus is snapped to a power of
-# two and base_rad_sdr chosen so subdom/GCD = 10 is held across all fills
-# (base_gpus = 4^lat_sdr * 2^rad_sdr). With lat 8 / lat_sdr 1:
-#   base 8 -> 63 M/GCD, 16 -> 32 M, 32 -> 16 M, 64 -> 8 M, ...
+# two and clamped to >= GPUS_PER_NODE so the diagonal STARTS AT ONE FULL NODE;
+# base_rad_sdr is chosen so subdom/GCD = 10 is held across all fills
+# (base_gpus = 4^lat_sdr * 2^rad_sdr). With lat 8 / lat_sdr 1 on JUWELS (4 GPUs/node):
+#   base 4 (1 node) -> 126 M/GCD, 8 -> 63 M, 16 -> 32 M, 32 -> 16 M, ...
 RADIAL_LAT_LEVEL     = 8
 RADIAL_LAT_SDR       = 1
-RADIAL_DEFAULT_FILLS = [63, 32, 16, 8]    # target M-dofs/GCD radial diagonals
+RADIAL_DEFAULT_FILLS = [126, 63, 32, 16]  # target M-dofs/GCD radial diagonals
 
 def radial_base(fill_mdofs: int) -> tuple[int, int]:
-    """(base_gpus, base_rad_sdr) at the anchor for a target dofs/GCD."""
+    """(base_gpus, base_rad_sdr) at the anchor for a target dofs/GCD. base_gpus is
+    clamped to >= GPUS_PER_NODE so the first datapoint is a single full node."""
     target       = DOFS_PER_LEVEL[RADIAL_LAT_LEVEL] / (fill_mdofs * 1e6)
-    base_gpus    = 1 << max(0, round(math.log2(target)))
+    base_gpus    = max(GPUS_PER_NODE, 1 << max(0, round(math.log2(target))))
     base_rad_sdr = (base_gpus.bit_length() - 1) - 2 * RADIAL_LAT_SDR
     return base_gpus, max(0, base_rad_sdr)
 
@@ -128,16 +130,14 @@ DEFAULT_EXECUTIONS = 5
 # Untimed warmup matvecs before the timed region (amortizes launch/alloc overhead).
 DEFAULT_WARMUP = 5
 
-# LUMI-G: each node has 8 GCDs (4 MI250X * 2). standard-g allocates GPUs; we
-# bind one rank per GCD. Account / partition can be overridden via env.
-GPUS_PER_NODE = 8
-ACCOUNT       = os.environ.get("SLURM_ACCOUNT", "project_465002367")
-PARTITION     = "standard-g"
+# JUWELS Booster: each node has 4 A100 GPUs. One rank per GPU, bound to the
+# closest GPU. Account can be overridden via env.
+GPUS_PER_NODE = 4
+ACCOUNT       = os.environ.get("SLURM_ACCOUNT", "walberlamovinggeo")
 
-# NUMA-aware CPU cores, one per GCD, in the canonical LUMI GCD order. For a
-# partial node we take the first `tasks_per_node` entries (matches the proven
-# 2-GCD config that used map_cpu:49,57).
-CPU_BIND_ORDER = [49, 57, 17, 25, 1, 9, 33, 41]
+# --partition=booster caps at 384 nodes per job; above that needs
+# --partition=largebooster (same hardware, different policy).
+BOOSTER_NODE_CAP = 384
 
 # Walltime: the operator microbenchmark is a handful of matvecs, so it is fast;
 # give the two largest models a little more for domain setup / allocation.
@@ -162,8 +162,8 @@ def choose_sdr(n_gpus: int) -> int:
 def gpu_to_node_layout(n_gpus: int) -> tuple[int, int]:
     """Map a target n_gpus to (#nodes, #ntasks_per_node).
 
-    Up to 8 GCDs we pack onto a single node; beyond that we use full nodes
-    (8 GCDs each).
+    Up to 4 GPUs we pack onto a single node; beyond that we use full nodes
+    (4 GPUs each).
     """
     if n_gpus <= GPUS_PER_NODE:
         return (1, n_gpus)
@@ -171,45 +171,39 @@ def gpu_to_node_layout(n_gpus: int) -> tuple[int, int]:
         raise ValueError(f"n_gpus={n_gpus} is not a multiple of {GPUS_PER_NODE} for >1 nodes")
     return (n_gpus // GPUS_PER_NODE, GPUS_PER_NODE)
 
-def write_lumi_job(cell_tag: str, out_path: Path, nodes: int, tpn: int,
-                   time_limit: str, bench_args: str, echo_line: str) -> Path:
-    """Write the shared LUMI-G sbatch script for one benchmark_operators cell."""
-    job_path = JOB_DIR / f"bench_{cell_tag}.sh"
-    cpu_bind = "map_cpu:" + ",".join(str(c) for c in CPU_BIND_ORDER[:tpn])
+def write_job(cell_tag: str, out_path: Path, nodes: int, tpn: int,
+              time_limit: str, bench_args: str, echo_line: str) -> Path:
+    """Write the JUWELS Booster sbatch script for one benchmark_operators cell."""
+    job_path  = JOB_DIR / f"bench_{cell_tag}.sh"
+    partition = "largebooster" if nodes > BOOSTER_NODE_CAP else "booster"
     script = f"""#!/bin/bash -l
 #SBATCH --job-name=bench_{cell_tag}
 #SBATCH --output=bench_{cell_tag}.o%j
 #SBATCH --error=bench_{cell_tag}.e%j
 #SBATCH -D {JOB_DIR}
-#SBATCH --partition={PARTITION}
+#SBATCH --partition={partition}
 #SBATCH --account={ACCOUNT}
 #SBATCH --nodes={nodes}
 #SBATCH --ntasks-per-node={tpn}
-#SBATCH --gpus-per-node={tpn}
+#SBATCH --cpus-per-task=12
+#SBATCH --gres=gpu:{tpn}
 #SBATCH --time={time_limit}
 
-echo "{echo_line}"
+echo "{echo_line}  partition={partition}"
 
-export MPICH_GPU_SUPPORT_ENABLED=1
-export OMP_NUM_THREADS=1
-ulimit -c 0
+module load Stages/2025
+module load CUDA/12
+module load NVHPC/25.5-CUDA-12
+module load OpenMPI/4.1.8
 
-# Per-GCD GPU binding wrapper (maps SLURM_LOCALID -> ROCR_VISIBLE_DEVICES).
-SELECT_GPU=${{SLURM_SUBMIT_DIR}}/select_gpu_${{SLURM_JOB_ID}}.sh
-cat > ${{SELECT_GPU}} << 'INNER'
-#!/bin/bash
-export ROCR_VISIBLE_DEVICES=$SLURM_LOCALID
-exec "$@"
-INNER
-chmod +x ${{SELECT_GPU}}
+export OMPI_MCA_pml=ucx
+export UCX_TLS=rc,sm,cuda_copy,cuda_ipc
 
 # benchmark_operators writes csv/ and tts/ relative to CWD.
 mkdir -p {out_path}/csv {out_path}/tts
 cd {out_path}
 
-srun --cpu-bind={cpu_bind} ${{SELECT_GPU}} {BINARY} {bench_args}
-
-rm -f ${{SELECT_GPU}}
+srun --gpu-bind=closest {BINARY} {bench_args}
 """
     job_path.write_text(script)
     job_path.chmod(0o755)
@@ -232,9 +226,9 @@ def render_job_script(level: int, n_gpus: int, executions: int, warmup: int) -> 
         f"--refinement-level-subdomains {sdr} --executions {executions} --warmup {warmup}"
     )
     echo_line = (f"Cell: {cell_tag}  level={level}  sdr={sdr}  subdomains={subdomains_for(sdr)}  "
-                 f"executions={executions}  n_gpus={n_gpus}  nodes={nodes}x{tpn}  partition={PARTITION}")
-    job_path = write_lumi_job(cell_tag, out_path, nodes, tpn,
-                              time_limit_for(level), bench_args, echo_line)
+                 f"executions={executions}  n_gpus={n_gpus}  nodes={nodes}x{tpn}")
+    job_path = write_job(cell_tag, out_path, nodes, tpn,
+                         time_limit_for(level), bench_args, echo_line)
     return job_path, out_path, info
 
 def render_radial_job_script(cell: dict, executions: int, warmup: int) -> tuple[Path, Path, dict]:
@@ -264,10 +258,10 @@ def render_radial_job_script(cell: dict, executions: int, warmup: int) -> tuple[
     )
     echo_line = (f"Cell: {cell_tag}  lat_level={lat_level}  rad_level={rad_level}  "
                  f"lat_sdr={lat_sdr}  rad_sdr={rad_sdr}  subdomains={subdomains}  "
-                 f"n_gpus={n_gpus}  nodes={nodes}x{tpn}  partition={PARTITION}")
+                 f"n_gpus={n_gpus}  nodes={nodes}x{tpn}")
     # radial mesh can be deep; give the larger radial levels the longer budget.
-    job_path = write_lumi_job(cell_tag, out_path, nodes, tpn,
-                              time_limit_for(rad_level), bench_args, echo_line)
+    job_path = write_job(cell_tag, out_path, nodes, tpn,
+                         time_limit_for(rad_level), bench_args, echo_line)
     return job_path, out_path, info
 
 def main(argv):
