@@ -153,6 +153,13 @@ class Table
 
         rows_.emplace_back( row );
     }
+    
+    /// @brief Set specific column ordering by key.
+    /// @param order List of key elements in order of choice.
+    void set_column_order( const std::vector< std::string >& order )
+    {
+        column_order_ = order;
+    }
 
     /// @brief Select a subset of columns from the table.
     /// @param selected_columns Columns to select.
@@ -297,14 +304,14 @@ class Table
         if ( mpi::rank() == 0 )
         {
             std::unordered_map< std::string, size_t > widths;
-            for ( const auto& col : columns_ )
+            for ( const auto& col : ordered_columns() )
             {
                 widths[col] = col.size();
             }
 
             for ( const auto& row : rows_ )
             {
-                for ( const auto& col : columns_ )
+                for ( const auto& col : ordered_columns() )
                 {
                     widths[col] =
                         std::max( widths[col], value_to_string( get_value_from_row_or_none( row, col ) ).size() );
@@ -312,7 +319,7 @@ class Table
             }
 
             auto sep = [&] {
-                for ( const auto& col : columns_ )
+                for ( const auto& col : ordered_columns() )
                 {
                     os << "+" << std::string( widths[col] + 2, '-' );
                 }
@@ -321,7 +328,7 @@ class Table
 
             sep();
             os << "|";
-            for ( const auto& col : columns_ )
+            for ( const auto& col : ordered_columns() )
             {
                 os << " " << std::setw( static_cast< int >( widths[col] ) ) << std::right << col << " |";
             }
@@ -331,7 +338,7 @@ class Table
             for ( const auto& row : rows_ )
             {
                 os << "|";
-                for ( const auto& col : columns_ )
+                for ( const auto& col : ordered_columns() )
                 {
                     os << " " << std::setw( static_cast< int >( widths[col] ) ) << std::right
                        << value_to_string( get_value_from_row_or_none( row, col ) ) << " |";
@@ -409,7 +416,7 @@ class Table
             for ( const auto& row : rows_ )
             {
                 bool first = true;
-                for ( const auto& col : columns_ )
+                for ( const auto& col : ordered_columns() )
                 {
                     if ( !first )
                         os << ",";
@@ -479,8 +486,17 @@ class Table
   private:
     std::vector< Row >      rows_;    ///< Rows of the table.
     std::set< std::string > columns_; ///< Set of column names.
+    std::optional< std::vector< std::string > > column_order_; ///< Order of column names.
 
     inline static int global_id_counter = 0; ///< Global row id counter.
+
+    /// @brief Helper function to manage specifically ordered and unspecified (i.e. alphabetically ordered columns.
+    const std::vector< std::string > ordered_columns() const
+    {
+        if ( column_order_.has_value() )
+	    return column_order_.value();
+	return std::vector< std::string >( columns_.begin(), columns_.end() );
+    }
 
     /// @brief Print the table header.
     /// @param os Output stream.
@@ -488,7 +504,7 @@ class Table
     void print_header( std::ostream& os, const std::string& sep ) const
     {
         bool first = true;
-        for ( const auto& col : columns_ )
+        for ( const auto& col : ordered_columns() )
         {
             if ( !first )
             {

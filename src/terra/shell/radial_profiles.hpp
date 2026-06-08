@@ -218,6 +218,7 @@ util::Table
               { "avg", radial_profiles_host_avg( r ) },
               { "cnt", radial_profiles_host_cnt( r ) } } );
     }
+    table.set_column_order( { "radius", "avg", "min", "max", "cnt", "sum", "shell_idx", "tag" } );
     return table;
 }
 
