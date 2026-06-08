@@ -189,12 +189,14 @@ class XDMFOutput
         const grid::shell::DistributedDomain&                distributed_domain,
         const grid::Grid3DDataVec< InputGridScalarType, 3 >& coords_shell_device,
         const grid::Grid2DDataScalar< InputGridScalarType >& coords_radii_device,
+        const InputGridScalarType                            coords_scale_factor      = InputGridScalarType( 1 ),
         const OutputTypeFloat                                output_type_points       = OutputTypeFloat::Float32,
         const OutputTypeInt                                  output_type_connectivity = OutputTypeInt::Int64 )
     : directory_path_( directory_path )
     , distributed_domain_( distributed_domain )
     , coords_shell_device_( coords_shell_device )
     , coords_radii_device_( coords_radii_device )
+    , coords_scale_factor_( coords_scale_factor )
     , output_type_points_( output_type_points )
     , output_type_connectivity_( output_type_connectivity )
     {
@@ -325,8 +327,9 @@ class XDMFOutput
         const int nodes_y        = coords_shell_device_.extent( 2 );
         const int nodes_r        = coords_radii_device_.extent( 1 );
 
-        const int64_t number_of_nodes_local    = static_cast< int64_t >( num_subdomains ) * nodes_x * nodes_y * nodes_r;
-        const int64_t number_of_elements_local = static_cast< int64_t >( num_subdomains ) * ( nodes_x - 1 ) * ( nodes_y - 1 ) * ( nodes_r - 1 ) * 2;
+        const int64_t number_of_nodes_local = static_cast< int64_t >( num_subdomains ) * nodes_x * nodes_y * nodes_r;
+        const int64_t number_of_elements_local =
+            static_cast< int64_t >( num_subdomains ) * ( nodes_x - 1 ) * ( nodes_y - 1 ) * ( nodes_r - 1 ) * 2;
 
         if ( !first_write_happened_ )
         {
@@ -334,7 +337,8 @@ class XDMFOutput
 
             int64_t num_nodes_elements_subdomains_global[3] = {
                 number_of_nodes_local, number_of_elements_local, static_cast< int64_t >( num_subdomains ) };
-            MPI_Allreduce( MPI_IN_PLACE, &num_nodes_elements_subdomains_global, 3, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD );
+            MPI_Allreduce(
+                MPI_IN_PLACE, &num_nodes_elements_subdomains_global, 3, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD );
             number_of_nodes_global_      = num_nodes_elements_subdomains_global[0];
             number_of_elements_global_   = num_nodes_elements_subdomains_global[1];
             number_of_subdomains_global_ = num_nodes_elements_subdomains_global[2];
@@ -347,7 +351,8 @@ class XDMFOutput
             // Third entry: number of subdomains of processes before this
             int64_t offsets[3];
 
-            int64_t local_values[3] = { number_of_nodes_local, number_of_elements_local, static_cast< int64_t >( num_subdomains ) };
+            int64_t local_values[3] = {
+                number_of_nodes_local, number_of_elements_local, static_cast< int64_t >( num_subdomains ) };
 
             // Compute the prefix sum (inclusive)
             MPI_Scan( &local_values, &offsets, 3, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD );
@@ -434,7 +439,8 @@ class XDMFOutput
                     MPI_COMM_WORLD, topology_file_path.c_str(), MPI_MODE_CREATE | MPI_MODE_RDWR, MPI_INFO_NULL, &fh );
 
                 // Define the file view: each process writes its local data sequentially
-                MPI_Offset disp = static_cast< int64_t >( 6 ) * number_of_elements_offset_ * static_cast< int64_t >( output_type_connectivity_ );
+                MPI_Offset disp = static_cast< int64_t >( 6 ) * number_of_elements_offset_ *
+                                  static_cast< int64_t >( output_type_connectivity_ );
                 MPI_File_set_view( fh, disp, MPI_CHAR, MPI_CHAR, "native", MPI_INFO_NULL );
 
                 std::string topo_str = topology_stream.str();
@@ -620,7 +626,7 @@ class XDMFOutput
 
                         for ( int d = 0; d < 3; d++ )
                         {
-                            const auto cd = static_cast< FloatingPointOutputType >( c( d ) );
+                            const auto cd = static_cast< FloatingPointOutputType >( c( d ) * coords_scale_factor_ );
                             out.write( reinterpret_cast< const char* >( &cd ), sizeof( FloatingPointOutputType ) );
                         }
                     }
@@ -658,8 +664,7 @@ class XDMFOutput
                         v[2] = v[0] + nodes_x;
                         v[3] = v[0] + nodes_x + 1;
 
-                        v[4] = offset + local_subdomain_id * stride_0 + ( r + 1 ) * stride_1 +
-                               y * stride_2 + x;
+                        v[4] = offset + local_subdomain_id * stride_0 + ( r + 1 ) * stride_1 + y * stride_2 + x;
                         v[5] = v[4] + 1;
                         v[6] = v[4] + nodes_x;
                         v[7] = v[4] + nodes_x + 1;
@@ -888,7 +893,8 @@ class XDMFOutput
                 MPI_COMM_WORLD, attribute_file_path.c_str(), MPI_MODE_CREATE | MPI_MODE_RDWR, MPI_INFO_NULL, &fh );
 
             // Define the file view: each process writes its local data sequentially
-            MPI_Offset disp = static_cast< int64_t >( VecDim ) * number_of_nodes_offset_ * static_cast< int64_t >( output_type_points_ );
+            MPI_Offset disp = static_cast< int64_t >( VecDim ) * number_of_nodes_offset_ *
+                              static_cast< int64_t >( output_type_points_ );
             MPI_File_set_view( fh, disp, MPI_CHAR, MPI_CHAR, "native", MPI_INFO_NULL );
 
             std::string attr_str = attribute_stream.str();
@@ -1095,6 +1101,8 @@ class XDMFOutput
 
     grid::Grid3DDataVec< InputGridScalarType, 3 > coords_shell_device_;
     grid::Grid2DDataScalar< InputGridScalarType > coords_radii_device_;
+
+    InputGridScalarType coords_scale_factor_ = InputGridScalarType( 1 );
 
     OutputTypeFloat output_type_points_;
     OutputTypeInt   output_type_connectivity_;

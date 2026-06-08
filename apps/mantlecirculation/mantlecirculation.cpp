@@ -269,11 +269,16 @@ Result<> run( const Parameters& prm )
     std::optional< io::XDMFOutput< ScalarType > > xdmf_output;
     std::optional< io::XDMFOutput< ScalarType > > xdmf_output_pressure;
 
+    const auto coords_scale_factor =
+        prm.mesh_parameters.mantle_thickness_m /
+        prm.mesh_parameters.radius_surface_m; // Used to rescale output coords to be on unit sphere
+
     xdmf_output.emplace(
         prm.io_parameters.outdir + "/" + prm.io_parameters.xdmf_dir,
         ( *domains[velocity_level] ),
         coords_shell[velocity_level],
-        coords_radii[velocity_level] );
+        coords_radii[velocity_level],
+        coords_scale_factor );
 
     // Reference conductive temperature profile (also used for the Nusselt number).
     VectorQ1Scalar< ScalarType > T_ref( "T_ref", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
@@ -291,7 +296,8 @@ Result<> run( const Parameters& prm )
             prm.io_parameters.outdir + "/" + prm.io_parameters.xdmf_dir + "_p",
             ( *domains[pressure_level] ),
             coords_shell[pressure_level],
-            coords_radii[pressure_level] );
+            coords_radii[pressure_level],
+            coords_scale_factor );
 
         xdmf_output_pressure->add( u.block_2().grid_data() ); // Pressure
     }
