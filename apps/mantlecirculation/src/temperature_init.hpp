@@ -199,7 +199,7 @@ void compute_reference_conductive_profile(
 /// Pre-condition: `prm.io_parameters.checkpoint_dir` is non-empty and
 /// `checkpoint_step >= 0`.
 template < typename ScalarType >
-int load_temperature_checkpoint(
+void load_temperature_checkpoint(
     linalg::VectorQ1Vec< ScalarType, 3 >&       u_velocity,
     linalg::VectorQ1Scalar< ScalarType >&       T,
     linalg::VectorFVScalar< ScalarType >&       T_fct,
@@ -210,12 +210,9 @@ int load_temperature_checkpoint(
 {
     using util::logroot;
 
-    const int checkpoint_file_step = prm.io_parameters.checkpoint_step;
-    const int timestep_initial =
-        ( prm.io_parameters.checkpoint_timestep >= 0 ) ? prm.io_parameters.checkpoint_timestep : checkpoint_file_step;
-
-    logroot << "Loading checkpoint from " << prm.io_parameters.checkpoint_dir << " (file step " << checkpoint_file_step
-            << ", simulation timestep " << timestep_initial << ")" << std::endl;
+    logroot << "Loading checkpoint from " << prm.io_parameters.checkpoint_dir << " (file step "
+            << prm.io_parameters.checkpoint_step << ", simulation timestep "
+            << prm.time_stepping_parameters.timestep_initial << ")" << std::endl;
 
     // Checking if checkpoint is dimensional or nondimensional
     auto metadata_result = io::read_xdmf_checkpoint_metadata( prm.io_parameters.checkpoint_dir );
@@ -241,14 +238,22 @@ int load_temperature_checkpoint(
     }
 
     auto success_vel = io::read_xdmf_checkpoint_grid(
-        prm.io_parameters.checkpoint_dir, std::string( "u_u" ), checkpoint_file_step, domain, u_velocity.grid_data() );
+        prm.io_parameters.checkpoint_dir,
+        std::string( "u_u" ),
+        prm.io_parameters.checkpoint_step,
+        domain,
+        u_velocity.grid_data() );
     if ( success_vel.is_err() )
     {
         Kokkos::abort( success_vel.error().c_str() );
     }
 
     auto success_temp = io::read_xdmf_checkpoint_grid(
-        prm.io_parameters.checkpoint_dir, std::string( "T" ), checkpoint_file_step, domain, T.grid_data() );
+        prm.io_parameters.checkpoint_dir,
+        std::string( "T" ),
+        prm.io_parameters.checkpoint_step,
+        domain,
+        T.grid_data() );
     if ( success_temp.is_err() )
     {
         Kokkos::abort( success_temp.error().c_str() );
@@ -265,8 +270,6 @@ int load_temperature_checkpoint(
     // projection.  Ghost layers are populated inside l2_project_fe_to_fv, so
     // the result is immediately usable by FCT kernels.
     fv::hex::l2_project_fe_to_fv( T_fct, T, domain, coords_shell, coords_radii );
-
-    return timestep_initial;
 }
 
 } // namespace terra::mantlecirculation

@@ -116,20 +116,32 @@ inline Result<> write_xdmf(
 inline Result<> compute_and_write_radial_profiles(
     const VectorQ1Scalar< ScalarType >& scalar_function,
     const Grid2DDataScalar< int >&      subdomain_shell_idx,
-    const DistributedDomain&            domain,
-    const IOParameters&                 io_parameters,
-    const int                           timestep )
+    const std::vector< double >&        radial_coords,
+    const Parameters&                   prm,
+    const int                           timestep,
+    const ScalarType                    field_scale  = 1.0,
+    const std::string&                  radial_label = "radius" )
 {
     const auto profiles = shell::radial_profiles_to_table< ScalarType >(
-        shell::radial_profiles(
-            scalar_function, subdomain_shell_idx, static_cast< int >( domain.domain_info().radii().size() ) ),
-        domain.domain_info().radii() );
+        shell::radial_profiles( scalar_function, subdomain_shell_idx, static_cast< int >( radial_coords.size() ) ),
+        radial_coords,
+        field_scale,
+        radial_label );
+
+    // Zero padding
+    std::ostringstream sst;
+    sst << std::setfill( '0' )
+        << std::setw(
+               std::to_string(
+                   prm.time_stepping_parameters.timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 )
+                   .size() )
+        << timestep;
 
     if ( mpi::rank() == 0 )
     {
         std::ofstream out(
-            io_parameters.outdir + "/" + io_parameters.radial_profiles_out_dir + "/radial_profiles_" +
-            scalar_function.grid_data().label() + "_" + std::to_string( timestep ) + ".csv" );
+            prm.io_parameters.outdir + "/" + prm.io_parameters.radial_profiles_out_dir + "/radial_profiles_" +
+            scalar_function.grid_data().label() + "_" + sst.str() + ".csv" );
         profiles.print_csv( out );
     }
 
@@ -145,9 +157,12 @@ inline Result<> compute_and_write_velocity_radial_profiles(
     const grid::Grid3DDataVec< ScalarType, 3 >&              coords_shell,
     const grid::Grid2DDataScalar< int >&                     subdomain_shell_idx,
     const DistributedDomain&                                 domain,
+    const std::vector< double >&                             radial_coords,
     const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask,
-    const IOParameters&                                      io_parameters,
-    const int                                                timestep )
+    const Parameters&                                        prm,
+    const int                                                timestep,
+    const ScalarType                                         field_scale  = 1.0,
+    const std::string&                                       radial_label = "radius" )
 {
     VectorQ1Scalar< ScalarType > u_r( "u_r", domain, mask );
     VectorQ1Scalar< ScalarType > u_t( "u_t", domain, mask );
@@ -175,12 +190,14 @@ inline Result<> compute_and_write_velocity_radial_profiles(
         } );
     Kokkos::fence();
 
-    auto res1 = compute_and_write_radial_profiles( u_r, subdomain_shell_idx, domain, io_parameters, timestep );
+    auto res1 = compute_and_write_radial_profiles(
+        u_r, subdomain_shell_idx, radial_coords, prm, timestep, field_scale, radial_label );
     if ( res1.is_err() )
     {
         return res1;
     }
-    return compute_and_write_radial_profiles( u_t, subdomain_shell_idx, domain, io_parameters, timestep );
+    return compute_and_write_radial_profiles(
+        u_t, subdomain_shell_idx, radial_coords, prm, timestep, field_scale, radial_label );
 }
 
 inline Result<> write_timer_tree( const IOParameters& io_parameters, const int timestep )

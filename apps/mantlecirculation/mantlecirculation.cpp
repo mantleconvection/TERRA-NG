@@ -302,13 +302,11 @@ Result<> run( const Parameters& prm )
         xdmf_output_pressure->add( u.block_2().grid_data() ); // Pressure
     }
 
-    int timestep_initial = 0;
-
     const bool loading_checkpoint = !prm.io_parameters.checkpoint_dir.empty() && prm.io_parameters.checkpoint_step >= 0;
 
     if ( loading_checkpoint )
     {
-        timestep_initial = load_temperature_checkpoint(
+        load_temperature_checkpoint(
             u.block_1(),
             T,
             T_fct,
@@ -329,13 +327,15 @@ Result<> run( const Parameters& prm )
     // Setting XDMF to the same step as we have loaded and padding width according to max_timesteps.
     // Thus, we will re-write loaded data.
     // Maybe a good sanity check.
-    int pad_width = std::to_string( timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 ).length();
-    xdmf_output->set_write_counter( timestep_initial, pad_width );
+    int pad_width =
+        std::to_string( prm.time_stepping_parameters.timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 )
+            .size();
+    xdmf_output->set_write_counter( prm.time_stepping_parameters.timestep_initial, pad_width );
     xdmf_output->set_is_dimensional( prm.devel_parameters.output_dimensional );
 
     if ( prm.io_parameters.output_pressure )
     {
-        xdmf_output_pressure->set_write_counter( timestep_initial, pad_width );
+        xdmf_output_pressure->set_write_counter( prm.time_stepping_parameters.timestep_initial, pad_width );
         xdmf_output_pressure->set_is_dimensional( prm.devel_parameters.output_dimensional );
     }
 
@@ -419,21 +419,60 @@ Result<> run( const Parameters& prm )
             u.block_2().grid_data() );
     }
 
+    // ---Radial profiles---
+
+    // Scaling factors for redimensionalisation
+    ScalarType T_scale   = ScalarType( 1 );
+    ScalarType eta_scale = ScalarType( 1 );
+    ScalarType u_scale   = ScalarType( 1 );
+
+    // We either want to write out dimensional depth or nondimensional radius
+    std::vector< double > radial_coords = domains[velocity_level]->domain_info().radii();
+    std::string           radial_label  = "radius";
+
+    if ( prm.devel_parameters.output_dimensional )
+    {
+        T_scale   = prm.boundary_parameters.delta_T_K;
+        eta_scale = prm.physics_parameters.viscosity_parameters.reference_viscosity;
+        u_scale   = prm.physics_parameters.calc_cm_per_year;
+
+        // Convert radii to dimensional depth
+        std::transform( radial_coords.begin(), radial_coords.end(), radial_coords.begin(), [&]( double r ) {
+            return std::max( 0.0, prm.mesh_parameters.radius_surface_m - r * prm.mesh_parameters.mantle_thickness_m );
+        } );
+        radial_label = "depth";
+    }
+
     if ( !prm.io_parameters.no_radial_profiles )
     {
         logroot << "Writing initial radial profiles ..." << std::endl;
         compute_and_write_radial_profiles(
-            T, subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep_initial );
+            T,
+            subdomain_shell_idx,
+            radial_coords,
+            prm,
+            prm.time_stepping_parameters.timestep_initial,
+            T_scale,
+            radial_label );
         compute_and_write_radial_profiles(
-            stokes.eta_fine(), subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep_initial );
+            stokes.eta_fine(),
+            subdomain_shell_idx,
+            radial_coords,
+            prm,
+            prm.time_stepping_parameters.timestep_initial,
+            eta_scale,
+            radial_label );
         compute_and_write_velocity_radial_profiles(
             u.block_1(),
             coords_shell[velocity_level],
             subdomain_shell_idx,
             ( *domains[velocity_level] ),
+            radial_coords,
             ownership_mask_data[velocity_level],
-            prm.io_parameters,
-            timestep_initial );
+            prm,
+            prm.time_stepping_parameters.timestep_initial,
+            u_scale,
+            radial_label );
 
         // EV-specific diagnostic profiles: per-wedge h_w (geometry-only,
         // available from construction).  lap_T_ is not meaningful before any
@@ -441,7 +480,11 @@ Result<> run( const Parameters& prm )
         if ( auto* hw_view = energy->h_w_diag_view() )
         {
             compute_and_write_radial_profiles(
-                *hw_view, subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep_initial );
+                *hw_view,
+                subdomain_shell_idx,
+                domains[velocity_level]->domain_info().radii(),
+                prm,
+                prm.time_stepping_parameters.timestep_initial );
         }
     }
 
@@ -475,7 +518,9 @@ Result<> run( const Parameters& prm )
                 << "  [timestep 0, before time stepping]" << std::endl;
     }
 
-    for ( int timestep = timestep_initial + 1; timestep < prm.time_stepping_parameters.max_timesteps; timestep++ )
+    for ( int timestep = prm.time_stepping_parameters.timestep_initial + 1;
+          timestep < prm.time_stepping_parameters.max_timesteps;
+          timestep++ )
     {
         logroot << "\n### Timestep " << timestep << " ###" << std::endl;
         util::Timer timer_timestep( "timestep" );
@@ -542,28 +587,31 @@ Result<> run( const Parameters& prm )
         {
             logroot << "Writing radial profiles ..." << std::endl;
             compute_and_write_radial_profiles(
-                T, subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
+                T, subdomain_shell_idx, radial_coords, prm, timestep, T_scale, radial_label );
             compute_and_write_radial_profiles(
-                stokes.eta_fine(), subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
+                stokes.eta_fine(), subdomain_shell_idx, radial_coords, prm, timestep, eta_scale, radial_label );
             compute_and_write_velocity_radial_profiles(
                 u.block_1(),
                 coords_shell[velocity_level],
                 subdomain_shell_idx,
                 ( *domains[velocity_level] ),
+                radial_coords,
                 ownership_mask_data[velocity_level],
-                prm.io_parameters,
-                timestep );
+                prm,
+                timestep,
+                u_scale,
+                radial_label );
 
             // EV-specific diagnostic profiles (refreshed by dump_diagnostics).
             if ( auto* lap_view = energy->lap_diag_view() )
             {
                 compute_and_write_radial_profiles(
-                    *lap_view, subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
+                    *lap_view, subdomain_shell_idx, domains[velocity_level]->domain_info().radii(), prm, timestep );
             }
             if ( auto* hw_view = energy->h_w_diag_view() )
             {
                 compute_and_write_radial_profiles(
-                    *hw_view, subdomain_shell_idx, ( *domains[velocity_level] ), prm.io_parameters, timestep );
+                    *hw_view, subdomain_shell_idx, domains[velocity_level]->domain_info().radii(), prm, timestep );
             }
         }
 

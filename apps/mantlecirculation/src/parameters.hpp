@@ -264,7 +264,8 @@ struct TimeSteppingParameters
     double dt_max     = 1.0;
     double dt_min     = 1.0;
 
-    int max_timesteps = 10;
+    int max_timesteps    = 10;
+    int timestep_initial = 0;
 
     int energy_substeps   = 1;
     int picard_iterations = 1;
@@ -787,6 +788,12 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
 
     // Nondimensionalise all relevant input parameters
     nondimensionalise( parameters );
+
+    // Determine timestep_initial from checkpointing parameters
+    if ( parameters.io_parameters.checkpoint_step >= 0 )
+        parameters.time_stepping_parameters.timestep_initial = ( parameters.io_parameters.checkpoint_timestep >= 0 ) ?
+                                                                   parameters.io_parameters.checkpoint_timestep :
+                                                                   parameters.io_parameters.checkpoint_step;
 
     util::logroot << "=========================================\n";
     util::logroot << "     Starting mantle circulation app     \n";
