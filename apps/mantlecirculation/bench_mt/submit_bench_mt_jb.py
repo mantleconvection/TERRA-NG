@@ -243,19 +243,45 @@ def partition_for(nodes: int) -> str:
 def time_limit_for(level: int) -> str:
     return "00:15:00"
 
-# The app applies one subdomain-refinement level to BOTH axes:
-# total subdomains = 10 * 4^sdr (lateral) * 2^sdr (radial) = 10 * 8^sdr.
-def subdomains_for(sdr: int) -> int:
-    return 10 * (8 ** sdr)
+# Subdomain decomposition with INDEPENDENT lateral/radial refinement:
+# total subdomains = 10 * 4^lat_sdr * 2^rad_sdr = 10 * 2^(2*lat_sdr + rad_sdr).
+# Refining the two axes separately gives x2 granularity (vs x8 for a single coupled
+# level), which matches the x2 GPU steps -- so subdomains/GPU can be held CONSTANT
+# across a strong-scaling sweep instead of swinging ~2.5x..20x. A coupled single
+# level jumps the decomposition x8 per +1 GPU-doubling-pair, producing the
+# over-decomposition cliffs (a cell with more GPUs but 4x the subdomains/GPU can run
+# *slower* despite identical global DoFs).
+def subdomains_lr(lat_sdr: int, rad_sdr: int) -> int:
+    return 10 * (4 ** lat_sdr) * (2 ** rad_sdr)
 
-# Pick the smallest sdr s.t. subdomains >= n_gpus and divides n_gpus evenly
-# (balanced rank distribution, least over-decomposition).
-def choose_sdr(n_gpus: int) -> int:
-    for sdr in range(0, 7):
-        subs = subdomains_for(sdr)
-        if subs >= n_gpus and subs % n_gpus == 0:
-            return sdr
-    raise ValueError(f"no balanced subdomain refinement found for n_gpus={n_gpus}")
+# Hold subdomains/GPU fixed across the sweep. 5 is the smallest constant achievable
+# for power-of-2 GPU counts (minimal over-decomposition that still balances); the
+# single-GPU anchor falls back to 10 (the base mesh has 10 macro-subdomains).
+TARGET_SUBDOM_PER_GPU = 5
+
+def choose_lat_rad(n_gpus: int, target: int = TARGET_SUBDOM_PER_GPU) -> tuple[int, int]:
+    """Pick (lat_sdr, rad_sdr) so subdomains == target * n_gpus, holding
+    subdomains/GPU constant. Grows the decomposition laterally while toggling the
+    radial split 0/1, keeping the radial decomposition shallow (radial extent is
+    MT/2). Falls back to the smallest balanced (>= n_gpus, evenly dividing)
+    decomposition when the exact target isn't reachable (e.g. n_gpus = 1)."""
+    want = target * n_gpus
+    if want % 10 == 0:
+        q = want // 10
+        if q & (q - 1) == 0:                  # q is a power of two -> exact solution
+            k = q.bit_length() - 1            # k = 2*lat_sdr + rad_sdr
+            lat, rad = k // 2, k % 2
+            if subdomains_lr(lat, rad) % n_gpus == 0:
+                return lat, rad
+    best = None                               # fallback: smallest balanced split
+    for lat in range(0, 7):
+        for rad in range(0, 3):
+            subs = subdomains_lr(lat, rad)
+            if subs >= n_gpus and subs % n_gpus == 0 and (best is None or subs < best[0]):
+                best = (subs, lat, rad)
+    if best is None:
+        raise ValueError(f"no balanced (lat_sdr, rad_sdr) found for n_gpus={n_gpus}")
+    return best[1], best[2]
 
 def gpu_to_node_layout(n_gpus: int) -> tuple[int, int]:
     """Map a target n_gpus to (#nodes, #ntasks_per_node).
@@ -315,23 +341,26 @@ def render_job_script(level: int, n_gpus: int, opts) -> tuple[Path, Path, dict]:
     rad_level  = level + RADIAL_EXTRA
     cell_tag   = f"MT{mt_label}_g{n_gpus}"
     out_path   = OUTPUT_ROOT / cell_tag
-    nodes, tpn = gpu_to_node_layout(n_gpus)
-    sdr        = choose_sdr(n_gpus)
-    mesh_min   = mesh_min_for(sdr, sdr, RADIAL_EXTRA)
+    nodes, tpn       = gpu_to_node_layout(n_gpus)
+    lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
+    subdomains       = subdomains_lr(lat_sdr, rad_sdr)
+    mesh_min         = mesh_min_for(lat_sdr, rad_sdr, RADIAL_EXTRA)
 
     info = dict(
         cell_tag=cell_tag, mt_label=mt_label,
-        level=level, mesh_min=mesh_min, rad_level=rad_level, sdr=sdr,
+        level=level, mesh_min=mesh_min, rad_level=rad_level,
+        lat_sdr=lat_sdr, rad_sdr=rad_sdr, subdom_per_gpu=subdomains // n_gpus,
         max_timesteps=opts.max_timesteps, fgmres=opts.fgmres, ev_iters=opts.ev_iters,
         n_gpus=n_gpus, nodes=nodes, tasks_per_node=tpn,
     )
     app_args = (
         f"--refinement-level-mesh-min {mesh_min} --refinement-level-mesh-max {level} "
-        f"--refinement-level-subdomains {sdr} --radial-extra-levels {RADIAL_EXTRA} "
+        f"--lat-sdr {lat_sdr} --rad-sdr {rad_sdr} --radial-extra-levels {RADIAL_EXTRA} "
         + solver_overrides(opts.max_timesteps, opts.fgmres, opts.ev_iters)
     )
-    echo_line = (f"Cell: {cell_tag}  mesh=[{mesh_min}..{level}]  rad_level={rad_level}  sdr={sdr}  "
-                 f"subdomains={subdomains_for(sdr)}  steps={opts.max_timesteps}  "
+    echo_line = (f"Cell: {cell_tag}  mesh=[{mesh_min}..{level}]  rad_level={rad_level}  "
+                 f"lat_sdr={lat_sdr}  rad_sdr={rad_sdr}  subdomains={subdomains}  "
+                 f"subdom/GPU={subdomains // n_gpus}  steps={opts.max_timesteps}  "
                  f"fgmres={opts.fgmres}  ev={opts.ev_iters}  n_gpus={n_gpus}  "
                  f"nodes={nodes}x{tpn}  partition={partition_for(nodes)}")
     time_limit = opts.time_limit or time_limit_for(level)
@@ -469,12 +498,14 @@ def main(argv):
         else:
             print(f"strong-scaling grid (radial = MT/2, rad_level = lat_level-1): {len(cells)} cells")
         for (level, n_gpus) in cells:
-            sdr = choose_sdr(n_gpus)
+            lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
+            subs = subdomains_lr(lat_sdr, rad_sdr)
             nodes, _ = gpu_to_node_layout(n_gpus)
             dpg = dofs_at(level)
             dpg_s = f"  dofs/GPU={dpg / n_gpus / 1e6:5.1f}M" if dpg else ""
             print(f"  MT{2**level:<5} lat={level:2} rad={level+RADIAL_EXTRA:2}  n_gpus={n_gpus:5}  "
-                  f"nodes={nodes:4}  sdr={sdr}  subdom/GPU={10 * 8**sdr // n_gpus}{dpg_s}")
+                  f"nodes={nodes:4}  lat_sdr={lat_sdr} rad_sdr={rad_sdr}  "
+                  f"subdom/GPU={subs // n_gpus:2}{dpg_s}")
 
     submitted = []
     for kind, item in render_list:
@@ -504,9 +535,10 @@ def main(argv):
                       "max_timesteps", "fgmres", "ev_iters", "n_gpus", "nodes", "tasks_per_node"]
         else:
             manifest = JOB_DIR / ("manifest_weak.txt" if args.weak else "manifest.txt")
-            header = ("# cell_tag\tjob_id\tlevel\trad_level\tsdr\tmax_timesteps\tfgmres\tev_iters"
-                      "\tn_gpus\tnodes\ttasks_per_node\n")
-            fields = ["level", "rad_level", "sdr", "max_timesteps", "fgmres", "ev_iters",
+            header = ("# cell_tag\tjob_id\tlevel\trad_level\tlat_sdr\trad_sdr\tsubdom_per_gpu"
+                      "\tmax_timesteps\tfgmres\tev_iters\tn_gpus\tnodes\ttasks_per_node\n")
+            fields = ["level", "rad_level", "lat_sdr", "rad_sdr", "subdom_per_gpu",
+                      "max_timesteps", "fgmres", "ev_iters",
                       "n_gpus", "nodes", "tasks_per_node"]
         with open(manifest, "w") as f:
             f.write(header)
