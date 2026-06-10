@@ -86,16 +86,18 @@ def mesh_min_for(lat_sdr: int, rad_sdr: int, radial_extra: int) -> int:
 # Radial extent is MT/2: rad_level = lat_level + RADIAL_EXTRA (= lat_level - 1).
 RADIAL_EXTRA = -1
 
-# (level, list of GPU counts to test). level -> MT label = 2^level (lateral).
+# (level, list of base GPU counts). Actual n_gpus = base * GPU_MULTIPLIER.
+# level -> MT label = 2^level (lateral). Levels 7-11 span a wide GPU range so each
+# MT model has several strong-scaling points on both sides of its sweet spot.
 DEFAULT_SWEEP: list[tuple[int, list[int]]] = [
-    # (level, [n_gpus])           lat=2^level, rad=2^(level-1) (MT/2)
-    (5,  [1, 2, 4, 8]),                  # MT32    (lat=32,   rad=16)
-    (6,  [1, 2, 4, 8, 16]),              # MT64    (lat=64,   rad=32)
-    (7,  [4, 8, 16, 32]),                # MT128   (lat=128,  rad=64)
-    (8,  [16, 32, 64, 128, 256]),        # MT256   (lat=256,  rad=128)
-    (9,  [64, 128, 256, 512]),           # MT512   (lat=512,  rad=256)
-    (10, [256, 512, 1024, 2048]),        # MT1024  (lat=1024, rad=512)
-    (11, [1024, 2048, 4096]),            # MT2048  (lat=2048, rad=1024)
+    # (level, [base n_gpus])      lat=2^level, rad=2^(level-1) (MT/2); actual = base*2
+    (5,  [1, 2, 4, 8]),                       # MT32    actual 2..16  (+g1)
+    (6,  [1, 2, 4, 8, 16]),                   # MT64    actual 2..32  (+g1)
+    (7,  [2, 4, 8, 16, 32, 64, 128]),         # MT128   actual 4..256
+    (8,  [8, 16, 32, 64, 128, 256, 512]),     # MT256   actual 16..1024
+    (9,  [32, 64, 128, 256, 512, 1024]),      # MT512   actual 64..2048
+    (10, [128, 256, 512, 1024]),              # MT1024  actual 256..2048
+    (11, [512, 1024, 2048, 4096]),            # MT2048  actual 1024..8192
 ]
 
 # Multiply every strong-grid GPU count by this (each cell runs at GPU_MULTIPLIER x
@@ -379,6 +381,9 @@ def main(argv):
                    help="only emit the job scripts; don't sbatch")
     p.add_argument("--levels", type=int, nargs="+", default=None,
                    help="override which mesh levels to submit (default: full sweep)")
+    p.add_argument("--gpus", type=int, nargs="+", default=None,
+                   help="only submit cells whose final n_gpus is in this list "
+                        "(applied after the GPU_MULTIPLIER; strong/weak grid only)")
     p.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                    help=f"base config TOML (default: {DEFAULT_CONFIG.name})")
     p.add_argument("--max-timesteps", type=int, default=DEFAULT_MAX_TIMESTEPS,
@@ -451,6 +456,8 @@ def main(argv):
             cells = sorted(c for c in cells if not (c in seen or seen.add(c)))
         if args.levels is not None:
             cells = [(level, n_gpus) for (level, n_gpus) in cells if level in args.levels]
+        if args.gpus is not None:
+            cells = [(level, n_gpus) for (level, n_gpus) in cells if n_gpus in args.gpus]
         over = [(l, n) for (l, n) in cells if n > MAX_SAFE_GPUS]
         if over:
             print(f"  SKIP {len(over)} cell(s) > {MAX_SAFE_GPUS} GPUs (machine budget): "
