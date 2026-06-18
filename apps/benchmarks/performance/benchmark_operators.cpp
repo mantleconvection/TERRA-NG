@@ -171,6 +171,10 @@ double measure_run_time( int executions, OperatorT& A, const SrcOf< OperatorT >&
     Kokkos::fence();
     MPI_Barrier( MPI_COMM_WORLD );
     timer.reset();
+    // Drop the warmup iterations from the timing tree so the aggregated JSON
+    // reflects only the timed executions below (warmup is cold: first-touch
+    // allocation, cold caches/halo buffers, and would inflate the breakdown).
+    util::TimerTree::instance().clear();
 
     for ( int i = 0; i < executions; ++i )
     {

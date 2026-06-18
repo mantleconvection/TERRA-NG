@@ -3,22 +3,26 @@
 Strong-scale benchmark driver for the *operator* microbenchmark on LUMI-G.
 
 Runs the `benchmark_operators` app (matvec throughput for the production
-EpsDivDivKerngen operator) at an increasing MT model size. For each
-(MT-level, n_gpus) cell in the sweep:
-  - emit a per-cell sbatch script under bench_mt/jobs/
-  - submit via sbatch
-  - the app writes its CSV / timer-tree under bench_mt/outputs/MT<...>_g<n>/{csv,tts}/
+EpsDivDivKerngen operator). Uses SEPARATE lateral/radial refinement
+(--lat-sdr / --rad-sdr / --radial-extra-levels), so the domain is no longer the
+old isotropic create_uniform(level, level, sdr, sdr); lateral and radial mesh
+levels and subdomain refinements are independent.
 
-MT-level convention: MT(N) where N = 2^level is the lateral (and, for this app,
-also the radial) resolution. benchmark_operators builds the domain with
-`create_uniform(level, level, ..., sdr, sdr)` so lateral and radial use the SAME
-refinement level and the SAME subdomain refinement -- there is no radial-extra
-offset like the full mc app has.
+Default mode = RADIAL strong scaling: fix the global mesh (lat_level, lat_sdr,
+rad_level) and scale ONLY the radial direction -- each step rad_sdr += 1 doubles
+the radial subdomain count and doubles GPUs (n_gpus = 4^lat_sdr * 2^rad_sdr),
+while total DoFs stay fixed (sdr does not change DoFs), so DoFs/GCD halves per
+step and subdomains/GCD stays constant. Lateral refinement is never touched.
+STRONG_RAD_LEVELS gives several global problem sizes (one strong-scaling curve
+each). Each cell writes CSV / timer-tree under bench_mt/outputs/<tag>/{csv,tts}/.
+
+Other modes: --weak (8x level / 8x GCD isotropic weak diagonals) and
+--weak-radial (radial weak diagonals: rad_level AND rad_sdr AND GPUs x2/step).
 
 Usage:
-    python3 submit_bench_mt.py            # submit the default sweep
-    python3 submit_bench_mt.py --dry-run  # just print what would be submitted
-    python3 submit_bench_mt.py --levels 8 9    # only those mesh levels
+    python3 submit_bench_operators_lumi.py            # default radial strong-scaling sweep
+    python3 submit_bench_operators_lumi.py --dry-run  # just print what would be submitted
+    python3 submit_bench_operators_lumi.py --weak     # isotropic weak diagonals instead
 """
 
 from __future__ import annotations
@@ -38,17 +42,6 @@ BINARY      = Path(os.environ.get(
     "/pfs/lustrep3/users/bohmfabi/terraneo-build/apps/benchmarks/performance/benchmark_operators"))
 JOB_DIR     = BENCH_DIR / "jobs"
 OUTPUT_ROOT = BENCH_DIR / "outputs"
-
-# (level, list of GPU counts to test). level -> MT label = 2^level.
-DEFAULT_SWEEP: list[tuple[int, list[int]]] = [
-    # (level, [n_gpus])
-    (5,  [1, 2, 4, 8]),                  # MT32    (lat=rad=32)
-    (6,  [1, 2, 4, 8, 16]),              # MT64    (lat=rad=64)
-    (7,  [4, 8, 16, 32]),                # MT128   (lat=rad=128)
-    (8,  [16, 32, 64, 128, 256]),        # MT256   (lat=rad=256)
-    (9,  [64, 128, 256, 512]),           # MT512   (lat=rad=512)
-    (10, [256, 512, 1024, 2048]),        # MT1024  (lat=rad=1024)
-]
 
 # Measured owned-DOF counts per level (from the strong sweep CSVs). Used to map a
 # target dofs/GCD to a base GPU count and to print the achieved fill. level 11
@@ -94,33 +87,68 @@ def weak_cells(fills: list[int], base_level: int, max_level: int,
 # level (rad_sdr += 1 -> x2 subdomains), with GPUs x2. dofs/GCD and subdomains/GCD
 # stay fixed, isolating radial scaling at 2x (vs 8x) granularity.
 #
-# The fill (dofs/GCD) is set by the base GCD count at the anchor (rad_level =
-# lat_level): dofs(lat 8 isotropic)/base_gpus. base_gpus is snapped to a power of
-# two and base_rad_sdr chosen so subdom/GCD = 10 is held across all fills
-# (base_gpus = 4^lat_sdr * 2^rad_sdr). With lat 8 / lat_sdr 1:
-#   base 8 -> 63 M/GCD, 16 -> 32 M, 32 -> 16 M, 64 -> 8 M, ...
+# Every diagonal STARTS AT ONE NODE (GPUS_PER_NODE GCDs) with subdom/GCD = 10; the
+# requested fill is realized by the *starting radial level* rather than the GPU
+# count. The 63 M anchor is isotropic (rad_level = lat_level); each halving of the
+# fill starts one radial level coarser. With lat 8 / lat_sdr 1 on 8 GCDs:
+#   rad_level 8 -> 63 M/GCD, 7 -> 32 M, 6 -> 16 M, 5 -> 8 M, ...
 RADIAL_LAT_LEVEL     = 8
 RADIAL_LAT_SDR       = 1
 RADIAL_DEFAULT_FILLS = [63, 32, 16, 8]    # target M-dofs/GCD radial diagonals
 
-def radial_base(fill_mdofs: int) -> tuple[int, int]:
-    """(base_gpus, base_rad_sdr) at the anchor for a target dofs/GCD."""
-    target       = DOFS_PER_LEVEL[RADIAL_LAT_LEVEL] / (fill_mdofs * 1e6)
-    base_gpus    = 1 << max(0, round(math.log2(target)))
-    base_rad_sdr = (base_gpus.bit_length() - 1) - 2 * RADIAL_LAT_SDR
-    return base_gpus, max(0, base_rad_sdr)
+def radial_anchor(fill_mdofs: int) -> tuple[int, int]:
+    """Starting (rad_level, rad_sdr) so the diagonal begins at GPUS_PER_NODE GCDs
+    (one node) with subdom/GCD = 10 at the requested fill."""
+    rad_sdr   = (GPUS_PER_NODE.bit_length() - 1) - 2 * RADIAL_LAT_SDR   # -> subdom/GCD = 10
+    fill_iso  = DOFS_PER_LEVEL[RADIAL_LAT_LEVEL] / GPUS_PER_NODE         # fill at rad_level = lat_level
+    rad_level = RADIAL_LAT_LEVEL + round(math.log2(fill_mdofs * 1e6 / fill_iso))
+    return rad_level, max(0, rad_sdr)
 
 def radial_cells(fills: list[int], max_gpus: int) -> list[dict]:
     cells: list[dict] = []
     for fill in fills:
-        base_gpus, base_rad_sdr = radial_base(fill)
+        rad_level0, rad_sdr0 = radial_anchor(fill)
         k = 0
-        while base_gpus * 2 ** k <= max_gpus:
+        while GPUS_PER_NODE * 2 ** k <= max_gpus:
+            rad_level = rad_level0 + k
             cells.append(dict(
                 lat_level=RADIAL_LAT_LEVEL, lat_sdr=RADIAL_LAT_SDR,
-                rad_level=RADIAL_LAT_LEVEL + k, rad_sdr=base_rad_sdr + k,
-                radial_extra=k, n_gpus=base_gpus * 2 ** k, fill=fill))
+                rad_level=rad_level, rad_sdr=rad_sdr0 + k,
+                radial_extra=rad_level - RADIAL_LAT_LEVEL,
+                n_gpus=GPUS_PER_NODE * 2 ** k, fill=fill))
             k += 1
+    return cells
+
+# --- Radial strong-scaling sweeps ---
+# Fix a global mesh (lat_level, rad_level) and strong-scale it by increasing the
+# radial SUBDOMAIN refinement in 2x steps: rad_sdr += 1 -> subdomains x2 -> GPUs x2,
+# total dofs fixed (sdr does not change dofs) so dofs/GCD halves each step.
+# subdom/GCD stays 10. Each problem starts at one node (GPUS_PER_NODE GCDs) and
+# scales until rad_sdr = rad_level (one radial cell per subdomain) or the GPU cap.
+# Four global problem sizes via rad_level (lat 8): total dofs ~1.0 G / 505 M / 252 M
+# / 126 M, i.e. 126 / 63 / 32 / 16 M dofs/GCD at the 1-node start.
+STRONG_LAT_LEVEL  = 8
+STRONG_LAT_SDR    = 1
+STRONG_RAD_LEVELS = [9, 8, 7, 6]
+
+def strong_cells(rad_levels: list[int], max_gpus: int) -> list[dict]:
+    cells: list[dict] = []
+    rad_sdr0 = (GPUS_PER_NODE.bit_length() - 1) - 2 * STRONG_LAT_SDR   # rad_sdr at one node
+    for rad_level in rad_levels:
+        rad_sdr = rad_sdr0
+        # stop one short of rad_sdr == rad_level: the wedge operator needs >= 2
+        # radial cells per subdomain (2^(rad_level - rad_sdr) >= 2).
+        while rad_sdr < rad_level:
+            n_gpus = 4 ** STRONG_LAT_SDR * 2 ** rad_sdr
+            if n_gpus > max_gpus:
+                break
+            cells.append(dict(
+                cell_tag=f"STR_l{STRONG_LAT_LEVEL}r{rad_level}_g{n_gpus}",
+                lat_level=STRONG_LAT_LEVEL, lat_sdr=STRONG_LAT_SDR,
+                rad_level=rad_level, rad_sdr=rad_sdr,
+                radial_extra=rad_level - STRONG_LAT_LEVEL,
+                n_gpus=n_gpus, problem=rad_level))
+            rad_sdr += 1
     return cells
 
 # Matvec repetitions per timing (matches the remeasure_history / 2gcd configs).
@@ -215,7 +243,7 @@ rm -f ${{SELECT_GPU}}
     job_path.chmod(0o755)
     return job_path
 
-def render_job_script(level: int, n_gpus: int, executions: int, warmup: int) -> tuple[Path, Path, dict]:
+def render_job_script(level: int, n_gpus: int, executions: int, warmup: int, time_limit: str = None) -> tuple[Path, Path, dict]:
     mt_label   = 2 ** level
     cell_tag   = f"MT{mt_label}_g{n_gpus}"
     out_path   = OUTPUT_ROOT / cell_tag
@@ -234,10 +262,10 @@ def render_job_script(level: int, n_gpus: int, executions: int, warmup: int) -> 
     echo_line = (f"Cell: {cell_tag}  level={level}  sdr={sdr}  subdomains={subdomains_for(sdr)}  "
                  f"executions={executions}  n_gpus={n_gpus}  nodes={nodes}x{tpn}  partition={PARTITION}")
     job_path = write_lumi_job(cell_tag, out_path, nodes, tpn,
-                              time_limit_for(level), bench_args, echo_line)
+                              time_limit or time_limit_for(level), bench_args, echo_line)
     return job_path, out_path, info
 
-def render_radial_job_script(cell: dict, executions: int, warmup: int) -> tuple[Path, Path, dict]:
+def render_radial_job_script(cell: dict, executions: int, warmup: int, time_limit: str = None) -> tuple[Path, Path, dict]:
     """One step of a radial-only weak diagonal: lateral fixed, radial level and
     radial subdomains grow by k, GPUs by 2**k. dofs and GCDs both x2 per step."""
     lat_level  = cell["lat_level"]
@@ -248,7 +276,7 @@ def render_radial_job_script(cell: dict, executions: int, warmup: int) -> tuple[
     n_gpus     = cell["n_gpus"]
     nodes, tpn = gpu_to_node_layout(n_gpus)
     subdomains = 10 * 4 ** lat_sdr * 2 ** rad_sdr
-    cell_tag   = f"RAD_l{lat_level}r{rad_level}_g{n_gpus}"
+    cell_tag   = cell.get("cell_tag") or f"RAD_l{lat_level}r{rad_level}_g{n_gpus}"
     out_path   = OUTPUT_ROOT / cell_tag
 
     info = dict(
@@ -267,7 +295,7 @@ def render_radial_job_script(cell: dict, executions: int, warmup: int) -> tuple[
                  f"n_gpus={n_gpus}  nodes={nodes}x{tpn}  partition={PARTITION}")
     # radial mesh can be deep; give the larger radial levels the longer budget.
     job_path = write_lumi_job(cell_tag, out_path, nodes, tpn,
-                              time_limit_for(rad_level), bench_args, echo_line)
+                              time_limit or time_limit_for(rad_level), bench_args, echo_line)
     return job_path, out_path, info
 
 def main(argv):
@@ -280,6 +308,8 @@ def main(argv):
                    help=f"matvec repetitions per timing (default: {DEFAULT_EXECUTIONS})")
     p.add_argument("--warmup", type=int, default=DEFAULT_WARMUP,
                    help=f"untimed warmup matvecs before timing (default: {DEFAULT_WARMUP})")
+    p.add_argument("--time-limit", type=str, default=None,
+                   help="override the SLURM walltime for every cell (e.g. 00:10:00)")
     p.add_argument("--weak", action="store_true",
                    help="weak-scaling diagonals at constant dofs/GCD "
                         "(n_gpus = base * 8^(level-7)) instead of the strong grid")
@@ -292,6 +322,9 @@ def main(argv):
     p.add_argument("--weak-max-gpus", type=int, default=WEAK_MAX_GPUS,
                    help=f"skip --weak / --weak-radial points above this many GCDs "
                         f"(default: {WEAK_MAX_GPUS} = 256 nodes)")
+    p.add_argument("--rad-levels", type=int, nargs="+", default=None,
+                   help=f"radial problem sizes (rad_level) for the default strong sweep "
+                        f"(default: {STRONG_RAD_LEVELS}); each +1 doubles total DoFs")
     p.add_argument("--weak-radial", action="store_true",
                    help="radial-only weak-scaling diagonals: lateral mesh fixed, radial "
                         "level+subdomains and GPUs x2 per step (dofs x2/step, constant dofs/GCD)")
@@ -303,35 +336,15 @@ def main(argv):
     JOB_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
-    # Build a render list of (kind, item): 'iso' -> (level, n_gpus); 'radial' -> cell dict.
-    if args.weak_radial:
-        cells = radial_cells(args.weak_radial_fills, args.weak_max_gpus)
-        render_list = [("radial", c) for c in cells]
-        print(f"radial-only weak-scaling diagonals (lateral fixed at level {RADIAL_LAT_LEVEL}, "
-              f"lat_sdr {RADIAL_LAT_SDR}; fills {args.weak_radial_fills} M-dofs/GCD): {len(cells)} cells")
-        dpg0 = DOFS_PER_LEVEL.get(RADIAL_LAT_LEVEL)
-        for c in cells:
-            n = c["n_gpus"]
-            nodes, _ = gpu_to_node_layout(n)
-            subdom = 10 * 4 ** c["lat_sdr"] * 2 ** c["rad_sdr"]
-            dpg_s = f"  dofs/GCD={dpg0 * 2**c['radial_extra'] / n / 1e6:5.1f}M" if dpg0 else ""
-            print(f"  fill={c['fill']:2}M  rad_level={c['rad_level']:2}  rad_sdr={c['rad_sdr']}  "
-                  f"n_gpus={n:5}  nodes={nodes:4}  subdom/GCD={subdom // n}{dpg_s}")
-    else:
-        if args.weak:
-            cells = weak_cells(args.weak_fills, WEAK_BASE_LEVEL,
-                               args.weak_max_level, args.weak_max_gpus)
-        else:
-            cells = [(level, n_gpus)
-                     for level, gpu_list in DEFAULT_SWEEP
-                     for n_gpus in gpu_list]
+    # Three modes. --weak uses 'iso' cells (level, n_gpus); --weak-radial and the
+    # default strong sweep use radial-style cell dicts rendered the same way.
+    if args.weak:
+        cells = weak_cells(args.weak_fills, WEAK_BASE_LEVEL,
+                           args.weak_max_level, args.weak_max_gpus)
         if args.levels is not None:
             cells = [(level, n_gpus) for (level, n_gpus) in cells if level in args.levels]
         render_list = [("iso", c) for c in cells]
-        if args.weak:
-            print(f"weak-scaling diagonals (fills {args.weak_fills} M-dofs/GCD): {len(cells)} cells")
-        else:
-            print(f"strong-scaling grid: {len(cells)} cells")
+        print(f"weak-scaling diagonals (fills {args.weak_fills} M-dofs/GCD): {len(cells)} cells")
         for (level, n_gpus) in cells:
             sdr = choose_sdr(n_gpus)
             nodes, _ = gpu_to_node_layout(n_gpus)
@@ -339,14 +352,34 @@ def main(argv):
             dpg_s = f"  dofs/GCD={dpg / n_gpus / 1e6:5.1f}M" if dpg else ""
             print(f"  level={level:2}  MT{2**level:<5}  n_gpus={n_gpus:5}  nodes={nodes:4}"
                   f"  sdr={sdr}  subdom/GCD={10 * 8**sdr // n_gpus}{dpg_s}")
+    else:
+        if args.weak_radial:
+            cells = radial_cells(args.weak_radial_fills, args.weak_max_gpus)
+            print(f"radial-only weak-scaling diagonals (lateral fixed at level {RADIAL_LAT_LEVEL}, "
+                  f"lat_sdr {RADIAL_LAT_SDR}; fills {args.weak_radial_fills} M-dofs/GCD): {len(cells)} cells")
+        else:
+            rad_levels = args.rad_levels or STRONG_RAD_LEVELS
+            cells = strong_cells(rad_levels, args.weak_max_gpus)
+            print(f"radial strong-scaling sweeps (lateral fixed at level {STRONG_LAT_LEVEL}, "
+                  f"lat_sdr {STRONG_LAT_SDR}; problems rad_level {rad_levels}): {len(cells)} cells")
+        render_list = [("radial", c) for c in cells]
+        dpg0 = DOFS_PER_LEVEL.get(RADIAL_LAT_LEVEL)
+        for c in cells:
+            n = c["n_gpus"]
+            nodes, _ = gpu_to_node_layout(n)
+            subdom = 10 * 4 ** c["lat_sdr"] * 2 ** c["rad_sdr"]
+            dpg_s = f"  dofs/GCD={dpg0 * 2 ** c['radial_extra'] / n / 1e6:6.1f}M" if dpg0 else ""
+            label = f"fill={c['fill']:3}M" if "fill" in c else f"prob=rad{c['rad_level']}"
+            print(f"  {label}  rad_level={c['rad_level']:2}  rad_sdr={c['rad_sdr']}  "
+                  f"n_gpus={n:5}  nodes={nodes:4}  subdom/GCD={subdom // n}{dpg_s}")
 
     submitted = []
     for kind, item in render_list:
         if kind == "radial":
-            job_path, out_path, info = render_radial_job_script(item, args.executions, args.warmup)
+            job_path, out_path, info = render_radial_job_script(item, args.executions, args.warmup, args.time_limit)
         else:
             level, n_gpus = item
-            job_path, out_path, info = render_job_script(level, n_gpus, args.executions, args.warmup)
+            job_path, out_path, info = render_job_script(level, n_gpus, args.executions, args.warmup, args.time_limit)
         if args.dry_run:
             print(f"  [dry-run] would submit: {job_path}")
         else:
@@ -361,16 +394,16 @@ def main(argv):
     if submitted and not args.dry_run:
         # Persist a manifest so collect_bench_mt.py can map cells -> job ids.
         # One manifest per mode so the three sweeps don't clobber each other.
-        if args.weak_radial:
-            manifest = JOB_DIR / "manifest_radial.txt"
+        if args.weak:
+            manifest = JOB_DIR / "manifest_weak.txt"
+            header = "# cell_tag\tjob_id\tlevel\tsdr\texecutions\tn_gpus\tnodes\ttasks_per_node\n"
+            fields = ["level", "sdr", "executions", "n_gpus", "nodes", "tasks_per_node"]
+        else:  # radial-style: --weak-radial diagonals or the default strong sweep
+            manifest = JOB_DIR / ("manifest_radial.txt" if args.weak_radial else "manifest_strong.txt")
             header = ("# cell_tag\tjob_id\tlat_level\trad_level\tlat_sdr\trad_sdr"
                       "\texecutions\tn_gpus\tnodes\ttasks_per_node\n")
             fields = ["lat_level", "rad_level", "lat_sdr", "rad_sdr",
                       "executions", "n_gpus", "nodes", "tasks_per_node"]
-        else:
-            manifest = JOB_DIR / ("manifest_weak.txt" if args.weak else "manifest.txt")
-            header = "# cell_tag\tjob_id\tlevel\tsdr\texecutions\tn_gpus\tnodes\ttasks_per_node\n"
-            fields = ["level", "sdr", "executions", "n_gpus", "nodes", "tasks_per_node"]
         with open(manifest, "w") as f:
             f.write(header)
             for info, jobid in submitted:

@@ -88,6 +88,11 @@ DEFAULT_SWEEP: list[tuple[int, list[int]]] = [
     (9,  [32, 64, 128, 256, 512, 1024]),      # MT512   actual 64..2048
     (10, [128, 256, 512, 1024]),              # MT1024  actual 256..2048
     (11, [512, 1024, 2048, 4096]),            # MT2048  actual 1024..8192
+    (12, [2048, 4096]),                       # MT4096  actual 4096..8192
+    # ^ MT4096 only fits at the largest GCD counts: ~126 M dofs/GCD (our proven
+    #   memory ceiling, = MT2048_g1024) needs g8192 = 1024 nodes (the partition
+    #   limit). g4096 (512 nodes) is ~251 M/GCD -- an OOM probe. Smaller counts OOM;
+    #   larger would exceed 1024 nodes. Requires --max-gcds 8192 to clear the cap.
 ]
 
 # Multiply every strong-grid GCD count by this (each cell runs at GCD_MULTIPLIER x
@@ -112,6 +117,7 @@ MAX_SAFE_GCDS = 1024
 DOFS_PER_LEVEL = {
     5: 1013958, 6: 7987590, 7: 63406854, 8: 505284102,
     9: 4034399238, 10: 32243718150, 11: 257627107000,
+    12: 2058460585000,   # extrapolated at x7.99 (MT4096)
 }
 
 def dofs_at(level: int) -> float | None:
@@ -300,6 +306,13 @@ echo "{echo_line}"
 export MPICH_GPU_SUPPORT_ENABLED=1
 export MPICH_GPU_NO_ASYNC_COPY=1
 export OMP_NUM_THREADS=1
+# Raise the libfabric memory-registration cache ceiling. At high rank counts the
+# halo exchange opens >10000 active MRs, exhausting the CXI provider default and
+# tripping a Cray MPICH internal assertion (cray_ch4_mem_utils.c) + segfault in
+# the first energy solve. Lifting the cache count (and the per-region cap) lets
+# the >=2048-rank cells register all their halo buffers.
+export FI_MR_CACHE_MAX_COUNT=1048576
+export FI_CXI_RX_MATCH_MODE=software
 ulimit -c 0
 
 # Per-GCD GPU binding wrapper (maps SLURM_LOCALID -> ROCR_VISIBLE_DEVICES).
@@ -401,6 +414,9 @@ def main(argv):
     p.add_argument("--gpus", type=int, nargs="+", default=None,
                    help="only submit cells whose final n_gpus is in this list "
                         "(applied after the GCD_MULTIPLIER; strong/weak grid only)")
+    p.add_argument("--max-gcds", type=int, default=MAX_SAFE_GCDS,
+                   help=f"skip cells above this GCD count (default: {MAX_SAFE_GCDS}, the "
+                        f"Cray MPICH MR-exhaustion wall); raise to attempt larger runs")
     p.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                    help=f"base config TOML (default: {DEFAULT_CONFIG.name})")
     p.add_argument("--max-timesteps", type=int, default=DEFAULT_MAX_TIMESTEPS,
@@ -448,10 +464,10 @@ def main(argv):
     # Build a render list of (kind, item): 'iso' -> (level, n_gpus); 'radial' -> cell dict.
     if args.weak_radial:
         cells = radial_cells(args.weak_radial_fills, args.weak_max_gpus)
-        over = [c for c in cells if c["n_gpus"] > MAX_SAFE_GCDS]
+        over = [c for c in cells if c["n_gpus"] > args.max_gcds]
         if over:
-            print(f"  SKIP {len(over)} radial cell(s) > {MAX_SAFE_GCDS} GCDs (Cray MPICH >=2048-rank crash)")
-            cells = [c for c in cells if c["n_gpus"] <= MAX_SAFE_GCDS]
+            print(f"  SKIP {len(over)} radial cell(s) > {args.max_gcds} GCDs (MR-exhaustion wall)")
+            cells = [c for c in cells if c["n_gpus"] <= args.max_gcds]
         render_list = [("radial", c) for c in cells]
         print(f"radial-only weak-scaling diagonals (lateral fixed at level {RADIAL_LAT_LEVEL}, "
               f"lat_sdr {RADIAL_LAT_SDR}; fills {args.weak_radial_fills} M-dofs/GCD): {len(cells)} cells")
@@ -478,11 +494,11 @@ def main(argv):
             cells = [(level, n_gpus) for (level, n_gpus) in cells if level in args.levels]
         if args.gpus is not None:
             cells = [(level, n_gpus) for (level, n_gpus) in cells if n_gpus in args.gpus]
-        over = [(l, n) for (l, n) in cells if n > MAX_SAFE_GCDS]
+        over = [(l, n) for (l, n) in cells if n > args.max_gcds]
         if over:
-            print(f"  SKIP {len(over)} cell(s) > {MAX_SAFE_GCDS} GCDs (Cray MPICH >=2048-rank crash): "
+            print(f"  SKIP {len(over)} cell(s) > {args.max_gcds} GCDs (MR-exhaustion wall): "
                   + ", ".join(f"MT{2**l}_g{n}" for l, n in over))
-            cells = [(l, n) for (l, n) in cells if n <= MAX_SAFE_GCDS]
+            cells = [(l, n) for (l, n) in cells if n <= args.max_gcds]
         render_list = [("iso", c) for c in cells]
         if args.weak:
             print(f"weak-scaling diagonals (fills {args.weak_fills} M-dofs/GCD): {len(cells)} cells")
