@@ -159,6 +159,11 @@ struct StokesSolverParameters
     double krylov_relative_tolerance = 1e-6;
     double krylov_absolute_tolerance = 1e-12;
 
+    /// Store the outer FGMRES Krylov basis in single precision while the operator,
+    /// preconditioner and orthogonalization stay double. Roughly halves the FGMRES
+    /// workspace memory; convergence is unaffected (the operator never sees float).
+    bool   float_krylov_basis        = false;
+
     int viscous_pc_num_vcycles                 = 1;
     int viscous_pc_chebyshev_order             = 2;
     int viscous_pc_num_smoothing_steps_prepost = 2;
@@ -547,6 +552,9 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Stokes Solver" );
     add_option_with_default(
         app, "--stokes-krylov-absolute-tolerance", parameters.stokes_solver_parameters.krylov_absolute_tolerance )
+        ->group( "Stokes Solver" );
+    add_flag_with_default(
+        app, "--stokes-float-krylov-basis", parameters.stokes_solver_parameters.float_krylov_basis )
         ->group( "Stokes Solver" );
     add_option_with_default(
         app, "--stokes-viscous-pc-num-vcycles", parameters.stokes_solver_parameters.viscous_pc_num_vcycles )

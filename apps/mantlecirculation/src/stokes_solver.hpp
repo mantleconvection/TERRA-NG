@@ -28,6 +28,7 @@
 #include "linalg/solvers/chebyshev.hpp"
 #include "linalg/solvers/diagonal_solver.hpp"
 #include "linalg/solvers/fgmres.hpp"
+#include "linalg/solvers/fgmres_lowmem.hpp"
 #include "linalg/solvers/gca/gca.hpp"
 #include "linalg/solvers/multigrid.hpp"
 #include "linalg/solvers/pcg.hpp"
@@ -163,7 +164,13 @@ class StokesContext
     using PrecSchur  = linalg::solvers::DiagonalSolver< PressureMass >;
     using PrecStokes = linalg::solvers::
         BlockTriangularPreconditioner2x2< Stokes, Viscous, PressureMass, Gradient, PrecVisc, PrecSchur >;
-    using FGMRESType = linalg::solvers::FGMRES< Stokes, PrecStokes >;
+    // Outer solver: either the standard double FGMRES or the low-memory variant
+    // that stores the Krylov basis in single precision (operator/preconditioner/
+    // orthogonalization stay in ScalarType). Selected at runtime via
+    // --stokes-float-krylov-basis.
+    using BasisVectorType = linalg::VectorQ1IsoQ2Q1< float, 3 >;
+    using FGMRESDouble    = linalg::solvers::FGMRES< Stokes, PrecStokes >;
+    using FGMRESFloat     = linalg::solvers::FGMRESLowMem< Stokes, BasisVectorType, PrecStokes >;
 
   public:
     StokesContext(
@@ -291,17 +298,51 @@ class StokesContext
             assign( GCAElements_, 1 );
         }
 
-        // ---------------- FGMRES (Stokes) tmp vectors ----------------
-        const auto num_stokes_fgmres_tmps = 2 * prm_.stokes_solver_parameters.krylov_restart + 4;
-        stokes_tmp_fgmres_.reserve( num_stokes_fgmres_tmps );
-        for ( int i = 0; i < num_stokes_fgmres_tmps; i++ )
+        // ---------------- FGMRES (Stokes) workspace ----------------
+        // Two layouts, selected by --stokes-float-krylov-basis:
+        //   double path: 2*restart+4 full-precision vectors.
+        //   float-basis path: 4 full-precision scratch (r, w, v_scratch, z_scratch)
+        //                     + a single-precision Krylov basis of 2*restart+1.
+        // Only the active layout is allocated.
+        use_float_basis_ = prm_.stokes_solver_parameters.float_krylov_basis;
+        if ( use_float_basis_ )
         {
-            stokes_tmp_fgmres_.emplace_back(
-                "stokes_tmp_fgmres",
-                *domains_[velocity_level_],
-                *domains_[pressure_level_],
-                ownership_mask_[velocity_level_],
-                ownership_mask_[pressure_level_] );
+            constexpr int kNumStokesWork = 4;
+            stokes_work_fgmres_.reserve( kNumStokesWork );
+            for ( int i = 0; i < kNumStokesWork; i++ )
+            {
+                stokes_work_fgmres_.emplace_back(
+                    "stokes_work_fgmres",
+                    *domains_[velocity_level_],
+                    *domains_[pressure_level_],
+                    ownership_mask_[velocity_level_],
+                    ownership_mask_[pressure_level_] );
+            }
+            const int num_stokes_basis = 2 * prm_.stokes_solver_parameters.krylov_restart + 1;
+            stokes_basis_fgmres_.reserve( num_stokes_basis );
+            for ( int i = 0; i < num_stokes_basis; i++ )
+            {
+                stokes_basis_fgmres_.emplace_back(
+                    "stokes_basis_fgmres",
+                    *domains_[velocity_level_],
+                    *domains_[pressure_level_],
+                    ownership_mask_[velocity_level_],
+                    ownership_mask_[pressure_level_] );
+            }
+        }
+        else
+        {
+            const int num_stokes_fgmres_tmps = 2 * prm_.stokes_solver_parameters.krylov_restart + 4;
+            stokes_tmp_fgmres_.reserve( num_stokes_fgmres_tmps );
+            for ( int i = 0; i < num_stokes_fgmres_tmps; i++ )
+            {
+                stokes_tmp_fgmres_.emplace_back(
+                    "stokes_tmp_fgmres",
+                    *domains_[velocity_level_],
+                    *domains_[pressure_level_],
+                    ownership_mask_[velocity_level_],
+                    ownership_mask_[pressure_level_] );
+            }
         }
 
         // ---------------- Multigrid tmp vectors ----------------
@@ -596,17 +637,25 @@ class StokesContext
             K_->block_11(), *pmass_, K_->block_12(), triangular_prec_tmp_, *prec_11_, *inv_lumped_pmass_ );
 
         // ---------------- Outer FGMRES ----------------
-        logroot << "Setting up FGMRES ..." << std::endl;
-        stokes_fgmres_ = std::make_unique< FGMRESType >(
-            stokes_tmp_fgmres_,
-            linalg::solvers::FGMRESOptions{
-                .restart                     = prm_.stokes_solver_parameters.krylov_restart,
-                .relative_residual_tolerance = prm_.stokes_solver_parameters.krylov_relative_tolerance,
-                .absolute_residual_tolerance = prm_.stokes_solver_parameters.krylov_absolute_tolerance,
-                .max_iterations              = prm_.stokes_solver_parameters.krylov_max_iterations },
-            table_,
-            *prec_stokes_ );
-        stokes_fgmres_->set_tag( "stokes_fgmres" );
+        logroot << "Setting up FGMRES ... (Krylov basis precision: "
+                << ( use_float_basis_ ? "single" : "double" ) << ")" << std::endl;
+        const linalg::solvers::FGMRESOptions< ScalarType > stokes_fgmres_opts{
+            .restart                     = prm_.stokes_solver_parameters.krylov_restart,
+            .relative_residual_tolerance = prm_.stokes_solver_parameters.krylov_relative_tolerance,
+            .absolute_residual_tolerance = prm_.stokes_solver_parameters.krylov_absolute_tolerance,
+            .max_iterations              = prm_.stokes_solver_parameters.krylov_max_iterations };
+        if ( use_float_basis_ )
+        {
+            stokes_fgmres_float_ = std::make_unique< FGMRESFloat >(
+                stokes_work_fgmres_, stokes_basis_fgmres_, stokes_fgmres_opts, table_, *prec_stokes_ );
+            stokes_fgmres_float_->set_tag( "stokes_fgmres" );
+        }
+        else
+        {
+            stokes_fgmres_double_ = std::make_unique< FGMRESDouble >(
+                stokes_tmp_fgmres_, stokes_fgmres_opts, table_, *prec_stokes_ );
+            stokes_fgmres_double_->set_tag( "stokes_fgmres" );
+        }
     }
 
     // Public accessors needed by the rest of the app.
@@ -672,7 +721,10 @@ class StokesContext
 
         util::logroot << "Solving Stokes ..." << std::endl;
 
-        ::terra::linalg::solvers::solve( *stokes_fgmres_, *K_, stok_vecs_["u"], stok_vecs_["f"] );
+        if ( use_float_basis_ )
+            ::terra::linalg::solvers::solve( *stokes_fgmres_float_, *K_, stok_vecs_["u"], stok_vecs_["f"] );
+        else
+            ::terra::linalg::solvers::solve( *stokes_fgmres_double_, *K_, stok_vecs_["u"], stok_vecs_["f"] );
 
         if ( log_convergence )
         {
@@ -715,7 +767,9 @@ class StokesContext
     std::vector< linalg::VectorQ1Scalar< ScalarType > >    eta_;
     linalg::VectorQ1Scalar< ScalarType >                   GCAElements_;
     std::map< std::string, linalg::VectorQ1IsoQ2Q1< ScalarType > > stok_vecs_;
-    std::vector< linalg::VectorQ1IsoQ2Q1< ScalarType > >   stokes_tmp_fgmres_;
+    std::vector< linalg::VectorQ1IsoQ2Q1< ScalarType > >   stokes_tmp_fgmres_;   // double path
+    std::vector< linalg::VectorQ1IsoQ2Q1< ScalarType > >   stokes_work_fgmres_;  // float-basis path: scratch
+    std::vector< BasisVectorType >                         stokes_basis_fgmres_; // float-basis path: basis
     std::vector< linalg::VectorQ1Vec< ScalarType > >       tmp_mg_;
     std::vector< linalg::VectorQ1Vec< ScalarType > >       tmp_mg_2_;
     std::vector< linalg::VectorQ1Vec< ScalarType > >       tmp_mg_r_;
@@ -746,10 +800,13 @@ class StokesContext
     linalg::VectorQ1Scalar< ScalarType >                   lumped_diagonal_pmass_;
     std::unique_ptr< PrecSchur >                           inv_lumped_pmass_;
 
-    // Outer Stokes preconditioner / solver.
+    // Outer Stokes preconditioner / solver. Exactly one of the two FGMRES variants
+    // is allocated, selected by use_float_basis_ (--stokes-float-krylov-basis).
     linalg::VectorQ1IsoQ2Q1< ScalarType >                  triangular_prec_tmp_;
     std::unique_ptr< PrecStokes >                          prec_stokes_;
-    std::unique_ptr< FGMRESType >                          stokes_fgmres_;
+    bool                                                   use_float_basis_ = false;
+    std::unique_ptr< FGMRESDouble >                        stokes_fgmres_double_;
+    std::unique_ptr< FGMRESFloat >                         stokes_fgmres_float_;
 };
 
 } // namespace terra::mantlecirculation

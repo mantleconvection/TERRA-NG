@@ -248,6 +248,29 @@ void invert_inplace( const grid::Grid4DDataVec< ScalarType, VecDim >& y )
         invert_inplace( y.comp_[d] );
 }
 
+/// @brief Elementwise copy with scalar-type conversion: dst <- (DstScalar) src.
+/// Used for mixed-precision storage (e.g. a float Krylov basis with a double solver).
+template < typename DstScalar, typename SrcScalar >
+void copy_convert( const grid::Grid4DDataScalar< SrcScalar >& src, const grid::Grid4DDataScalar< DstScalar >& dst )
+{
+    Kokkos::parallel_for(
+        "copy_convert",
+        Kokkos::MDRangePolicy(
+            { 0, 0, 0, 0 }, { src.extent( 0 ), src.extent( 1 ), src.extent( 2 ), src.extent( 3 ) } ),
+        KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
+            dst( local_subdomain, i, j, k ) = static_cast< DstScalar >( src( local_subdomain, i, j, k ) );
+        } );
+
+    Kokkos::fence();
+}
+
+template < typename DstScalar, typename SrcScalar, int VecDim >
+void copy_convert( const grid::Grid4DDataVec< SrcScalar, VecDim >& src, const grid::Grid4DDataVec< DstScalar, VecDim >& dst )
+{
+    for ( int d = 0; d < VecDim; ++d )
+        copy_convert( src.comp_[d], dst.comp_[d] );
+}
+
 template < typename ScalarType >
 void mult_elementwise_inplace(
     const grid::Grid4DDataScalar< ScalarType >& y,
