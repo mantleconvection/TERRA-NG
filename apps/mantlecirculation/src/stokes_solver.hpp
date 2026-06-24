@@ -44,6 +44,7 @@
 #include "mpi/level_comms.hpp"
 
 #include "build_radii.hpp"
+#include "hbm_probe.hpp"
 #include "interpolators.hpp"
 #include "parameters.hpp"
 
@@ -298,6 +299,7 @@ class StokesContext
             assign( GCAElements_, 1 );
         }
 
+        log_hbm( "stokes: before FGMRES workspace" );
         // ---------------- FGMRES (Stokes) workspace ----------------
         // Two layouts, selected by --stokes-float-krylov-basis:
         //   double path: 2*restart+4 full-precision vectors.
@@ -344,6 +346,8 @@ class StokesContext
                     ownership_mask_[pressure_level_] );
             }
         }
+
+        log_hbm( "stokes: after FGMRES workspace (delta = Krylov basis+scratch)" );
 
         // ---------------- Multigrid tmp vectors ----------------
         for ( int level = 0; level < num_levels_; level++ )
@@ -656,6 +660,8 @@ class StokesContext
                 stokes_tmp_fgmres_, stokes_fgmres_opts, table_, *prec_stokes_ );
             stokes_fgmres_double_->set_tag( "stokes_fgmres" );
         }
+
+        log_hbm( "stokes: ctor end (delta = MG hierarchy + operators + coarse + preconditioner)" );
     }
 
     // Public accessors needed by the rest of the app.

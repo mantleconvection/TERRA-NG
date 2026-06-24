@@ -43,6 +43,7 @@
 #include "linalg/vector_q1isoq2_q1.hpp"
 #include "src/diagnostics.hpp"
 #include "src/build_radii.hpp"
+#include "src/hbm_probe.hpp"
 #include "src/energy_solver.hpp"
 #include "src/interpolators.hpp"
 #include "src/io.hpp"
@@ -215,6 +216,7 @@ Result<> run( const Parameters& prm )
     }
 
     // ---- Stokes solver context: viscosity hierarchy, GCA, MG, Schur, FGMRES.
+    log_hbm( "before StokesContext (domains + grids only)" );
     StokesContext< ScalarType > stokes(
         domains,
         coords_shell,
@@ -410,6 +412,8 @@ Result<> run( const Parameters& prm )
                 << "  [timestep 0, before time stepping]" << std::endl;
     }
 
+    log_hbm( "after all solver setup (Stokes + Energy), before time stepping" );
+
     for ( int timestep = timestep_initial + 1; timestep < prm.time_stepping_parameters.max_timesteps; timestep++ )
     {
         logroot << "\n### Timestep " << timestep << " ###" << std::endl;
@@ -438,6 +442,9 @@ Result<> run( const Parameters& prm )
 
             // --- Stokes solve ---
             stokes.solve( T, /*log_convergence=*/( picard == num_picard - 1 ) );
+
+            if ( timestep == timestep_initial + 1 && picard == 0 )
+                log_hbm( "after first Stokes solve (peak)" );
 
             // --- Energy solve (polymorphic dispatch) ---
             energy->step( dt, /*print_convergence=*/( picard == num_picard - 1 ) );
