@@ -27,6 +27,7 @@
 #include "util/table.hpp"
 #include "util/timer.hpp"
 
+#include "hbm_probe.hpp"
 #include "parameters.hpp"
 
 namespace terra::mantlecirculation {
@@ -325,6 +326,7 @@ class EVSolver : public EnergySolver< ScalarType >
     , T_prev_backup_( "ev_T_prev_backup", *domain_, ownership_mask_ )
     {
         util::logroot << "Setting up entropy-viscosity (EV) energy solver ..." << std::endl;
+        log_hbm( "EV: after Q1 scalar fields (T_prev/rhs/lap/M_lumped/backups/g/tmp/q/diag)" );
 
         // Per-wedge ν_h field: extents (#subdomains, N-1, N-1, N_r-1, num_wedges).
         const auto num_sub = static_cast< long long >( domain_->subdomains().size() );
@@ -357,6 +359,7 @@ class EVSolver : public EnergySolver< ScalarType >
         kappa_wedge_ = grid::Grid5DDataScalar< ScalarType >(
             "ev_kappa_wedge", num_sub, nx_c, nx_c, nr_c, fe::wedge::num_wedges_per_hex_cell );
         kernels::common::set_constant( kappa_wedge_, prm_.physics_parameters.diffusivity );
+        log_hbm( "EV: + nu_h_wedge + kappa_wedge (2 Grid5D per-wedge fields)" );
         A_kappa_ = std::make_unique< EVDiffOp >(
             *domain_, coords_shell_, coords_radii_, kappa_wedge_ );
 
@@ -392,7 +395,7 @@ class EVSolver : public EnergySolver< ScalarType >
         if ( use_float_basis_ )
         {
             // 4 double scratch + single-precision basis (2*restart+1).
-            constexpr int kNumWork = 4;
+            constexpr int kNumWork = 3; // FGMRESLowMem aliases r/w
             tmp_gmres_.reserve( kNumWork );
             for ( int i = 0; i < kNumWork; ++i )
                 tmp_gmres_.emplace_back( "tmp_ev_gmres_work", *domain_, ownership_mask_ );

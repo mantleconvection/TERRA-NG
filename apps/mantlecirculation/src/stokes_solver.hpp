@@ -320,7 +320,7 @@ class StokesContext
         use_float_basis_ = prm_.stokes_solver_parameters.float_krylov_basis;
         if ( use_float_basis_ )
         {
-            constexpr int kNumStokesWork = 4;
+            constexpr int kNumStokesWork = 3; // FGMRESLowMem aliases r/w
             stokes_work_fgmres_.reserve( kNumStokesWork );
             for ( int i = 0; i < kNumStokesWork; i++ )
             {

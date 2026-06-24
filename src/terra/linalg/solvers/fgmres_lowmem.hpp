@@ -66,10 +66,13 @@ class FGMRESLowMem
     {
         util::Timer timer_fgmres_solve( "fgmres_solve" );
 
+        // r (residual) and w (= A*z_j) are never live simultaneously: r is only used
+        // at restart boundaries (seed V_0, recompute residual), w only inside the inner
+        // Arnoldi loop. So they share one scratch slot -> 3 work vectors instead of 4.
         auto& r      = work_[0];
-        auto& w      = work_[1];
-        auto& v_work = work_[2]; // double scratch for a basis vector in arithmetic
-        auto& z_work = work_[3]; // double scratch for the current preconditioned direction
+        auto& w      = work_[0];
+        auto& v_work = work_[1]; // double scratch for a basis vector in arithmetic
+        auto& z_work = work_[2]; // double scratch for the current preconditioned direction
 
         {
             util::Timer t_mv( "fgmres_matvec" );
@@ -93,9 +96,9 @@ class FGMRESLowMem
 
         const int m_req = options_.restart;
 
-        if ( static_cast< int >( work_.size() ) < 4 )
+        if ( static_cast< int >( work_.size() ) < 3 )
         {
-            std::cerr << "FGMRESLowMem: need >= 4 work vectors, got " << work_.size() << std::endl;
+            std::cerr << "FGMRESLowMem: need >= 3 work vectors, got " << work_.size() << std::endl;
             Kokkos::abort( "FGMRESLowMem: insufficient work vectors" );
         }
         if ( static_cast< int >( basis_.size() ) < 2 * m_req + 1 )
