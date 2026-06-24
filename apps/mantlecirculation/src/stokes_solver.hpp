@@ -401,6 +401,13 @@ class StokesContext
         M_ = std::make_unique< ViscousMass >(
             *domains_[velocity_level_], coords_shell_[velocity_level_], coords_radii_[velocity_level_], false );
 
+        // The double-precision velocity multigrid (coarse operators, GCA, smoothers,
+        // coarse solver, prec_11_) is only built when --stokes-mg-precision=double.
+        // For float, LowPrecVCycle builds its own hierarchy, so this is skipped and
+        // its memory is never allocated.
+        const bool build_double_mg = ( prm_.stokes_solver_parameters.mg_precision == MGPrecision::DOUBLE );
+        if ( build_double_mg )
+        {
         // ---------------- Coarse grid operators / transfer ----------------
         logroot << "Setting up Stokes solver and preconditioners ..." << std::endl;
 
@@ -611,6 +618,7 @@ class StokesContext
             std::move( redistribute_down ),
             std::move( tmp_mg_r_fine ),
             std::move( tmp_mg_e_fine ) );
+        } // end if ( build_double_mg )
 
         // ---------------- Schur preconditioner ----------------
         logroot << "Setting up Schur complement preconditioner ..." << std::endl;
