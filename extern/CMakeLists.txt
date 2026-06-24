@@ -1,1 +1,1 @@
-add_subdirectory(kokkos-4.6.01)
+add_subdirectory(kokkos-5.1.0)

@@ -180,7 +180,7 @@ class StokesContext
     // no half arithmetic is instantiated; entries (~6e-5) are covered by FP16 denorms.
     // (BF16 would need Kokkos >= 5.1.0 and gives no benefit here -- fewer mantissa
     //  bits, and FP16's range proved sufficient.)
-    using BasisVectorType = linalg::VectorQ1IsoQ2Q1< Kokkos::Experimental::half_t, 3 >;
+    using BasisVectorType = linalg::VectorQ1IsoQ2Q1< Kokkos::Experimental::bhalf_t, 3 >;
     using FGMRESDouble    = linalg::solvers::FGMRES< Stokes, PrecStokes >;
     using FGMRESFloat     = linalg::solvers::FGMRESLowMem< Stokes, BasisVectorType, PrecStokes >;
 

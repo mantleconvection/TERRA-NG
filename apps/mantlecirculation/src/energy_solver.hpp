@@ -289,7 +289,7 @@ class EVSolver : public EnergySolver< ScalarType >
     using FGMRESDouble = linalg::solvers::FGMRES< AD_EV, DiagSolverT >;
     // Reduced-precision Krylov basis variant (operator stays double). FP16 storage
     // (native __half on HIP): basis is store-only + convert, so no half arithmetic.
-    using BasisVecT    = linalg::VectorQ1Scalar< Kokkos::Experimental::half_t >;
+    using BasisVecT    = linalg::VectorQ1Scalar< Kokkos::Experimental::bhalf_t >;
     using FGMRESFloat  = linalg::solvers::FGMRESLowMem< AD_EV, BasisVecT, DiagSolverT >;
 
   public:
