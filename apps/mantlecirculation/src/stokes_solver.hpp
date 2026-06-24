@@ -47,6 +47,7 @@
 #include "build_radii.hpp"
 #include "hbm_probe.hpp"
 #include "interpolators.hpp"
+#include "low_prec_vcycle.hpp"
 #include "parameters.hpp"
 
 namespace terra::mantlecirculation {
@@ -647,11 +648,31 @@ class StokesContext
             ownership_mask_[velocity_level_],
             ownership_mask_[pressure_level_] );
 
-        // Wrap the velocity preconditioner in the type-erased handle. For now this
-        // forwards to the double multigrid (*prec_11_); --stokes-mg-precision will
-        // swap in a reduced-precision V-cycle impl here.
-        VelPrecHandle vel_prec(
-            std::make_shared< linalg::solvers::ForwardingPrecImpl< Viscous, PrecVisc > >( *prec_11_ ) );
+        // Select the velocity-preconditioner precision at runtime (--stokes-mg-precision).
+        // double -> forward to the existing double multigrid; float/half -> a V-cycle
+        // whose whole hierarchy runs in that precision (LowPrecVCycle).
+        std::shared_ptr< typename VelPrecHandle::Impl > vel_impl;
+        switch ( prm_.stokes_solver_parameters.mg_precision )
+        {
+        case MGPrecision::FLOAT:
+            vel_impl = std::make_shared< LowPrecVCycle< float, Viscous > >(
+                domains_, coords_shell_, coords_radii_, boundary_mask_, ownership_mask_, eta_, bcs_, prm_, table_ );
+            break;
+        case MGPrecision::HALF:
+            // The EpsDivDiv operator does not compile/run with half-precision geometry
+            // (coordinate differencing in the Jacobian needs >= float). A half *V-cycle*
+            // would require keeping the operator/coords >= float (vectors-only half),
+            // which is a separate mixed-precision-within-the-operator change.
+            logroot << "ERROR: --stokes-mg-precision half is not supported (the velocity "
+                       "operator needs >= float geometry). Use 'float'." << std::endl;
+            Kokkos::abort( "stokes-mg-precision: half unsupported" );
+            break;
+        case MGPrecision::DOUBLE:
+        default:
+            vel_impl = std::make_shared< linalg::solvers::ForwardingPrecImpl< Viscous, PrecVisc > >( *prec_11_ );
+            break;
+        }
+        VelPrecHandle vel_prec( vel_impl );
         prec_stokes_ = std::make_unique< PrecStokes >(
             K_->block_11(), *pmass_, K_->block_12(), triangular_prec_tmp_, vel_prec, *inv_lumped_pmass_ );
 

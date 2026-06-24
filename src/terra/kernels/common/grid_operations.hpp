@@ -264,6 +264,32 @@ void copy_convert( const grid::Grid4DDataScalar< SrcScalar >& src, const grid::G
     Kokkos::fence();
 }
 
+/// @brief Convert a 2D scalar grid (e.g. radial coordinates) to another precision.
+template < typename DstScalar, typename SrcScalar >
+void copy_convert( const grid::Grid2DDataScalar< SrcScalar >& src, const grid::Grid2DDataScalar< DstScalar >& dst )
+{
+    Kokkos::parallel_for(
+        "copy_convert_2d",
+        Kokkos::MDRangePolicy< Kokkos::Rank< 2 > >( { 0, 0 }, { src.extent( 0 ), src.extent( 1 ) } ),
+        KOKKOS_LAMBDA( int i, int j ) { dst( i, j ) = static_cast< DstScalar >( src( i, j ) ); } );
+    Kokkos::fence();
+}
+
+/// @brief Convert a 3D vector grid (e.g. shell coordinates) to another precision.
+template < typename DstScalar, typename SrcScalar, int VecDim >
+void copy_convert( const grid::Grid3DDataVec< SrcScalar, VecDim >& src, const grid::Grid3DDataVec< DstScalar, VecDim >& dst )
+{
+    Kokkos::parallel_for(
+        "copy_convert_3dvec",
+        Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >(
+            { 0, 0, 0 }, { src.extent( 0 ), src.extent( 1 ), src.extent( 2 ) } ),
+        KOKKOS_LAMBDA( int i, int j, int k ) {
+            for ( int d = 0; d < VecDim; ++d )
+                dst( i, j, k, d ) = static_cast< DstScalar >( src( i, j, k, d ) );
+        } );
+    Kokkos::fence();
+}
+
 template < typename DstScalar, typename SrcScalar, int VecDim >
 void copy_convert( const grid::Grid4DDataVec< SrcScalar, VecDim >& src, const grid::Grid4DDataVec< DstScalar, VecDim >& dst )
 {

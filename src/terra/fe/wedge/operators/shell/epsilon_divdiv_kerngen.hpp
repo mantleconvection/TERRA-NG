@@ -1158,7 +1158,7 @@ class EpsilonDivDivKerngen
 
                     for ( int boundary_node_idx = 0; boundary_node_idx < 3; boundary_node_idx++ )
                     {
-                        dense::Vec< double, 3 > normal = grid::shell::coords(
+                        dense::Vec< ScalarType, 3 > normal = grid::shell::coords(
                             local_subdomain_id,
                             x_cell + layer_hex_offset_x[wedge][boundary_node_idx],
                             y_cell + layer_hex_offset_y[wedge][boundary_node_idx],
