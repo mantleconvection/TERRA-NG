@@ -306,4 +306,18 @@ class VectorQ1Vec
 /// @brief Static assertion: VectorQ1Vec satisfies VectorLike concept.
 static_assert( VectorLike< VectorQ1Vec< double, 3 > > );
 
+/// @brief Copy a scalar vector into one of (possibly) different precision (elementwise cast).
+/// Used for reduced-precision storage (e.g. a float Krylov basis with a double solver).
+template < typename DstScalar, typename SrcScalar >
+void convert( const VectorQ1Scalar< SrcScalar >& src, VectorQ1Scalar< DstScalar >& dst )
+{
+    kernels::common::copy_convert( src.grid_data(), dst.grid_data() );
+}
+
+template < typename DstScalar, typename SrcScalar, int VecDim >
+void convert( const VectorQ1Vec< SrcScalar, VecDim >& src, VectorQ1Vec< DstScalar, VecDim >& dst )
+{
+    kernels::common::copy_convert( src.grid_data(), dst.grid_data() );
+}
+
 } // namespace terra::linalg

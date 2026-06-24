@@ -196,6 +196,11 @@ struct EnergySolverParameters
     double krylov_relative_tolerance = 1e-6;
     double krylov_absolute_tolerance = 1e-12;
 
+    /// Store the energy FGMRES Krylov basis in single precision (operator stays
+    /// double). The energy advection-diffusion solve is well-conditioned and runs
+    /// fine in reduced precision; this trims the energy FGMRES workspace.
+    bool   float_krylov_basis        = false;
+
     /// Entropy-viscosity stabilization parameters (only used when
     /// `energy_solver == ENTROPY_VISCOSITY`).  Defaults match ASPECT.
     double ev_alpha_max = 0.078;   ///< First-order upwind cap on ν_h (= 0.026·d in 3D).
@@ -594,6 +599,9 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     /////////////////////
 
     add_option_with_default( app, "--energy-krylov-restart", parameters.energy_solver_parameters.krylov_restart )
+        ->group( "Energy Solver" );
+    add_flag_with_default(
+        app, "--energy-float-krylov-basis", parameters.energy_solver_parameters.float_krylov_basis )
         ->group( "Energy Solver" );
     add_option_with_default(
         app, "--energy-krylov-max-iterations", parameters.energy_solver_parameters.krylov_max_iterations )

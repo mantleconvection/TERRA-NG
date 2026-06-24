@@ -20,6 +20,7 @@
 #include "kokkos/kokkos_wrapper.hpp"
 #include "linalg/solvers/diagonal_solver.hpp"
 #include "linalg/solvers/fgmres.hpp"
+#include "linalg/solvers/fgmres_lowmem.hpp"
 #include "linalg/vector_fv.hpp"
 #include "linalg/vector_q1.hpp"
 #include "util/logging.hpp"
@@ -284,7 +285,11 @@ class EVSolver : public EnergySolver< ScalarType >
     using TempMass  = fe::wedge::operators::shell::Mass< ScalarType >;
     using EVDiffOp  = fe::wedge::operators::shell::WedgeConstantDivKGrad< ScalarType >;
     using DiagSolverT = linalg::solvers::DiagonalSolver< AD_EV >;
-    using FGMRESType  = linalg::solvers::FGMRES< AD_EV, DiagSolverT >;
+    using FGMRESDouble = linalg::solvers::FGMRES< AD_EV, DiagSolverT >;
+    // Reduced-precision Krylov basis variant (operator stays double). FP16 storage
+    // (native __half on HIP): basis is store-only + convert, so no half arithmetic.
+    using BasisVecT    = linalg::VectorQ1Scalar< Kokkos::Experimental::half_t >;
+    using FGMRESFloat  = linalg::solvers::FGMRESLowMem< AD_EV, BasisVecT, DiagSolverT >;
 
   public:
     EVSolver(
@@ -378,22 +383,35 @@ class EVSolver : public EnergySolver< ScalarType >
             linalg::apply( *A_neumann_diag_, ones, diag_ );
         }
 
-        constexpr int num_gmres_tmps = 14;
-        tmp_gmres_.reserve( num_gmres_tmps );
-        for ( int i = 0; i < num_gmres_tmps; ++i )
+        use_float_basis_ = prm_.energy_solver_parameters.float_krylov_basis;
+        const linalg::solvers::FGMRESOptions< ScalarType > ev_fgmres_opts{
+            .restart                     = prm_.energy_solver_parameters.krylov_restart,
+            .relative_residual_tolerance = prm_.energy_solver_parameters.krylov_relative_tolerance,
+            .absolute_residual_tolerance = prm_.energy_solver_parameters.krylov_absolute_tolerance,
+            .max_iterations              = prm_.energy_solver_parameters.krylov_max_iterations };
+        if ( use_float_basis_ )
         {
-            tmp_gmres_.emplace_back( "tmp_ev_gmres", *domain_, ownership_mask_ );
+            // 4 double scratch + single-precision basis (2*restart+1).
+            constexpr int kNumWork = 4;
+            tmp_gmres_.reserve( kNumWork );
+            for ( int i = 0; i < kNumWork; ++i )
+                tmp_gmres_.emplace_back( "tmp_ev_gmres_work", *domain_, ownership_mask_ );
+            const int num_basis = 2 * prm_.energy_solver_parameters.krylov_restart + 1;
+            basis_gmres_.reserve( num_basis );
+            for ( int i = 0; i < num_basis; ++i )
+                basis_gmres_.emplace_back( "tmp_ev_gmres_basis", *domain_, ownership_mask_ );
+            solver_float_ = std::make_unique< FGMRESFloat >(
+                tmp_gmres_, basis_gmres_, ev_fgmres_opts, table_, DiagSolverT( diag_ ) );
         }
-
-        solver_ = std::make_unique< FGMRESType >(
-            tmp_gmres_,
-            linalg::solvers::FGMRESOptions{
-                .restart                     = prm_.energy_solver_parameters.krylov_restart,
-                .relative_residual_tolerance = prm_.energy_solver_parameters.krylov_relative_tolerance,
-                .absolute_residual_tolerance = prm_.energy_solver_parameters.krylov_absolute_tolerance,
-                .max_iterations              = prm_.energy_solver_parameters.krylov_max_iterations },
-            table_,
-            DiagSolverT( diag_ ) );
+        else
+        {
+            constexpr int num_gmres_tmps = 14;
+            tmp_gmres_.reserve( num_gmres_tmps );
+            for ( int i = 0; i < num_gmres_tmps; ++i )
+                tmp_gmres_.emplace_back( "tmp_ev_gmres", *domain_, ownership_mask_ );
+            solver_double_ = std::make_unique< FGMRESDouble >(
+                tmp_gmres_, ev_fgmres_opts, table_, DiagSolverT( diag_ ) );
+        }
 
         // Bootstrap T_prev = T so ∂_t E = 0 on step 1.
         Kokkos::deep_copy( T_prev_.grid_data(), T_.grid_data() );
@@ -821,7 +839,10 @@ class EVSolver : public EnergySolver< ScalarType >
                 boundary_mask_, grid::shell::ShellBoundaryFlag::BOUNDARY );
 
             // 7) Solve (M + dt · A_galerkin) T^{n+1} = q.
-            solve( *solver_, *A_, T_, q_ );
+            if ( use_float_basis_ )
+                solve( *solver_float_, *A_, T_, q_ );
+            else
+                solve( *solver_double_, *A_, T_, q_ );
 
             if ( print_convergence )
             {
@@ -847,7 +868,9 @@ class EVSolver : public EnergySolver< ScalarType >
     std::unique_ptr< AD_EV >                                                A_, A_neumann_, A_neumann_diag_;
     std::unique_ptr< TempMass >                                             M_;
     std::unique_ptr< EVDiffOp >                                             A_evdiff_, A_kappa_;
-    std::unique_ptr< FGMRESType >                                           solver_;
+    bool                                                                    use_float_basis_ = false;
+    std::unique_ptr< FGMRESDouble >                                         solver_double_;
+    std::unique_ptr< FGMRESFloat >                                          solver_float_;
 
     linalg::VectorQ1Scalar< ScalarType >                                    g_, tmp_, q_, diag_;
     linalg::VectorQ1Scalar< ScalarType >                                    T_prev_;
@@ -860,6 +883,7 @@ class EVSolver : public EnergySolver< ScalarType >
     grid::Grid5DDataScalar< ScalarType >                                    kappa_wedge_;
     fe::wedge::operators::shell::EntropyViscosityParameters< ScalarType >   ev_params_{};
     std::vector< linalg::VectorQ1Scalar< ScalarType > >                     tmp_gmres_;
+    std::vector< BasisVecT >                                                basis_gmres_;
 
     // Q1-nodal diagnostic field (only allocated when ev_dump_nu_h is on).
     std::unique_ptr< linalg::VectorQ1Scalar< ScalarType > >                 nu_h_nodal_diag_;
