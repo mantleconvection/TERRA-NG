@@ -33,6 +33,7 @@
 #include "linalg/solvers/multigrid.hpp"
 #include "linalg/solvers/pcg.hpp"
 #include "linalg/solvers/power_iteration.hpp"
+#include "linalg/solvers/velocity_prec_handle.hpp"
 #include "linalg/vector_q1.hpp"
 #include "linalg/vector_q1isoq2_q1.hpp"
 #include "mpi/mpi.hpp"
@@ -163,8 +164,11 @@ class StokesContext
                                                           CoarseGridSolver,
                                                           Redistribute >;
     using PrecSchur  = linalg::solvers::DiagonalSolver< PressureMass >;
-    using PrecStokes = linalg::solvers::
-        BlockTriangularPreconditioner2x2< Stokes, Viscous, PressureMass, Gradient, PrecVisc, PrecSchur >;
+    // The (1,1) velocity preconditioner is type-erased so its internal precision
+    // (the MG V-cycle precision) can be chosen at runtime via --stokes-mg-precision.
+    using VelPrecHandle = linalg::solvers::VelocityPrecHandle< Viscous >;
+    using PrecStokes     = linalg::solvers::
+        BlockTriangularPreconditioner2x2< Stokes, Viscous, PressureMass, Gradient, VelPrecHandle, PrecSchur >;
     // Outer solver: either the standard double FGMRES or the low-memory variant
     // that stores the Krylov basis in single precision (operator/preconditioner/
     // orthogonalization stay in ScalarType). Selected at runtime via
@@ -643,8 +647,13 @@ class StokesContext
             ownership_mask_[velocity_level_],
             ownership_mask_[pressure_level_] );
 
+        // Wrap the velocity preconditioner in the type-erased handle. For now this
+        // forwards to the double multigrid (*prec_11_); --stokes-mg-precision will
+        // swap in a reduced-precision V-cycle impl here.
+        VelPrecHandle vel_prec(
+            std::make_shared< linalg::solvers::ForwardingPrecImpl< Viscous, PrecVisc > >( *prec_11_ ) );
         prec_stokes_ = std::make_unique< PrecStokes >(
-            K_->block_11(), *pmass_, K_->block_12(), triangular_prec_tmp_, *prec_11_, *inv_lumped_pmass_ );
+            K_->block_11(), *pmass_, K_->block_12(), triangular_prec_tmp_, vel_prec, *inv_lumped_pmass_ );
 
         // ---------------- Outer FGMRES ----------------
         logroot << "Setting up FGMRES ... (Krylov basis precision: "

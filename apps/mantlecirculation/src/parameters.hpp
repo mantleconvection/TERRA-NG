@@ -152,6 +152,18 @@ struct PhysicsParameters
     double constant_internal_heating_value = 1.0;
 };
 
+/// Storage/working precision of the velocity-block multigrid V-cycle preconditioner.
+/// The outer Stokes FGMRES, block preconditioner and operators stay double; only the
+/// MG hierarchy (operators, smoothers, transfers, coarse solve, level vectors) runs in
+/// this precision, with convert at the preconditioner boundary. Lower precision trims
+/// the MG memory; the outer double Krylov solve absorbs the preconditioner inexactness.
+enum class MGPrecision
+{
+    DOUBLE,
+    FLOAT,
+    HALF,
+};
+
 struct StokesSolverParameters
 {
     int    krylov_restart            = 10;
@@ -163,6 +175,9 @@ struct StokesSolverParameters
     /// preconditioner and orthogonalization stay double. Roughly halves the FGMRES
     /// workspace memory; convergence is unaffected (the operator never sees float).
     bool   float_krylov_basis        = false;
+
+    /// Precision of the velocity-block multigrid V-cycle preconditioner (see MGPrecision).
+    MGPrecision mg_precision = MGPrecision::DOUBLE;
 
     int viscous_pc_num_vcycles                 = 1;
     int viscous_pc_chebyshev_order             = 2;
@@ -560,6 +575,16 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Stokes Solver" );
     add_flag_with_default(
         app, "--stokes-float-krylov-basis", parameters.stokes_solver_parameters.float_krylov_basis )
+        ->group( "Stokes Solver" );
+    static const std::map< std::string, MGPrecision > mg_precision_map{
+        { "double", MGPrecision::DOUBLE },
+        { "float", MGPrecision::FLOAT },
+        { "single", MGPrecision::FLOAT },
+        { "half", MGPrecision::HALF },
+        { "fp16", MGPrecision::HALF },
+    };
+    add_option_with_default( app, "--stokes-mg-precision", parameters.stokes_solver_parameters.mg_precision )
+        ->transform( CLI::CheckedTransformer( mg_precision_map, CLI::ignore_case ) )
         ->group( "Stokes Solver" );
     add_option_with_default(
         app, "--stokes-viscous-pc-num-vcycles", parameters.stokes_solver_parameters.viscous_pc_num_vcycles )
