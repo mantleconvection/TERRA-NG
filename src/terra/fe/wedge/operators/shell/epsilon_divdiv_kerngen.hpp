@@ -21,6 +21,7 @@
 #include "util/timer.hpp"
 
 #include <cstdlib>   // for std::getenv (wave-parallel DN path opt-in)
+#include <vector>    // for the interface/interior block partition lists
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -41,6 +42,12 @@ using terra::linalg::trafo::trafo_mat_cartesian_to_normal_tangential;
 inline int g_epsdivdiv_lat_tile_override = 0;
 inline int g_epsdivdiv_r_tile_override   = 0;
 inline int g_epsdivdiv_r_passes_override = 0;
+
+// Overlap the free-slip matvec's additive halo exchange with interior compute.
+// Set from the app CLI (--stokes-viscous-overlap-comm). Default off: measured a wash
+// at these subdomain sizes (the hideable comm is only ~8% of the matvec, almost all
+// MPI wait; the split's overhead offsets it). Kept for larger-subdomain regimes.
+inline bool g_epsdivdiv_overlap_comm = false;
 
 /**
  * @brief Matrix-free / matrix-based epsilon-div-div operator on wedge elements in a spherical shell.
@@ -67,7 +74,14 @@ inline int g_epsdivdiv_r_passes_override = 0;
  * `apply_impl()` dispatches to a different kernel launch per path.
  * This avoids a runtime branch inside the hot device kernel.
  */
-template < typename ScalarT, int VecDim = 3 >
+// ScalarT  : storage/working precision for src/dst/coefficient and the matvec I/O
+//            (may be low precision, e.g. float, for the MG smoother).
+// CoordScalarT : precision of the *stored* node coordinates. MUST stay >= float
+//            (default double) so the Jacobian (built from coordinate differences,
+//            which catastrophically cancel in low precision) is accurate. The
+//            shmem scratch tiles and the J/det/J^-1 computation are already double
+//            regardless of ScalarT, so only the stored coords need decoupling.
+template < typename ScalarT, int VecDim = 3, typename CoordScalarT = ScalarT >
 class EpsilonDivDivKerngen
 {
   public:
@@ -102,8 +116,8 @@ class EpsilonDivDivKerngen
 
     // Domain and geometry / coefficients
     grid::shell::DistributedDomain                           domain_;
-    grid::Grid3DDataVec< ScalarT, 3 >                        grid_;  ///< Lateral shell geometry (unit sphere coords)
-    grid::Grid2DDataScalar< ScalarT >                        radii_; ///< Radial coordinates per local subdomain
+    grid::Grid3DDataVec< CoordScalarT, 3 >                   grid_;  ///< Lateral shell geometry (unit sphere coords)
+    grid::Grid2DDataScalar< CoordScalarT >                   radii_; ///< Radial coordinates per local subdomain
     grid::Grid4DDataScalar< ScalarType >                     k_;     ///< Scalar coefficient field
     grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag > mask_;  ///< Boundary flags per cell/node
     BoundaryConditions                                       bcs_;   ///< CMB and SURFACE boundary conditions
@@ -163,6 +177,22 @@ class EpsilonDivDivKerngen
 
     KernelPath kernel_path_ = KernelPath::FastDirichletNeumann;
 
+    // Compute/communication overlap (free-slip matvec only). The element sweep is
+    // split into interface tiles (those touching a subdomain face, whose cells
+    // carry all local contributions to shared nodes) and interior tiles. The
+    // additive halo exchange of dst is fired between the two passes so the network
+    // transfer hides behind the (bulk) interior compute.
+    //   partition_mode_: 0 = all tiles, 1 = interface tiles only, 2 = interior only.
+    // overlap_comm_ defaults on; app CLI --stokes-viscous-overlap-comm toggles it.
+    // When partitioned, the kernel is launched over only the active partition's blocks
+    // (interface_blocks_ or interior_blocks_) via active_blocks_, so no team is wasted
+    // on an early return. Built once in the ctor for the free-slip path.
+    int                  partition_mode_ = 0;
+    bool                 overlap_comm_   = true;
+    Kokkos::View< int* > interface_blocks_;
+    Kokkos::View< int* > interior_blocks_;
+    Kokkos::View< int* > active_blocks_;
+
     // Rotation null-space penalty (active only for fs/fs)
     bool                                              penalty_active_  = false;
     ScalarT                                           penalty_epsilon_ = 1e-7;
@@ -204,8 +234,8 @@ class EpsilonDivDivKerngen
   public:
     EpsilonDivDivKerngen(
         const grid::shell::DistributedDomain&                           domain,
-        const grid::Grid3DDataVec< ScalarT, 3 >&                        grid,
-        const grid::Grid2DDataScalar< ScalarT >&                        radii,
+        const grid::Grid3DDataVec< CoordScalarT, 3 >&                   grid,
+        const grid::Grid2DDataScalar< CoordScalarT >&                   radii,
         const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& mask,
         const grid::Grid4DDataScalar< ScalarT >&                        k,
         BoundaryConditions                                              bcs,
@@ -294,6 +324,41 @@ class EpsilonDivDivKerngen
 
         // Host-side path selection (no in-kernel path branching)
         update_kernel_path_flag_host_only();
+
+        // Compute/comm overlap toggle (app CLI: --stokes-viscous-overlap-comm).
+        overlap_comm_ = g_epsdivdiv_overlap_comm;
+
+        // Precompute the interface/interior block partition for the free-slip overlap
+        // path, so each pass launches only its own teams (no wasted early returns).
+        if ( overlap_comm_ && kernel_path_ == KernelPath::FastFreeslip )
+        {
+            std::vector< int > iface, inter;
+            iface.reserve( blocks_ );
+            inter.reserve( blocks_ );
+            for ( int b = 0; b < blocks_; ++b )
+            {
+                int       tmp       = b;
+                const int r_tile_id = tmp % r_tiles_;
+                tmp /= r_tiles_;
+                const int lat_y_id = tmp % lat_tiles_;
+                tmp /= lat_tiles_;
+                const int lat_x_id = tmp % lat_tiles_;
+                const int x0       = lat_x_id * lat_tile_;
+                const int y0       = lat_y_id * lat_tile_;
+                const int r0       = r_tile_id * r_tile_block_;
+                ( tile_is_interface_( x0, y0, r0 ) ? iface : inter ).push_back( b );
+            }
+            interface_blocks_ = Kokkos::View< int* >( "eps_interface_blocks", iface.size() );
+            interior_blocks_  = Kokkos::View< int* >( "eps_interior_blocks", inter.size() );
+            auto h_if = Kokkos::create_mirror_view( interface_blocks_ );
+            auto h_in = Kokkos::create_mirror_view( interior_blocks_ );
+            for ( size_t i = 0; i < iface.size(); ++i )
+                h_if( i ) = iface[i];
+            for ( size_t i = 0; i < inter.size(); ++i )
+                h_in( i ) = inter[i];
+            Kokkos::deep_copy( interface_blocks_, h_if );
+            Kokkos::deep_copy( interior_blocks_, h_in );
+        }
 #if 0
         util::logroot << "[EpsilonDivDiv] tile size (x,y,r)=(" << lat_tile_ << "," << lat_tile_ << "," << r_tile_
                       << "), r_passes=" << r_passes_ << std::endl;
@@ -353,7 +418,7 @@ class EpsilonDivDivKerngen
 
             Kokkos::parallel_for(
                 "penalty_fill_mode_" + std::to_string( axis ),
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
                 KOKKOS_LAMBDA( int s, int x, int y, int r ) {
                     const auto c = grid::shell::coords( s, x, y, r, grid_local, radii_local );
                     // ê_axis × r: cyclic cross product
@@ -374,7 +439,7 @@ class EpsilonDivDivKerngen
 
             Kokkos::parallel_for(
                 "penalty_fs_enforce_" + std::to_string( axis ),
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
                 KOKKOS_LAMBDA( int s, int x, int y, int r ) {
                     if ( !util::has_flag( mask_local( s, x, y, r ), freeslip_boundary_mask ) )
                         return;
@@ -417,7 +482,7 @@ class EpsilonDivDivKerngen
                 auto nj = null_modes_[j];
                 Kokkos::parallel_for(
                     "penalty_gs_subtract",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
                     KOKKOS_LAMBDA( int s, int x, int y, int r ) {
                         for ( int d = 0; d < VecDim; ++d )
                             ni( s, x, y, r, d ) -= dot_ij * nj( s, x, y, r, d );
@@ -433,7 +498,7 @@ class EpsilonDivDivKerngen
             auto ni = null_modes_[i];
             Kokkos::parallel_for(
                 "penalty_gs_normalize",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0, 0, 0 }, { nsub, nlat, nlat, nrad } ),
                 KOKKOS_LAMBDA( int s, int x, int y, int r ) {
                     for ( int d = 0; d < VecDim; ++d )
                         ni( s, x, y, r, d ) *= inv_norm;
@@ -488,8 +553,8 @@ class EpsilonDivDivKerngen
 
     const grid::Grid4DDataScalar< ScalarType >& k_grid_data() { return k_; }
     const grid::shell::DistributedDomain&       get_domain() const { return domain_; }
-    grid::Grid2DDataScalar< ScalarT >           get_radii() const { return radii_; }
-    grid::Grid3DDataVec< ScalarT, 3 >           get_grid() { return grid_; }
+    grid::Grid2DDataScalar< CoordScalarT >      get_radii() const { return radii_; }
+    grid::Grid3DDataVec< CoordScalarT, 3 >      get_grid() { return grid_; }
 
     KOKKOS_INLINE_FUNCTION
     bool has_flag(
@@ -587,6 +652,40 @@ class EpsilonDivDivKerngen
 
         dst_ = dst.grid_data();
         src_ = src.grid_data();
+
+        // ---- Compute/communication overlap (free-slip matvec, additive comm) ----
+        // Interface tiles first (so all local contributions to shared nodes, incl.
+        // the rotation penalty, are final), fire the additive halo exchange, then run
+        // the interior tiles while the network transfer is in flight, then reduce in.
+        const bool do_overlap = overlap_comm_ && kernel_path_ == KernelPath::FastFreeslip && !diagonal_ &&
+                                operator_communication_mode_ == linalg::OperatorCommunicationMode::CommunicateAdditively;
+        if ( do_overlap )
+        {
+            {
+                util::Timer timer_kernel( "epsilon_divdiv_kernel" );
+                partition_mode_ = 1; // interface tiles
+                active_blocks_  = interface_blocks_;
+                launch_fast_freeslip_matvec_( static_cast< int >( interface_blocks_.extent( 0 ) ) );
+                Kokkos::fence();
+            }
+            apply_rotation_penalty_(); // interface dst now final (incl. penalty)
+            {
+                util::Timer timer_comm( "epsilon_divdiv_comm" );
+                comm_plan_.start_exchange( dst_, recv_buffers_ );
+            }
+            {
+                util::Timer timer_kernel( "epsilon_divdiv_kernel" );
+                partition_mode_ = 2; // interior tiles, overlapping the transfer
+                active_blocks_  = interior_blocks_;
+                launch_fast_freeslip_matvec_( static_cast< int >( interior_blocks_.extent( 0 ) ) );
+            }
+            {
+                util::Timer timer_comm( "epsilon_divdiv_comm" );
+                comm_plan_.finish_exchange( dst_, recv_buffers_ );
+            }
+            partition_mode_ = 0;
+            return;
+        }
 
         util::Timer          timer_kernel( "epsilon_divdiv_kernel" );
         Kokkos::TeamPolicy<> policy( blocks_, team_size_ );
@@ -708,87 +807,95 @@ class EpsilonDivDivKerngen
         Kokkos::fence();
         timer_kernel.stop();
 
-        // Null-space penalty for fs/fs: dst += epsilon * sum_i (n_i^T src) n_i.
-        //
-        // Fused implementation:
-        //  - 1 GPU reduction kernel computing all 3 dot products (vs 3x3=9 before)
-        //  - 1 MPI_Allreduce of length 3 (vs 9 separate 1-element reductions before)
-        //  - 1 fused AXPY pass over dst (vs 3 separate passes before)
-        if ( penalty_active_ && !diagonal_ )
-        {
-            util::Timer timer_penalty( "epsilon_divdiv_penalty" );
-
-            ScalarType alpha0 = 0, alpha1 = 0, alpha2 = 0;
-            {
-                auto       src_local = src_;
-                auto       nm0       = null_modes_[0];
-                auto       nm1       = null_modes_[1];
-                auto       nm2       = null_modes_[2];
-                auto       mask      = ownership_mask_;
-                const auto mask_val_owned = grid::NodeOwnershipFlag::OWNED;
-                Kokkos::parallel_reduce(
-                    "epsilon_divdiv_penalty_dots",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
-                        { 0, 0, 0, 0 },
-                        { src_local.extent( 0 ),
-                          src_local.extent( 1 ),
-                          src_local.extent( 2 ),
-                          src_local.extent( 3 ) } ),
-                    KOKKOS_LAMBDA(
-                        int s, int x, int y, int r, ScalarType& a0, ScalarType& a1, ScalarType& a2 ) {
-                        const ScalarType m =
-                            util::has_flag( mask( s, x, y, r ), mask_val_owned ) ? ScalarType( 1 ) : ScalarType( 0 );
-                        ScalarType s0 = 0, s1 = 0, s2 = 0;
-                        for ( int d = 0; d < VecDim; ++d )
-                        {
-                            const ScalarType sv = src_local( s, x, y, r, d ) * m;
-                            s0 += nm0( s, x, y, r, d ) * sv;
-                            s1 += nm1( s, x, y, r, d ) * sv;
-                            s2 += nm2( s, x, y, r, d ) * sv;
-                        }
-                        a0 += s0;
-                        a1 += s1;
-                        a2 += s2;
-                    },
-                    Kokkos::Sum< ScalarType >( alpha0 ),
-                    Kokkos::Sum< ScalarType >( alpha1 ),
-                    Kokkos::Sum< ScalarType >( alpha2 ) );
-                Kokkos::fence( "epsilon_divdiv_penalty_dots" );
-            }
-
-            ScalarType partial[3] = { alpha0, alpha1, alpha2 };
-            MPI_Allreduce( MPI_IN_PLACE, partial, 3, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
-            const ScalarType a0 = penalty_epsilon_ * partial[0];
-            const ScalarType a1 = penalty_epsilon_ * partial[1];
-            const ScalarType a2 = penalty_epsilon_ * partial[2];
-
-            {
-                auto dst_local = dst_;
-                auto nm0       = null_modes_[0];
-                auto nm1       = null_modes_[1];
-                auto nm2       = null_modes_[2];
-                Kokkos::parallel_for(
-                    "epsilon_divdiv_penalty_axpy_fused",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
-                        { 0, 0, 0, 0 },
-                        { dst_local.extent( 0 ),
-                          dst_local.extent( 1 ),
-                          dst_local.extent( 2 ),
-                          dst_local.extent( 3 ) } ),
-                    KOKKOS_LAMBDA( int s, int x, int y, int r ) {
-                        for ( int d = 0; d < VecDim; ++d )
-                            dst_local( s, x, y, r, d ) += a0 * nm0( s, x, y, r, d ) + a1 * nm1( s, x, y, r, d ) +
-                                                          a2 * nm2( s, x, y, r, d );
-                    } );
-            }
-            Kokkos::fence( "penalty" );
-        }
+        apply_rotation_penalty_();
 
         if ( operator_communication_mode_ == linalg::OperatorCommunicationMode::CommunicateAdditively )
         {
             util::Timer timer_comm( "epsilon_divdiv_comm" );
             terra::communication::shell::send_recv_with_plan( comm_plan_, dst_, recv_buffers_ );
         }
+    }
+
+    // Free-slip kernel launch for the matvec (no fence), reused by the overlap path.
+    // league_size is the number of teams to launch (interface or interior block count).
+    void launch_fast_freeslip_matvec_( int league_size )
+    {
+        Kokkos::TeamPolicy<> policy( league_size, team_size_ );
+        policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
+        Kokkos::parallel_for(
+            "epsilon_divdiv_apply_kernel_fast_fs_matvec", policy,
+            KOKKOS_CLASS_LAMBDA( const Team& team ) { this->template run_team_fast_freeslip< false >( team ); } );
+    }
+
+    // Rotation null-space penalty for fs/fs: dst += epsilon * sum_i (n_i^T src) n_i.
+    // No-op unless penalty_active_ && !diagonal_. Self-contained (fences internally).
+    //  - 1 GPU reduction kernel for all 3 dot products
+    //  - 1 MPI_Allreduce of length 3
+    //  - 1 fused AXPY pass over dst
+    void apply_rotation_penalty_()
+    {
+        if ( !( penalty_active_ && !diagonal_ ) )
+            return;
+
+        util::Timer timer_penalty( "epsilon_divdiv_penalty" );
+
+        ScalarType alpha0 = 0, alpha1 = 0, alpha2 = 0;
+        {
+            auto       src_local = src_;
+            auto       nm0       = null_modes_[0];
+            auto       nm1       = null_modes_[1];
+            auto       nm2       = null_modes_[2];
+            auto       mask      = ownership_mask_;
+            const auto mask_val_owned = grid::NodeOwnershipFlag::OWNED;
+            Kokkos::parallel_reduce(
+                "epsilon_divdiv_penalty_dots",
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+                    { 0, 0, 0, 0 },
+                    { src_local.extent( 0 ), src_local.extent( 1 ), src_local.extent( 2 ), src_local.extent( 3 ) } ),
+                KOKKOS_LAMBDA( int s, int x, int y, int r, ScalarType& a0, ScalarType& a1, ScalarType& a2 ) {
+                    const ScalarType m =
+                        util::has_flag( mask( s, x, y, r ), mask_val_owned ) ? ScalarType( 1 ) : ScalarType( 0 );
+                    ScalarType s0 = 0, s1 = 0, s2 = 0;
+                    for ( int d = 0; d < VecDim; ++d )
+                    {
+                        const ScalarType sv = src_local( s, x, y, r, d ) * m;
+                        s0 += nm0( s, x, y, r, d ) * sv;
+                        s1 += nm1( s, x, y, r, d ) * sv;
+                        s2 += nm2( s, x, y, r, d ) * sv;
+                    }
+                    a0 += s0;
+                    a1 += s1;
+                    a2 += s2;
+                },
+                Kokkos::Sum< ScalarType >( alpha0 ),
+                Kokkos::Sum< ScalarType >( alpha1 ),
+                Kokkos::Sum< ScalarType >( alpha2 ) );
+            Kokkos::fence( "epsilon_divdiv_penalty_dots" );
+        }
+
+        ScalarType partial[3] = { alpha0, alpha1, alpha2 };
+        MPI_Allreduce( MPI_IN_PLACE, partial, 3, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+        const ScalarType a0 = penalty_epsilon_ * partial[0];
+        const ScalarType a1 = penalty_epsilon_ * partial[1];
+        const ScalarType a2 = penalty_epsilon_ * partial[2];
+
+        {
+            auto dst_local = dst_;
+            auto nm0       = null_modes_[0];
+            auto nm1       = null_modes_[1];
+            auto nm2       = null_modes_[2];
+            Kokkos::parallel_for(
+                "epsilon_divdiv_penalty_axpy_fused",
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+                    { 0, 0, 0, 0 },
+                    { dst_local.extent( 0 ), dst_local.extent( 1 ), dst_local.extent( 2 ), dst_local.extent( 3 ) } ),
+                KOKKOS_LAMBDA( int s, int x, int y, int r ) {
+                    for ( int d = 0; d < VecDim; ++d )
+                        dst_local( s, x, y, r, d ) +=
+                            a0 * nm0( s, x, y, r, d ) + a1 * nm1( s, x, y, r, d ) + a2 * nm2( s, x, y, r, d );
+                } );
+        }
+        Kokkos::fence( "penalty" );
     }
 
     /**
@@ -846,6 +953,18 @@ class EpsilonDivDivKerngen
      * Layout per team:
      *   [coords_sh | src_sh | k_sh | r_sh]
      */
+    // Compute precision for the free-slip matvec contraction. The geometry (coords,
+    // normals, radii) and the Jacobian stay DOUBLE for cancellation safety; the element
+    // contraction (gradients, symmetric-gradient tensor, viscosity application) and the
+    // src/k shared-memory tiles run in CompT.
+    //
+    // Default double: setting CompT=float was measured to be a wash on MI250X — the
+    // kernel is L2-bandwidth-bound (the global double src/k loads), not occupancy- or
+    // LDS-bound, and FP64=FP32 vector rate gives no arithmetic speedup. Float here only
+    // shrinks shmem/LDS, which is the wrong cache. Left as a one-line knob for the case
+    // where global src/k storage is also lowered (which would cut the L2 traffic).
+    using CompT = double;
+
     KOKKOS_INLINE_FUNCTION
     size_t team_shmem_size( const int ts ) const
     {
@@ -853,15 +972,13 @@ class EpsilonDivDivKerngen
         const int n    = lat_tile_ + 1;
         const int nxy  = n * n;
 
-        // coords_sh(nxy,3) + normals_sh(nxy,3) + src_sh(nxy,3,nlev) + k_sh(nxy,nlev) + r_sh(nlev) + 1
-        const size_t nscalars = size_t( nxy ) * 3 + size_t( nxy ) * 3 + size_t( nxy ) * 3 * nlev +
-                                size_t( nxy ) * nlev + size_t( nlev ) + 1;
+        // DOUBLE tiles: coords_sh(nxy,3) + normals_sh(nxy,3) + r_sh(nlev).
+        const size_t ndouble = size_t( nxy ) * 3 + size_t( nxy ) * 3 + size_t( nlev );
+        // CompT tiles: src_sh(nxy,3,nlev) + k_sh(nxy,nlev).
+        const size_t ncomp = size_t( nxy ) * 3 * nlev + size_t( nxy ) * nlev;
 
-        // The team scratch tiles (coords_sh/src_sh/k_sh/r_sh) are stored in DOUBLE
-        // regardless of ScalarType, so the byte size must use sizeof(double). Using
-        // sizeof(ScalarType) under-allocates by 2x in a single-precision build, so the
-        // double tiles overrun/overlap and the operator apply reads garbage -> NaN.
-        return sizeof( double ) * nscalars;
+        // +16 bytes pad for the double->CompT region boundary / alignment.
+        return sizeof( double ) * ndouble + sizeof( CompT ) * ncomp + 16;
     }
 
     KOKKOS_INLINE_FUNCTION
@@ -899,19 +1016,20 @@ class EpsilonDivDivKerngen
      */
     KOKKOS_INLINE_FUNCTION
     void decode_team_indices(
-        const Team& team,
-        int&        local_subdomain_id,
-        int&        x0,
-        int&        y0,
-        int&        r0,
-        int&        tx,
-        int&        ty,
-        int&        tr,
-        int&        x_cell,
-        int&        y_cell,
-        int&        r_cell ) const
+        int  league_index,
+        int  team_rank,
+        int& local_subdomain_id,
+        int& x0,
+        int& y0,
+        int& r0,
+        int& tx,
+        int& ty,
+        int& tr,
+        int& x_cell,
+        int& y_cell,
+        int& r_cell ) const
     {
-        int tmp = team.league_rank();
+        int tmp = league_index;
 
         const int r_tile_id = tmp % r_tiles_;
         tmp /= r_tiles_;
@@ -928,7 +1046,7 @@ class EpsilonDivDivKerngen
         y0 = lat_y_id * lat_tile_;
         r0 = r_tile_id * r_tile_block_;
 
-        const int tid = team.team_rank();
+        const int tid = team_rank;
         tr            = tid % r_tile_;
         tx            = ( tid / r_tile_ ) % lat_tile_;
         ty            = tid / ( r_tile_ * lat_tile_ );
@@ -957,7 +1075,8 @@ class EpsilonDivDivKerngen
     void run_team_slow( const Team& team ) const
     {
         int local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell;
-        decode_team_indices( team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
+        decode_team_indices(
+            team.league_rank(), team.team_rank(), local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
 
         if ( tr >= r_tile_ )
             return;
@@ -989,7 +1108,8 @@ class EpsilonDivDivKerngen
         // the cross-branch version and pass w_filter=-1 so the inner kernel runs
         // both wedges in the compile-time `for (w=0;w<2;++w)` loop.
         int local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell;
-        decode_team_indices( team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
+        decode_team_indices(
+            team.league_rank(), team.team_rank(), local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
 
         if ( tr >= r_tile_ )
             return;
@@ -1005,11 +1125,27 @@ class EpsilonDivDivKerngen
      * Templated on Diagonal so the compiler can dead-code-eliminate the
      * unused matvec or diagonal-only path, reducing register pressure.
      */
+    // A tile touches a subdomain face (and so carries local contributions to shared
+    // nodes) iff its cell span reaches the first or last cell in any direction. Uses
+    // the full tile span (lat_tile_, r_tile_block_); over-marking is safe (it only
+    // shifts a tile from the interior pass to the interface pass, never drops work).
+    KOKKOS_INLINE_FUNCTION bool tile_is_interface_( int x0, int y0, int r0 ) const
+    {
+        return ( x0 == 0 ) || ( y0 == 0 ) || ( r0 == 0 ) ||
+               ( x0 + lat_tile_ - 1 >= hex_lat_ - 1 ) || ( y0 + lat_tile_ - 1 >= hex_lat_ - 1 ) ||
+               ( r0 + r_tile_block_ - 1 >= hex_rad_ - 1 );
+    }
+
     template < bool Diagonal >
     KOKKOS_INLINE_FUNCTION void run_team_fast_freeslip( const Team& team ) const
     {
+        // When partitioned, league_rank indexes into the active partition's block list,
+        // so every launched team does real work (no early-return waste).
+        const int league_index = ( partition_mode_ == 0 ) ? team.league_rank() : active_blocks_( team.league_rank() );
+
         int local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell;
-        decode_team_indices( team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
+        decode_team_indices(
+            league_index, team.team_rank(), local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
 
         if ( tr >= r_tile_ )
             return;
@@ -1158,7 +1294,9 @@ class EpsilonDivDivKerngen
 
                     for ( int boundary_node_idx = 0; boundary_node_idx < 3; boundary_node_idx++ )
                     {
-                        dense::Vec< ScalarType, 3 > normal = grid::shell::coords(
+                        // coords() returns CoordScalarT (geometry precision); the
+                        // resulting rotation is cast down when written into R (ScalarT).
+                        dense::Vec< CoordScalarT, 3 > normal = grid::shell::coords(
                             local_subdomain_id,
                             x_cell + layer_hex_offset_x[wedge][boundary_node_idx],
                             y_cell + layer_hex_offset_y[wedge][boundary_node_idx],
@@ -1665,10 +1803,11 @@ class EpsilonDivDivKerngen
         using ScratchCoords =
             Kokkos::View< double**, Kokkos::LayoutRight, typename Team::scratch_memory_space, Kokkos::MemoryUnmanaged >;
         using ScratchSrc = Kokkos::
-            View< double***, Kokkos::LayoutRight, typename Team::scratch_memory_space, Kokkos::MemoryUnmanaged >;
+            View< CompT***, Kokkos::LayoutRight, typename Team::scratch_memory_space, Kokkos::MemoryUnmanaged >;
         using ScratchK =
-            Kokkos::View< double**, Kokkos::LayoutRight, typename Team::scratch_memory_space, Kokkos::MemoryUnmanaged >;
+            Kokkos::View< CompT**, Kokkos::LayoutRight, typename Team::scratch_memory_space, Kokkos::MemoryUnmanaged >;
 
+        // DOUBLE tiles first (coords, normals, radii) — needed in double for the Jacobian.
         ScratchCoords coords_sh( shmem, nxy, 3 );
         shmem += nxy * 3;
 
@@ -1676,15 +1815,16 @@ class EpsilonDivDivKerngen
         ScratchCoords normals_sh( shmem, nxy, 3 );
         shmem += nxy * 3;
 
-        ScratchSrc src_sh( shmem, nxy, 3, nlev );
-        shmem += nxy * 3 * nlev;
-
-        ScratchK k_sh( shmem, nxy, nlev );
-        shmem += nxy * nlev;
-
         auto r_sh =
             Kokkos::View< double*, Kokkos::LayoutRight, typename Team::scratch_memory_space, Kokkos::MemoryUnmanaged >(
                 shmem, nlev );
+        shmem += nlev;
+
+        // CompT (float) tiles after the double region — half the bytes / LDS traffic.
+        CompT*     shmem_c = reinterpret_cast< CompT* >( shmem );
+        ScratchSrc src_sh( shmem_c, nxy, 3, nlev );
+        shmem_c += nxy * 3 * nlev;
+        ScratchK k_sh( shmem_c, nxy, nlev );
 
         auto node_id = [&]( int nx, int ny ) -> int { return nx + ( lat_tile_ + 1 ) * ny; };
 
@@ -1910,10 +2050,13 @@ class EpsilonDivDivKerngen
                 // ---- Fused trial + test side with merged Ann accumulation ----
                 static constexpr int CMB_NODE_TO_CORNER[2][3] = { { 0, 1, 2 }, { 3, 2, 1 } };
 
-                double gu00 = 0.0;
-                double gu10 = 0.0, gu11 = 0.0;
-                double gu20 = 0.0, gu21 = 0.0, gu22 = 0.0;
-                double div_u = 0.0;
+                // Contraction precision: CompT (float). i** (inverse Jacobian) and dN_ref
+                // stay double; gradients are cast to CompT, src/k are native CompT.
+                const CompT kwJc = static_cast< CompT >( kwJ );
+                CompT       gu00 = 0;
+                CompT       gu10 = 0, gu11 = 0;
+                CompT       gu20 = 0, gu21 = 0, gu22 = 0;
+                CompT       div_u = 0;
 
                 if ( !Diagonal )
                 {
@@ -1925,34 +2068,34 @@ class EpsilonDivDivKerngen
                         const double gx = dN_ref[n][0];
                         const double gy = dN_ref[n][1];
                         const double gz = dN_ref[n][2];
-                        const double g0 = i00 * gx + i01 * gy + i02 * gz;
-                        const double g1 = i10 * gx + i11 * gy + i12 * gz;
-                        const double g2 = i20 * gx + i21 * gy + i22 * gz;
+                        const CompT  g0 = static_cast< CompT >( i00 * gx + i01 * gy + i02 * gz );
+                        const CompT  g1 = static_cast< CompT >( i10 * gx + i11 * gy + i12 * gz );
+                        const CompT  g2 = static_cast< CompT >( i20 * gx + i21 * gy + i22 * gz );
 
                         const int nid = node_id( tx + WEDGE_NODE_OFF[w][n][0], ty + WEDGE_NODE_OFF[w][n][1] );
                         const int lvl = lvl0 + WEDGE_NODE_OFF[w][n][2];
 
-                        double s0 = src_sh( nid, 0, lvl );
-                        double s1 = src_sh( nid, 1, lvl );
-                        double s2 = src_sh( nid, 2, lvl );
+                        CompT s0 = src_sh( nid, 0, lvl );
+                        CompT s1 = src_sh( nid, 1, lvl );
+                        CompT s2 = src_sh( nid, 2, lvl );
 
                         // Inline tangential projection for freeslip boundary nodes.
                         if ( cmb_freeslip && n < 3 )
                         {
-                            const double nx  = normals_sh( nid, 0 );
-                            const double ny  = normals_sh( nid, 1 );
-                            const double nz  = normals_sh( nid, 2 );
-                            const double dot = nx * s0 + ny * s1 + nz * s2;
+                            const CompT nx  = static_cast< CompT >( normals_sh( nid, 0 ) );
+                            const CompT ny  = static_cast< CompT >( normals_sh( nid, 1 ) );
+                            const CompT nz  = static_cast< CompT >( normals_sh( nid, 2 ) );
+                            const CompT dot = nx * s0 + ny * s1 + nz * s2;
                             s0 -= dot * nx;
                             s1 -= dot * ny;
                             s2 -= dot * nz;
                         }
                         if ( surf_freeslip && n >= 3 )
                         {
-                            const double nx  = normals_sh( nid, 0 );
-                            const double ny  = normals_sh( nid, 1 );
-                            const double nz  = normals_sh( nid, 2 );
-                            const double dot = nx * s0 + ny * s1 + nz * s2;
+                            const CompT nx  = static_cast< CompT >( normals_sh( nid, 0 ) );
+                            const CompT ny  = static_cast< CompT >( normals_sh( nid, 1 ) );
+                            const CompT nz  = static_cast< CompT >( normals_sh( nid, 2 ) );
+                            const CompT dot = nx * s0 + ny * s1 + nz * s2;
                             s0 -= dot * nx;
                             s1 -= dot * ny;
                             s2 -= dot * nz;
@@ -1961,54 +2104,56 @@ class EpsilonDivDivKerngen
                         gu00 += g0 * s0;
                         gu11 += g1 * s1;
                         gu22 += g2 * s2;
-                        gu10 += 0.5 * ( g1 * s0 + g0 * s1 );
-                        gu20 += 0.5 * ( g2 * s0 + g0 * s2 );
-                        gu21 += 0.5 * ( g2 * s1 + g1 * s2 );
+                        gu10 += static_cast< CompT >( 0.5 ) * ( g1 * s0 + g0 * s1 );
+                        gu20 += static_cast< CompT >( 0.5 ) * ( g2 * s0 + g0 * s2 );
+                        gu21 += static_cast< CompT >( 0.5 ) * ( g2 * s1 + g1 * s2 );
                         div_u += g0 * s0 + g1 * s1 + g2 * s2;
                     }
 
-                    // Test side + merged Ann accumulation.
-                    // Ann uses the same gradient already computed — no separate loop needed.
+                    // Test side + merged Ann accumulation (CompT arithmetic).
+                    const CompT TWO_C   = static_cast< CompT >( 2.0 );
+                    const CompT NTT_C   = static_cast< CompT >( NEG_TWO_THIRDS );
+                    const CompT THIRD_C = static_cast< CompT >( ONE_THIRD );
 #pragma unroll
                     for ( int n = cmb_shift; n < 6 - surface_shift; ++n )
                     {
                         const double gx = dN_ref[n][0];
                         const double gy = dN_ref[n][1];
                         const double gz = dN_ref[n][2];
-                        const double g0 = i00 * gx + i01 * gy + i02 * gz;
-                        const double g1 = i10 * gx + i11 * gy + i12 * gz;
-                        const double g2 = i20 * gx + i21 * gy + i22 * gz;
+                        const CompT  g0 = static_cast< CompT >( i00 * gx + i01 * gy + i02 * gz );
+                        const CompT  g1 = static_cast< CompT >( i10 * gx + i11 * gy + i12 * gz );
+                        const CompT  g2 = static_cast< CompT >( i20 * gx + i21 * gy + i22 * gz );
 
                         const int uid = WEDGE_TO_UNIQUE[w][n];
                         dst8[0][uid] +=
-                            kwJ * ( 2.0 * ( g0 * gu00 + g1 * gu10 + g2 * gu20 ) + NEG_TWO_THIRDS * g0 * div_u );
+                            kwJc * ( TWO_C * ( g0 * gu00 + g1 * gu10 + g2 * gu20 ) + NTT_C * g0 * div_u );
                         dst8[1][uid] +=
-                            kwJ * ( 2.0 * ( g0 * gu10 + g1 * gu11 + g2 * gu21 ) + NEG_TWO_THIRDS * g1 * div_u );
+                            kwJc * ( TWO_C * ( g0 * gu10 + g1 * gu11 + g2 * gu21 ) + NTT_C * g1 * div_u );
                         dst8[2][uid] +=
-                            kwJ * ( 2.0 * ( g0 * gu20 + g1 * gu21 + g2 * gu22 ) + NEG_TWO_THIRDS * g2 * div_u );
+                            kwJc * ( TWO_C * ( g0 * gu20 + g1 * gu21 + g2 * gu22 ) + NTT_C * g2 * div_u );
 
                         // Accumulate Ann for freeslip CMB nodes (n < 3) and surface nodes (n >= 3).
                         if ( cmb_freeslip && n < 3 )
                         {
-                            const int    corner = CMB_NODE_TO_CORNER[w][n];
-                            const int    cn     = corner_node[corner];
-                            const double nxu    = normals_sh( cn, 0 );
-                            const double nyu    = normals_sh( cn, 1 );
-                            const double nzu    = normals_sh( cn, 2 );
-                            const double gg     = g0 * g0 + g1 * g1 + g2 * g2;
-                            const double ng     = nxu * g0 + nyu * g1 + nzu * g2;
-                            Ann_acc_cmb[corner] += kwJ * ( gg + ONE_THIRD * ng * ng );
+                            const int   corner = CMB_NODE_TO_CORNER[w][n];
+                            const int   cn     = corner_node[corner];
+                            const CompT nxu    = static_cast< CompT >( normals_sh( cn, 0 ) );
+                            const CompT nyu    = static_cast< CompT >( normals_sh( cn, 1 ) );
+                            const CompT nzu    = static_cast< CompT >( normals_sh( cn, 2 ) );
+                            const CompT gg     = g0 * g0 + g1 * g1 + g2 * g2;
+                            const CompT ng     = nxu * g0 + nyu * g1 + nzu * g2;
+                            Ann_acc_cmb[corner] += kwJc * ( gg + THIRD_C * ng * ng );
                         }
                         if ( surf_freeslip && n >= 3 )
                         {
-                            const int    corner = CMB_NODE_TO_CORNER[w][n - 3];
-                            const int    cn     = corner_node[corner];
-                            const double nxu    = normals_sh( cn, 0 );
-                            const double nyu    = normals_sh( cn, 1 );
-                            const double nzu    = normals_sh( cn, 2 );
-                            const double gg     = g0 * g0 + g1 * g1 + g2 * g2;
-                            const double ng     = nxu * g0 + nyu * g1 + nzu * g2;
-                            Ann_acc_surf[corner] += kwJ * ( gg + ONE_THIRD * ng * ng );
+                            const int   corner = CMB_NODE_TO_CORNER[w][n - 3];
+                            const int   cn     = corner_node[corner];
+                            const CompT nxu    = static_cast< CompT >( normals_sh( cn, 0 ) );
+                            const CompT nyu    = static_cast< CompT >( normals_sh( cn, 1 ) );
+                            const CompT nzu    = static_cast< CompT >( normals_sh( cn, 2 ) );
+                            const CompT gg     = g0 * g0 + g1 * g1 + g2 * g2;
+                            const CompT ng     = nxu * g0 + nyu * g1 + nzu * g2;
+                            Ann_acc_surf[corner] += kwJc * ( gg + THIRD_C * ng * ng );
                         }
                     }
                 }
@@ -2219,7 +2364,8 @@ class EpsilonDivDivKerngen
     void operator()( const Team& team ) const
     {
         int local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell;
-        decode_team_indices( team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
+        decode_team_indices(
+            team.league_rank(), team.team_rank(), local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
 
         if ( tr >= r_tile_ )
             return;
@@ -2328,11 +2474,19 @@ class EpsilonDivDivKerngen
         const int r_cell,
         const int wedge ) const
     {
+        // Read surface coords in CoordScalarT (matches grid_), then cast down to the
+        // working precision for the single-precision slow-path assembly. (This path is
+        // only used at gca>0; the MG uses the fast path, where geometry stays double.)
+        dense::Vec< CoordScalarT, 3 > wedge_phy_surf_c[num_wedges_per_hex_cell][num_nodes_per_wedge_surface] = {};
+        wedge_surface_physical_coords( wedge_phy_surf_c, grid_, local_subdomain_id, x_cell, y_cell );
         dense::Vec< ScalarT, 3 > wedge_phy_surf[num_wedges_per_hex_cell][num_nodes_per_wedge_surface] = {};
-        wedge_surface_physical_coords( wedge_phy_surf, grid_, local_subdomain_id, x_cell, y_cell );
+        for ( int w = 0; w < num_wedges_per_hex_cell; ++w )
+            for ( int n = 0; n < num_nodes_per_wedge_surface; ++n )
+                for ( int d = 0; d < 3; ++d )
+                    wedge_phy_surf[w][n]( d ) = static_cast< ScalarT >( wedge_phy_surf_c[w][n]( d ) );
 
-        const ScalarT r_1 = radii_( local_subdomain_id, r_cell );
-        const ScalarT r_2 = radii_( local_subdomain_id, r_cell + 1 );
+        const ScalarT r_1 = static_cast< ScalarT >( radii_( local_subdomain_id, r_cell ) );
+        const ScalarT r_2 = static_cast< ScalarT >( radii_( local_subdomain_id, r_cell + 1 ) );
 
         dense::Vec< ScalarT, 6 > k_local_hex[num_wedges_per_hex_cell];
         if ( use_q0_coefficient_ )

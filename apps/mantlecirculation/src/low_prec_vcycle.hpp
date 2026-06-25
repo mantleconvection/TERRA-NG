@@ -34,8 +34,11 @@ namespace terra::mantlecirculation {
 template < typename MGScalar, typename ViscousDouble >
 class LowPrecVCycle : public linalg::solvers::VelocityPrecHandle< ViscousDouble >::Impl
 {
-    using Stokes       = fe::wedge::operators::shell::EpsDivDivStokes< MGScalar >;
-    using Viscous      = typename Stokes::Block11Type;
+    // Two-scalar viscous operator: src/dst/coefficient + matvec I/O in MGScalar (low,
+    // for bandwidth/storage), but stored coordinates in DOUBLE so the Jacobian stays
+    // accurate. Avoids both the geometry tax (no float coord copies — the original
+    // double coords are shared) and the low-precision cancellation in the Jacobian.
+    using Viscous      = fe::wedge::operators::shell::EpsilonDivDivKerngen< MGScalar, 3, double >;
     using Prolongation = fe::wedge::operators::shell::ProlongationVecConstant< MGScalar >;
     using Restriction  = fe::wedge::operators::shell::RestrictionVecConstant< MGScalar >;
     using Smoother     = linalg::solvers::Chebyshev< Viscous >;
@@ -63,29 +66,21 @@ class LowPrecVCycle : public linalg::solvers::VelocityPrecHandle< ViscousDouble 
         util::logroot << "Setting up reduced-precision (" << ( sizeof( MGScalar ) ) << "-byte) MG V-cycle ..."
                       << std::endl;
 
-        // --- Convert per-level geometry + viscosity to MGScalar ---
-        coords_shell_.resize( num_levels_ );
-        coords_radii_.resize( num_levels_ );
+        // --- Convert per-level viscosity coefficient to MGScalar ---
+        // Coordinates are NOT converted: the two-scalar operator reads the original
+        // double coords directly (shared, ref-counted — no duplication, no geometry
+        // tax) and keeps the Jacobian in double.
         for ( int l = 0; l < num_levels_; ++l )
         {
-            coords_shell_[l] = grid::Grid3DDataVec< MGScalar, 3 >(
-                "mg_coords_shell_" + std::to_string( l ),
-                coords_shell[l].extent( 0 ), coords_shell[l].extent( 1 ), coords_shell[l].extent( 2 ) );
-            kernels::common::copy_convert( coords_shell[l], coords_shell_[l] );
-
-            coords_radii_[l] = grid::Grid2DDataScalar< MGScalar >(
-                "mg_coords_radii_" + std::to_string( l ), coords_radii[l].extent( 0 ), coords_radii[l].extent( 1 ) );
-            kernels::common::copy_convert( coords_radii[l], coords_radii_[l] );
-
             eta_.emplace_back( "mg_eta_" + std::to_string( l ), *domains[l], ownership_mask[l] );
             kernels::common::copy_convert( eta[l].grid_data(), eta_.back().grid_data() );
         }
 
-        // --- Operators (re-discretised in MGScalar on every level) ---
+        // --- Operators: MGScalar storage/work, double coords (re-discretised per level) ---
         for ( int l = 0; l < num_levels_; ++l )
         {
             A_.emplace_back(
-                *domains[l], coords_shell_[l], coords_radii_[l], boundary_mask[l], eta_[l].grid_data(), bcs, false );
+                *domains[l], coords_shell[l], coords_radii[l], boundary_mask[l], eta_[l].grid_data(), bcs, false );
         }
         for ( int l = 0; l < num_levels_ - 1; ++l )
         {
@@ -163,8 +158,6 @@ class LowPrecVCycle : public linalg::solvers::VelocityPrecHandle< ViscousDouble 
   private:
     int num_levels_;
 
-    std::vector< grid::Grid3DDataVec< MGScalar, 3 > > coords_shell_;
-    std::vector< grid::Grid2DDataScalar< MGScalar > > coords_radii_;
     std::vector< linalg::VectorQ1Scalar< MGScalar > > eta_;
 
     std::vector< Viscous >      A_;
