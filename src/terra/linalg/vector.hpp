@@ -148,6 +148,29 @@ void randomize( Vector& y )
     y.randomize_impl();
 }
 
+/// @brief Fused Chebyshev-smoother vector update (generic fallback).
+///
+/// Computes, with @p z holding \f$ A x \f$ on entry:
+///   \f$ z \gets D^{-1}(b - A x), \quad d \gets \alpha z + \beta d, \quad x \gets x + d \f$.
+/// When \f$ \beta = 0 \f$ the old @p d is not read (first Chebyshev direction).
+/// This generic version simply chains the existing primitives so it is correct for
+/// any VectorLike; concrete vector types may provide a fused single-kernel overload
+/// (found via ADL) that collapses these into one kernel launch.
+template < VectorLike Vector >
+void chebyshev_fused_update(
+    Vector& x, Vector& d, Vector& z, const Vector& b, const Vector& inv_diag, ScalarOf< Vector > alpha,
+    ScalarOf< Vector > beta )
+{
+    using S = ScalarOf< Vector >;
+    lincomb( z, { S( 1 ), S( -1 ) }, { b, z } );
+    scale_in_place( z, inv_diag );
+    if ( beta == S( 0 ) )
+        lincomb( d, { alpha }, { z } );
+    else
+        lincomb( d, { alpha, beta }, { z, d } );
+    lincomb( x, { S( 1 ), S( 1 ) }, { x, d } );
+}
+
 /// @brief Compute the infinity norm (max absolute entry) of a vector.
 /// Implements: \f$ \|y\|_\infty = \max_i |y_i| \f$
 /// @param y Input vector.
