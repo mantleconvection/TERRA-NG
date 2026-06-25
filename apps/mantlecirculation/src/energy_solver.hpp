@@ -122,8 +122,12 @@ class SUPGSolver : public EnergySolver< ScalarType >
     , tmp_( "supg_tmp", *domain_, ownership_mask_ )
     , q_( "supg_q", *domain_, ownership_mask_ )
     , diag_( "supg_diag", *domain_, ownership_mask_ )
-    , T_backup_( "supg_T_backup", *domain_, ownership_mask_ )
     {
+        // T_backup_ is only touched when there is more than one Picard iteration;
+        // leave it empty (unallocated) otherwise to save a Q1-scalar field.
+        if ( prm_.time_stepping_parameters.picard_iterations > 1 )
+            T_backup_ = linalg::VectorQ1Scalar< ScalarType >( "supg_T_backup", *domain_, ownership_mask_ );
+
         util::logroot << "Setting up SUPG energy solver ..." << std::endl;
 
         A_ = std::make_unique< AD >(
@@ -185,7 +189,8 @@ class SUPGSolver : public EnergySolver< ScalarType >
 
     void snapshot_for_picard() override
     {
-        Kokkos::deep_copy( T_backup_.grid_data(), T_.grid_data() );
+        if ( prm_.time_stepping_parameters.picard_iterations > 1 )
+            Kokkos::deep_copy( T_backup_.grid_data(), T_.grid_data() );
     }
 
     void restore_for_picard() override
@@ -314,17 +319,29 @@ class EVSolver : public EnergySolver< ScalarType >
     , h_( h )
     , prm_( prm )
     , table_( std::move( table ) )
-    , g_(           "ev_g",          *domain_, ownership_mask_ )
     , tmp_(         "ev_tmp",        *domain_, ownership_mask_ )
     , q_(           "ev_q",          *domain_, ownership_mask_ )
     , diag_(        "ev_diag",       *domain_, ownership_mask_ )
     , T_prev_(      "T_prev",        *domain_, ownership_mask_ )
-    , rhs_ev_(      "rhs_ev",        *domain_, ownership_mask_ )
     , lap_T_(       "ev_lap_T",      *domain_, ownership_mask_ )
     , M_lumped_(    "ev_M_lumped",   *domain_, ownership_mask_ )
-    , T_backup_(      "ev_T_backup",      *domain_, ownership_mask_ )
-    , T_prev_backup_( "ev_T_prev_backup", *domain_, ownership_mask_ )
     {
+        // lap_T_, rhs_ev_, g_ have strictly sequential, non-overlapping lifetimes
+        // within step() (lap_T_ done at the lumped-mass divide, then rhs_ev_ for the
+        // EV diffusion RHS, then g_ for the Dirichlet vector), so they share a single
+        // allocation. Kokkos Views are ref-counted, so these shallow copies alias the
+        // same storage; step() keeps using the three semantic names. Saves 2 Q1 fields.
+        rhs_ev_ = lap_T_;
+        g_      = lap_T_;
+
+        // Picard backups are only touched when iterating; leave them empty
+        // (unallocated) otherwise to save two Q1-scalar fields.
+        if ( prm_.time_stepping_parameters.picard_iterations > 1 )
+        {
+            T_backup_      = linalg::VectorQ1Scalar< ScalarType >( "ev_T_backup",      *domain_, ownership_mask_ );
+            T_prev_backup_ = linalg::VectorQ1Scalar< ScalarType >( "ev_T_prev_backup", *domain_, ownership_mask_ );
+        }
+
         util::logroot << "Setting up entropy-viscosity (EV) energy solver ..." << std::endl;
         log_hbm( "EV: after Q1 scalar fields (T_prev/rhs/lap/M_lumped/backups/g/tmp/q/diag)" );
 
@@ -352,16 +369,14 @@ class EVSolver : public EnergySolver< ScalarType >
 
         M_ = std::make_unique< TempMass >( *domain_, coords_shell_, coords_radii_, false );
 
-        // Global Galerkin Laplacian for κ∇²T projection.  Use the per-wedge
-        // ∇·(ν ∇·) operator with a Grid5D filled with κ uniformly — the
-        // result is the standard ∫ κ ∇φ_i · ∇φ_j with additive halo
-        // exchange.
-        kappa_wedge_ = grid::Grid5DDataScalar< ScalarType >(
-            "ev_kappa_wedge", num_sub, nx_c, nx_c, nr_c, fe::wedge::num_wedges_per_hex_cell );
-        kernels::common::set_constant( kappa_wedge_, prm_.physics_parameters.diffusivity );
-        log_hbm( "EV: + nu_h_wedge + kappa_wedge (2 Grid5D per-wedge fields)" );
+        // Global Galerkin Laplacian for κ∇²T projection.  κ is spatially uniform
+        // (a single physics parameter), so we use the constant-coefficient
+        // overload of the ∇·(ν ∇·) operator — no per-wedge Grid5D κ field is
+        // stored — giving the standard ∫ κ ∇φ_i · ∇φ_j with additive halo exchange.
+        log_hbm( "EV: + nu_h_wedge (1 Grid5D per-wedge field; kappa is a scalar)" );
         A_kappa_ = std::make_unique< EVDiffOp >(
-            *domain_, coords_shell_, coords_radii_, kappa_wedge_ );
+            *domain_, coords_shell_, coords_radii_,
+            static_cast< ScalarType >( prm_.physics_parameters.diffusivity ) );
 
         // Global lumped mass M_lumped = M · 1, used to invert the global
         // Galerkin K·T into a Q1-nodal lap field per timestep:
@@ -447,10 +462,15 @@ class EVSolver : public EnergySolver< ScalarType >
     void snapshot_for_picard() override
     {
         // Both T and T_prev mutate inside step() (the latter via the BDF1
-        // history rotation), so we snapshot the (T, T_prev) pair.
-        Kokkos::deep_copy( T_backup_.grid_data(),      T_.grid_data() );
-        Kokkos::deep_copy( T_prev_backup_.grid_data(), T_prev_.grid_data() );
-        // Mark ν_h stale at the start of a new timestep; the first Picard
+        // history rotation), so we snapshot the (T, T_prev) pair — but only when
+        // iterating; the backups are unallocated for a single Picard sweep.
+        if ( prm_.time_stepping_parameters.picard_iterations > 1 )
+        {
+            Kokkos::deep_copy( T_backup_.grid_data(),      T_.grid_data() );
+            Kokkos::deep_copy( T_prev_backup_.grid_data(), T_prev_.grid_data() );
+        }
+        // Mark ν_h stale at the start of a new timestep (always, independent of Picard);
+        // the first Picard
         // iteration's substep-0 will compute it.  Subsequent Picard
         // iterations of the same timestep reuse it so the explicit-lagged
         // stabilization stays consistent across the (T, u) Picard fixed
@@ -479,7 +499,7 @@ class EVSolver : public EnergySolver< ScalarType >
         const auto nu = nu_h_wedge_;
         Kokkos::parallel_reduce(
             "ev_nu_h_stats",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 5 > >(
+            Kokkos::MDRangePolicy< Kokkos::Rank< 5, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                 { 0, 0, 0, 0, 0 },
                 { nu.extent( 0 ), nu.extent( 1 ), nu.extent( 2 ), nu.extent( 3 ), nu.extent( 4 ) } ),
             KOKKOS_LAMBDA( int s, int x, int y, int r, int w,
@@ -564,7 +584,7 @@ class EVSolver : public EnergySolver< ScalarType >
             // Pointwise divide.
             Kokkos::parallel_for(
                 "ev_nu_h_diag_divide",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                     { 0, 0, 0, 0 },
                     { diag_v.extent( 0 ), diag_v.extent( 1 ), diag_v.extent( 2 ), diag_v.extent( 3 ) } ),
                 KOKKOS_LAMBDA( int s, int x, int y, int r ) {
@@ -593,7 +613,7 @@ class EVSolver : public EnergySolver< ScalarType >
                 ScalarType local_max = 0;
                 Kokkos::parallel_reduce(
                     "ev_lap_max_at_r",
-                    Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >(
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 3, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                         { 0, 0, 0 }, { lap_v.extent( 0 ), lap_v.extent( 1 ), lap_v.extent( 2 ) } ),
                     KOKKOS_LAMBDA( int s, int x, int y, ScalarType& m ) {
                         if ( util::has_flag( own_v( s, x, y, r_target ), grid::NodeOwnershipFlag::OWNED ) )
@@ -645,7 +665,7 @@ class EVSolver : public EnergySolver< ScalarType >
             const auto h_w_v  = h_w_wedge_;
             Kokkos::parallel_reduce(
                 "ev_h_w_stats",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 5 > >(
+                Kokkos::MDRangePolicy< Kokkos::Rank< 5, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                     { 0, 0, 0, 0, 0 },
                     { h_w_v.extent( 0 ), h_w_v.extent( 1 ), h_w_v.extent( 2 ),
                       h_w_v.extent( 3 ), h_w_v.extent( 4 ) } ),
@@ -680,7 +700,7 @@ class EVSolver : public EnergySolver< ScalarType >
             const int  n_sub     = static_cast< int >( radii_v.extent( 0 ) );
             Kokkos::parallel_reduce(
                 "ev_dr_stats",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 2 > >( { 0, 0 }, { n_sub, n_r_cells } ),
+                Kokkos::MDRangePolicy< Kokkos::Rank< 2, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >( { 0, 0 }, { n_sub, n_r_cells } ),
                 KOKKOS_LAMBDA( int s, int i, ScalarType& mn, ScalarType& mx, ScalarType& sm, long long& cnt ) {
                     const ScalarType v = radii_v( s, i + 1 ) - radii_v( s, i );
                     if ( v < mn ) mn = v;
@@ -762,7 +782,7 @@ class EVSolver : public EnergySolver< ScalarType >
                     const auto bm    = boundary_mask_;
                     Kokkos::parallel_for(
                         "ev_lap_T_lumped_mass_divide",
-                        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
                             { 0, 0, 0, 0 },
                             { lap_v.extent( 0 ), lap_v.extent( 1 ), lap_v.extent( 2 ), lap_v.extent( 3 ) } ),
                         KOKKOS_LAMBDA( int s, int x, int y, int r ) {
@@ -883,7 +903,6 @@ class EVSolver : public EnergySolver< ScalarType >
     linalg::VectorQ1Scalar< ScalarType >                                    T_backup_;
     linalg::VectorQ1Scalar< ScalarType >                                    T_prev_backup_;
     grid::Grid5DDataScalar< ScalarType >                                    nu_h_wedge_;
-    grid::Grid5DDataScalar< ScalarType >                                    kappa_wedge_;
     fe::wedge::operators::shell::EntropyViscosityParameters< ScalarType >   ev_params_{};
     std::vector< linalg::VectorQ1Scalar< ScalarType > >                     tmp_gmres_;
     std::vector< BasisVecT >                                                basis_gmres_;
@@ -938,9 +957,12 @@ class FCTSolver : public EnergySolver< ScalarType >
     , prm_( prm )
     , table_( std::move( table ) )
     , T_source_( "T_source", *domain_ )
-    , T_fct_backup_( "T_fct_backup", *domain_ )
     , fv_fct_bufs_( *domain_ )
     {
+        // FCT Picard backup: only touched when iterating; leave empty otherwise.
+        if ( prm_.time_stepping_parameters.picard_iterations > 1 )
+            T_fct_backup_ = linalg::VectorFVScalar< ScalarType >( "T_fct_backup", *domain_ );
+
         linalg::assign( T_source_, ScalarType( 0 ) );
 
         // l2_project_fv_to_fe needs at least 5 Q1 scalar temporaries.
@@ -955,7 +977,8 @@ class FCTSolver : public EnergySolver< ScalarType >
 
     void snapshot_for_picard() override
     {
-        Kokkos::deep_copy( T_fct_backup_.grid_data(), T_fct_.grid_data() );
+        if ( prm_.time_stepping_parameters.picard_iterations > 1 )
+            Kokkos::deep_copy( T_fct_backup_.grid_data(), T_fct_.grid_data() );
     }
 
     void restore_for_picard() override

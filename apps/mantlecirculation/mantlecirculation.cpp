@@ -347,6 +347,14 @@ Result<> run( const Parameters& prm )
             break;
     }
 
+    // fv_cell_centers is consumed only by the FCT advection solver after
+    // initialization; for SUPG/EV it is dead weight (a 3-component FV field,
+    // ~0.5 GB/GCD at production scale). Release it for the non-FCT solvers.
+    if ( prm.time_stepping_parameters.energy_solver != EnergySolverType::FCT )
+    {
+        fv_cell_centers = linalg::VectorFVVec< ScalarType, 3 >();
+    }
+
     // EV-specific: register the Q1-projected per-wedge ν_h diagnostic field
     // with XDMF if the energy solver exposes one.  Must happen before any
     // xdmf_output.write() call.
@@ -422,7 +430,9 @@ Result<> run( const Parameters& prm )
 
         const int num_picard = prm.time_stepping_parameters.picard_iterations;
 
-        // Snapshot any solver-internal state that needs restoring across Picard iterations.
+        // Per-step pre-hook (e.g. EV marks ν_h stale here, every step). Always called;
+        // the backup copies inside are individually gated on num_picard > 1, so no
+        // unallocated backup buffers are touched when there is a single Picard sweep.
         energy->snapshot_for_picard();
 
         // Compute dt once from current velocity (before Picard loop).
@@ -607,6 +617,10 @@ int main( int argc, char** argv )
     {
         return EXIT_SUCCESS;
     }
+
+    // Wire the CLI overlap toggle to the viscous operator (read in its constructor).
+    terra::fe::wedge::operators::shell::g_epsdivdiv_overlap_comm =
+        actual_parameters.stokes_solver_parameters.viscous_overlap_comm;
 
     if ( auto run_result = run( actual_parameters ); run_result.is_err() )
     {

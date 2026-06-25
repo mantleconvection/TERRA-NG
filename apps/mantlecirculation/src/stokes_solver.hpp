@@ -224,7 +224,10 @@ class StokesContext
             ownership_mask_[pressure_level_], grid::NodeOwnershipFlag::OWNED );
 
         // ---------------- Stokes block vectors ----------------
-        std::vector< std::string > stok_vec_names = { "u", "f", "tmp" };
+        // "tmp" was a dedicated full Stokes vector used only as RHS-assembly
+        // scratch; we reuse the block preconditioner's triangular_prec_tmp_
+        // (idle until the solve) instead, saving one velocity-sized vector.
+        std::vector< std::string > stok_vec_names = { "u", "f" };
         for ( const auto& name : stok_vec_names )
         {
             stok_vecs_[name] = VectorQ1IsoQ2Q1< ScalarType >(
@@ -310,55 +313,12 @@ class StokesContext
             assign( GCAElements_, 1 );
         }
 
-        log_hbm( "stokes: before FGMRES workspace" );
-        // ---------------- FGMRES (Stokes) workspace ----------------
-        // Two layouts, selected by --stokes-float-krylov-basis:
-        //   double path: 2*restart+4 full-precision vectors.
-        //   float-basis path: 4 full-precision scratch (r, w, v_scratch, z_scratch)
-        //                     + a single-precision Krylov basis of 2*restart+1.
-        // Only the active layout is allocated.
+        // FGMRES workspace selector. The workspace (Krylov basis + scratch) is the
+        // single largest allocation, so we DEFER allocating it until just before the
+        // FGMRES objects are built (after the MG hierarchy + the Chebyshev eigenvalue
+        // estimate). Otherwise its ~20+ GB coincides with the estimate's transient
+        // power-iteration temps and inflates the setup-time HBM peak.
         use_float_basis_ = prm_.stokes_solver_parameters.float_krylov_basis;
-        if ( use_float_basis_ )
-        {
-            constexpr int kNumStokesWork = 3; // FGMRESLowMem aliases r/w
-            stokes_work_fgmres_.reserve( kNumStokesWork );
-            for ( int i = 0; i < kNumStokesWork; i++ )
-            {
-                stokes_work_fgmres_.emplace_back(
-                    "stokes_work_fgmres",
-                    *domains_[velocity_level_],
-                    *domains_[pressure_level_],
-                    ownership_mask_[velocity_level_],
-                    ownership_mask_[pressure_level_] );
-            }
-            const int num_stokes_basis = 2 * prm_.stokes_solver_parameters.krylov_restart + 1;
-            stokes_basis_fgmres_.reserve( num_stokes_basis );
-            for ( int i = 0; i < num_stokes_basis; i++ )
-            {
-                stokes_basis_fgmres_.emplace_back(
-                    "stokes_basis_fgmres",
-                    *domains_[velocity_level_],
-                    *domains_[pressure_level_],
-                    ownership_mask_[velocity_level_],
-                    ownership_mask_[pressure_level_] );
-            }
-        }
-        else
-        {
-            const int num_stokes_fgmres_tmps = 2 * prm_.stokes_solver_parameters.krylov_restart + 4;
-            stokes_tmp_fgmres_.reserve( num_stokes_fgmres_tmps );
-            for ( int i = 0; i < num_stokes_fgmres_tmps; i++ )
-            {
-                stokes_tmp_fgmres_.emplace_back(
-                    "stokes_tmp_fgmres",
-                    *domains_[velocity_level_],
-                    *domains_[pressure_level_],
-                    ownership_mask_[velocity_level_],
-                    ownership_mask_[pressure_level_] );
-            }
-        }
-
-        log_hbm( "stokes: after FGMRES workspace (delta = Krylov basis+scratch)" );
 
         // ---------------- Multigrid tmp vectors ----------------
         for ( int level = 0; level < num_levels_; level++ )
@@ -687,6 +647,54 @@ class StokesContext
         // ---------------- Outer FGMRES ----------------
         logroot << "Setting up FGMRES ... (Krylov basis precision: "
                 << ( use_float_basis_ ? "single" : "double" ) << ")" << std::endl;
+
+        // ---------------- FGMRES (Stokes) workspace (deferred — see note above) ----------------
+        // Allocated here, AFTER the MG hierarchy + Chebyshev eigenvalue estimate, so the
+        // estimate's transient temps do not coincide with this (the largest) allocation.
+        //   double path: 2*restart+4 full-precision vectors.
+        //   float-basis path: 3 full-precision scratch (r/w aliased, v, z) + 2*restart+1 basis.
+        log_hbm( "stokes: before FGMRES workspace" );
+        if ( use_float_basis_ )
+        {
+            constexpr int kNumStokesWork = 3; // FGMRESLowMem aliases r/w
+            stokes_work_fgmres_.reserve( kNumStokesWork );
+            for ( int i = 0; i < kNumStokesWork; i++ )
+            {
+                stokes_work_fgmres_.emplace_back(
+                    "stokes_work_fgmres",
+                    *domains_[velocity_level_],
+                    *domains_[pressure_level_],
+                    ownership_mask_[velocity_level_],
+                    ownership_mask_[pressure_level_] );
+            }
+            const int num_stokes_basis = 2 * prm_.stokes_solver_parameters.krylov_restart + 1;
+            stokes_basis_fgmres_.reserve( num_stokes_basis );
+            for ( int i = 0; i < num_stokes_basis; i++ )
+            {
+                stokes_basis_fgmres_.emplace_back(
+                    "stokes_basis_fgmres",
+                    *domains_[velocity_level_],
+                    *domains_[pressure_level_],
+                    ownership_mask_[velocity_level_],
+                    ownership_mask_[pressure_level_] );
+            }
+        }
+        else
+        {
+            const int num_stokes_fgmres_tmps = 2 * prm_.stokes_solver_parameters.krylov_restart + 4;
+            stokes_tmp_fgmres_.reserve( num_stokes_fgmres_tmps );
+            for ( int i = 0; i < num_stokes_fgmres_tmps; i++ )
+            {
+                stokes_tmp_fgmres_.emplace_back(
+                    "stokes_tmp_fgmres",
+                    *domains_[velocity_level_],
+                    *domains_[pressure_level_],
+                    ownership_mask_[velocity_level_],
+                    ownership_mask_[pressure_level_] );
+            }
+        }
+        log_hbm( "stokes: after FGMRES workspace (delta = Krylov basis+scratch)" );
+
         const linalg::solvers::FGMRESOptions< ScalarType > stokes_fgmres_opts{
             .restart                     = prm_.stokes_solver_parameters.krylov_restart,
             .relative_residual_tolerance = prm_.stokes_solver_parameters.krylov_relative_tolerance,
@@ -752,11 +760,11 @@ class StokesContext
             RHSVelocityInterpolator(
                 coords_shell_[velocity_level_],
                 coords_radii_[velocity_level_],
-                stok_vecs_["tmp"].block_1().grid_data(),
+                triangular_prec_tmp_.block_1().grid_data(),
                 T_for_buoyancy.grid_data(),
                 prm_.physics_parameters.rayleigh_number ) );
 
-        linalg::apply( *M_, stok_vecs_["tmp"].block_1(), stok_vecs_["f"].block_1() );
+        linalg::apply( *M_, triangular_prec_tmp_.block_1(), stok_vecs_["f"].block_1() );
 
         fe::strong_algebraic_homogeneous_velocity_dirichlet_enforcement_stokes_like(
             stok_vecs_["f"],

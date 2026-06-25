@@ -179,6 +179,13 @@ struct StokesSolverParameters
     /// Precision of the velocity-block multigrid V-cycle preconditioner (see MGPrecision).
     MGPrecision mg_precision = MGPrecision::DOUBLE;
 
+    /// Overlap the viscous (EpsDivDiv) matvec's additive halo exchange with interior
+    /// compute: the element sweep runs interface tiles first, fires the halo exchange,
+    /// then runs interior tiles while the network transfer is in flight. Free-slip
+    /// matvec path only; result is unchanged. Default off (measured a wash at current
+    /// subdomain sizes); kept as an opt-in for larger-subdomain regimes.
+    bool viscous_overlap_comm = false;
+
     int viscous_pc_num_vcycles                 = 1;
     int viscous_pc_chebyshev_order             = 2;
     int viscous_pc_num_smoothing_steps_prepost = 2;
@@ -585,6 +592,9 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     };
     add_option_with_default( app, "--stokes-mg-precision", parameters.stokes_solver_parameters.mg_precision )
         ->transform( CLI::CheckedTransformer( mg_precision_map, CLI::ignore_case ) )
+        ->group( "Stokes Solver" );
+    add_option_with_default(
+        app, "--stokes-viscous-overlap-comm", parameters.stokes_solver_parameters.viscous_overlap_comm )
         ->group( "Stokes Solver" );
     add_option_with_default(
         app, "--stokes-viscous-pc-num-vcycles", parameters.stokes_solver_parameters.viscous_pc_num_vcycles )
