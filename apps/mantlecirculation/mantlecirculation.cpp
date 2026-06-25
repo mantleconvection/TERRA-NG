@@ -302,9 +302,7 @@ Result<> run( const Parameters& prm )
         xdmf_output_pressure->add( u.block_2().grid_data() ); // Pressure
     }
 
-    const bool loading_checkpoint = !prm.io_parameters.checkpoint_dir.empty() && prm.io_parameters.checkpoint_step >= 0;
-
-    if ( loading_checkpoint )
+    if ( prm.io_parameters.load_checkpoint )
     {
         load_temperature_checkpoint(
             u.block_1(),
@@ -324,18 +322,18 @@ Result<> run( const Parameters& prm )
         }
     }
 
-    // Setting XDMF to the same step as we have loaded and padding width according to max_timesteps.
-    // Thus, we will re-write loaded data.
-    // Maybe a good sanity check.
-    int pad_width =
+    // Setting XDMF file padding width according to max_timesteps.
+    xdmf_output->set_pad_width(
         std::to_string( prm.time_stepping_parameters.timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 )
-            .size();
-    xdmf_output->set_write_counter( prm.time_stepping_parameters.timestep_initial, pad_width );
+            .size() );
     xdmf_output->set_is_dimensional( prm.devel_parameters.output_dimensional );
 
     if ( prm.io_parameters.output_pressure )
     {
-        xdmf_output_pressure->set_write_counter( prm.time_stepping_parameters.timestep_initial, pad_width );
+        xdmf_output_pressure->set_pad_width(
+            std::to_string(
+                prm.time_stepping_parameters.timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 )
+                .size() );
         xdmf_output_pressure->set_is_dimensional( prm.devel_parameters.output_dimensional );
     }
 
@@ -413,6 +411,7 @@ Result<> run( const Parameters& prm )
             xdmf_output,
             xdmf_output_pressure,
             prm,
+            prm.time_stepping_parameters.timestep_initial,
             T.grid_data(),
             u.block_1().grid_data(),
             stokes.eta_fine().grid_data(),
@@ -569,6 +568,7 @@ Result<> run( const Parameters& prm )
                 xdmf_output,
                 xdmf_output_pressure,
                 prm,
+                timestep,
                 T.grid_data(),
                 u.block_1().grid_data(),
                 stokes.eta_fine().grid_data(),

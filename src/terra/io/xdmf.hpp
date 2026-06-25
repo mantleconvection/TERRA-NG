@@ -210,15 +210,7 @@ class XDMFOutput
     ///
     /// This will only affect the step number attached to the file names. The geometry is still written once during the
     /// first write() call.
-    void set_write_counter( int write_counter, int pad_width )
-    {
-        write_counter_ = write_counter;
-        pad_width_     = pad_width;
-
-        std::ostringstream oss;
-        oss << std::setw( pad_width ) << std::setfill( '0' ) << write_counter_;
-        write_counter_str_ = oss.str();
-    }
+    void set_pad_width( int pad_width ) { pad_width_ = pad_width; }
 
     /// @brief Sets metadata flag whether output is dimensional or not
     void set_is_dimensional( const bool is_dimensional ) { is_dimensional_ = is_dimensional; }
@@ -307,7 +299,7 @@ class XDMFOutput
     /// The write() calls will allocate temporary storage on the host if host and device memory are not shared.
     /// Currently, for data grids, some host-side temporary buffers are kept after this method returns (the sizes depend
     /// on the type of data added) to avoid frequent reallocation.
-    void write()
+    void write( int time )
     {
         using util::XML;
 
@@ -319,8 +311,11 @@ class XDMFOutput
         const auto geometry_file_path = directory_path_ + "/" + geometry_file_base;
         const auto topology_file_path = directory_path_ + "/" + topology_file_base;
 
-        // Construct file path and name with zero-padded write_counter.
-        const auto step_file_path = directory_path_ + "/step_" + write_counter_str_ + ".xmf";
+        // Construct file path and name with zero-padded time/timestep.
+        std::ostringstream oss;
+        oss << std::setw( pad_width_ ) << std::setfill( '0' ) << time;
+        time_str_                 = oss.str();
+        const auto step_file_path = directory_path_ + "/step_" + time_str_ + ".xmf";
 
         const int num_subdomains = coords_shell_device_.extent( 0 );
         const int nodes_x        = coords_shell_device_.extent( 1 );
@@ -465,7 +460,7 @@ class XDMFOutput
         auto domain = XML( "Domain" );
         auto grid   = XML( "Grid", { { "Name", "Grid" }, { "GridType", "Uniform" } } );
 
-        grid.add_child( XML( "Time", { { "Value", std::to_string( write_counter_ ) } } ) );
+        grid.add_child( XML( "Time", { { "Value", std::to_string( time ) } } ) );
 
         auto geometry =
             XML( "Geometry", { { "Type", "XYZ" } } )
@@ -531,12 +526,6 @@ class XDMFOutput
             step_stream << xml.to_string();
             step_stream.close();
         }
-
-        write_counter_++;
-
-        std::ostringstream oss;
-        oss << std::setw( pad_width_ ) << std::setfill( '0' ) << write_counter_;
-        write_counter_str_ = oss.str();
 
         first_write_happened_ = true;
     }
@@ -749,7 +738,7 @@ class XDMFOutput
         const grid::Grid4DDataScalar< ScalarTypeIn >& data,
         const OutputTypeFloat&                        output_type )
     {
-        const auto attribute_file_base = data.label() + "_" + write_counter_str_ + ".bin";
+        const auto attribute_file_base = data.label() + "_" + time_str_ + ".bin";
         const auto attribute_file_path = directory_path_ + "/" + attribute_file_base;
 
         {
@@ -873,7 +862,7 @@ class XDMFOutput
         const grid::Grid4DDataVec< ScalarTypeIn, VecDim >& data,
         const OutputTypeFloat&                             output_type )
     {
-        const auto attribute_file_base = data.label() + "_" + write_counter_str_ + ".bin";
+        const auto attribute_file_base = data.label() + "_" + time_str_ + ".bin";
         const auto attribute_file_path = directory_path_ + "/" + attribute_file_base;
 
         {
@@ -1121,8 +1110,7 @@ class XDMFOutput
     std::optional< grid::Grid4DDataVec< double, 3 >::HostMirror > host_data_mirror_vec_double_;
     std::optional< grid::Grid4DDataVec< float, 3 >::HostMirror >  host_data_mirror_vec_float_;
 
-    std::string write_counter_str_;
-    int         write_counter_        = 0;
+    std::string time_str_;
     int         pad_width_            = 0;
     bool        first_write_happened_ = false;
     bool        is_dimensional_       = false;

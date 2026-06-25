@@ -193,11 +193,6 @@ void compute_reference_conductive_profile(
 }
 
 /// Load (u, T) from an XDMF checkpoint and rebuild T_fct via FE→FV projection.
-/// Returns the simulation timestep to resume from (uses
-/// `checkpoint_timestep` if set, else falls back to the file step).
-///
-/// Pre-condition: `prm.io_parameters.checkpoint_dir` is non-empty and
-/// `checkpoint_step >= 0`.
 template < typename ScalarType >
 void load_temperature_checkpoint(
     linalg::VectorQ1Vec< ScalarType, 3 >&       u_velocity,
@@ -210,9 +205,8 @@ void load_temperature_checkpoint(
 {
     using util::logroot;
 
-    logroot << "Loading checkpoint from " << prm.io_parameters.checkpoint_dir << " (file step "
-            << prm.io_parameters.checkpoint_step << ", simulation timestep "
-            << prm.time_stepping_parameters.timestep_initial << ")" << std::endl;
+    logroot << "Loading checkpoint from " << prm.io_parameters.checkpoint_dir << " at simulation step "
+            << prm.io_parameters.checkpoint_step << std::endl;
 
     // Checking if checkpoint is dimensional or nondimensional
     auto metadata_result = io::read_xdmf_checkpoint_metadata( prm.io_parameters.checkpoint_dir );

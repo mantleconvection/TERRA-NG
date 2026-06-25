@@ -64,6 +64,7 @@ inline Result<> write_xdmf(
     std::optional< io::XDMFOutput< ScalarType > >& xdmf_output,
     std::optional< io::XDMFOutput< ScalarType > >& xdmf_output_pressure,
     const Parameters&                              prm,
+    const int                                      timestep,
     Grid4DDataScalar< ScalarType >&                Temperature_data,
     Grid4DDataVec< ScalarType, 3 >&                Velocity_data,
     Grid4DDataScalar< ScalarType >&                Viscosity_data,
@@ -78,7 +79,7 @@ inline Result<> write_xdmf(
         scale( Velocity_data, prm.physics_parameters.calc_cm_per_year );
         scale( Viscosity_data, prm.physics_parameters.viscosity_parameters.reference_viscosity );
 
-        xdmf_output->write();
+        xdmf_output->write( timestep );
 
         // ... and nondimensionalise again.
         scale( Temperature_data, 1.0 / prm.boundary_parameters.delta_T_K );
@@ -94,7 +95,7 @@ inline Result<> write_xdmf(
                   prm.physics_parameters.characteristic_velocity ) /
                     prm.mesh_parameters.mantle_thickness_m );
 
-            xdmf_output_pressure->write();
+            xdmf_output_pressure->write( timestep );
 
             scale(
                 Pressure_data,
@@ -105,9 +106,9 @@ inline Result<> write_xdmf(
     }
     else
     {
-        xdmf_output->write();
+        xdmf_output->write( timestep );
         if ( xdmf_output_pressure )
-            xdmf_output_pressure->write();
+            xdmf_output_pressure->write( timestep );
     }
 
     return { Ok{} };

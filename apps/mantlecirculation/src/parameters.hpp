@@ -283,9 +283,9 @@ struct IOParameters
     std::string radial_profiles_out_dir = "radial_profiles";
     std::string timer_trees_dir         = "timer_trees";
 
+    bool        load_checkpoint = false;
     std::string checkpoint_dir;
-    int         checkpoint_step     = -1;
-    int         checkpoint_timestep = -1;
+    int         checkpoint_step = -1;
 
     int output_frequency = 1;
 
@@ -717,10 +717,12 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     add_flag_with_default( app, "--outdir-overwrite", parameters.io_parameters.overwrite )->group( "I/O" );
     add_option_with_default( app, "--output-pressure", parameters.io_parameters.output_pressure )->group( "I/O" );
 
+    // Checkpoint loading
+    add_option_with_default( app, "--load-checkpoint", parameters.io_parameters.load_checkpoint )
+        ->group( "I/O" )
+        ->description( "Starting from checkpoint" );
     add_option_with_default( app, "--checkpoint-dir", parameters.io_parameters.checkpoint_dir )->group( "I/O" );
     add_option_with_default( app, "--checkpoint-step", parameters.io_parameters.checkpoint_step )->group( "I/O" );
-    add_option_with_default( app, "--checkpoint-timestep", parameters.io_parameters.checkpoint_timestep )
-        ->group( "I/O" );
 
     add_option_with_default( app, "--output-frequency", parameters.io_parameters.output_frequency )
         ->group( "I/O" )
@@ -790,10 +792,10 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     nondimensionalise( parameters );
 
     // Determine timestep_initial from checkpointing parameters
-    if ( parameters.io_parameters.checkpoint_step >= 0 )
-        parameters.time_stepping_parameters.timestep_initial = ( parameters.io_parameters.checkpoint_timestep >= 0 ) ?
-                                                                   parameters.io_parameters.checkpoint_timestep :
-                                                                   parameters.io_parameters.checkpoint_step;
+    if ( parameters.io_parameters.load_checkpoint )
+    {
+        parameters.time_stepping_parameters.timestep_initial = parameters.io_parameters.checkpoint_step;
+    }
 
     util::logroot << "=========================================\n";
     util::logroot << "     Starting mantle circulation app     \n";
