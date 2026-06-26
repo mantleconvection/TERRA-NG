@@ -85,9 +85,9 @@ DEFAULT_SWEEP: list[tuple[int, list[int]]] = [
     (6,  [1, 2, 4, 8, 16]),                   # MT64    actual 2..32  (+g1)
     (7,  [2, 4, 8, 16, 32, 64, 128]),         # MT128   actual 4..256
     (8,  [8, 16, 32, 64, 128, 256, 512]),     # MT256   actual 16..1024
-    (9,  [32, 64, 128, 256, 512, 1024]),      # MT512   actual 64..2048
-    (10, [128, 256, 512, 1024]),              # MT1024  actual 256..2048
-    (11, [512, 1024, 2048, 4096]),            # MT2048  actual 1024..8192
+    (9,  [16, 32, 64, 128, 256, 512, 1024]),  # MT512   actual 32..2048 (added g32=126 M/GCD)
+    (10, [64, 128, 256, 512, 1024]),          # MT1024  actual 128..2048 (added g128=126 M/GCD)
+    (11, [256, 512, 1024, 2048, 4096]),       # MT2048  actual 512..8192 (added g512=252 M/GCD)
     (12, [2048, 4096]),                       # MT4096  actual 4096..8192
     # ^ MT4096 only fits at the largest GCD counts: ~126 M dofs/GCD (our proven
     #   memory ceiling, = MT2048_g1024) needs g8192 = 1024 nodes (the partition
@@ -105,11 +105,13 @@ GCD_MULTIPLIER = 2
 # 1 GCD (the original sweep used 1 GCD only for levels 5-6).
 EXTRA_1GCD_LEVELS = [5, 6]
 
-# Cray MPICH GPU-aware MPI aborts at >= 2048 ranks (cray_ch4_mem_utils.c:2086
-# assertion + segfault during the first energy solve); verified: 1024 GCDs runs
-# clean, 2048 crashes deterministically (model-independent, purely rank count).
-# Never submit cells above this ceiling -- they are skipped and logged.
-MAX_SAFE_GCDS = 1024
+# Cray MPICH GPU-aware MPI used to abort at >= 2048 ranks (cray_ch4_mem_utils.c:2086
+# assertion + segfault in the first energy solve, from CXI MR-cache exhaustion).
+# Mitigated in the generated job scripts via FI_MR_CACHE_MAX_COUNT=1048576 +
+# FI_CXI_RX_MATCH_MODE=software, so >1024-GCD cells can register their halo buffers.
+# Raised to the partition limit (8192 GCDs = 1024 nodes) so the large models
+# (MT2048/MT4096) run on their smallest-fitting node counts.
+MAX_SAFE_GCDS = 8192
 
 # Measured owned-DOF counts per level, ISOTROPIC (lat=rad=level). With the MT/2
 # radial extent the effective dofs are these x 2**RADIAL_EXTRA (i.e. halved).
@@ -218,6 +220,29 @@ def solver_overrides(max_timesteps: int, fgmres: int, ev_iters: int) -> str:
         f"--energy-krylov-max-iterations {ev_iters} "
         f"--energy-krylov-relative-tolerance 0 --energy-krylov-absolute-tolerance 0"
     )
+
+# Solver precision / restart presets (--mode):
+#   low-mem : FP16 (float) Krylov basis for Stokes + energy, Stokes restart lowered to 5
+#             (energy restart is already 5 by default), and a single pre/post smoothing
+#             step in the velocity multigrid. Minimises both the FGMRES workspace (the
+#             dominant memory term at high dofs/GCD) and the smoother cost.
+#   std     : full double Krylov basis, Stokes restart 10 (= the base-config restart, so
+#             the tmp-vector pool is sized for it), and the default 2 pre/post smoothing
+#             steps. More memory + smoother work, stronger convergence.
+# The app sizes its FGMRES tmp pool from the base-config restart (stokes=10); restart may
+# only be LOWERED at runtime, so std keeps 10 and low-mem lowers Stokes to 5.
+def mode_overrides(mode: str) -> str:
+    if mode == "low-mem":
+        return (" --stokes-float-krylov-basis --energy-float-krylov-basis"
+                " --stokes-krylov-restart 5 --energy-krylov-restart 5"
+                " --stokes-viscous-pc-num-smoothing-steps-prepost 1")
+    return (" --stokes-krylov-restart 10"
+            " --stokes-viscous-pc-num-smoothing-steps-prepost 2")
+
+def mode_suffix(mode: str) -> str:
+    # Tag every cell with its mode so the output dir, job script and SBATCH job-name all
+    # carry it (e.g. MT1024_g128_lowmem vs MT1024_g128_std) -- the two modes never collide.
+    return "_lowmem" if mode == "low-mem" else "_std"
 
 # LUMI-G: each node has 8 GCDs (4 MI250X * 2). standard-g allocates GPUs; we bind
 # one rank per GCD. Account / partition can be overridden via env.
@@ -340,7 +365,7 @@ rm -f ${{SELECT_GPU}}
 def render_job_script(level: int, n_gpus: int, opts) -> tuple[Path, Path, dict]:
     mt_label   = 2 ** level
     rad_level  = level + RADIAL_EXTRA
-    cell_tag   = f"MT{mt_label}_g{n_gpus}"
+    cell_tag   = f"MT{mt_label}_g{n_gpus}{mode_suffix(opts.mode)}"
     out_path   = OUTPUT_ROOT / cell_tag
     nodes, tpn       = gpu_to_node_layout(n_gpus)
     lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
@@ -358,6 +383,7 @@ def render_job_script(level: int, n_gpus: int, opts) -> tuple[Path, Path, dict]:
         f"--refinement-level-mesh-min {mesh_min} --refinement-level-mesh-max {level} "
         f"--lat-sdr {lat_sdr} --rad-sdr {rad_sdr} --radial-extra-levels {RADIAL_EXTRA} "
         + solver_overrides(opts.max_timesteps, opts.fgmres, opts.ev_iters)
+        + mode_overrides(opts.mode)
     )
     echo_line = (f"Cell: {cell_tag}  mesh=[{mesh_min}..{level}]  rad_level={rad_level}  "
                  f"lat_sdr={lat_sdr}  rad_sdr={rad_sdr}  subdomains={subdomains}  "
@@ -381,7 +407,7 @@ def render_radial_job_script(cell: dict, opts) -> tuple[Path, Path, dict]:
     nodes, tpn = gpu_to_node_layout(n_gpus)
     subdomains = 10 * 4 ** lat_sdr * 2 ** rad_sdr
     mesh_min   = mesh_min_for(lat_sdr, rad_sdr, k)
-    cell_tag   = f"RAD_l{lat_level}r{rad_level}_g{n_gpus}"
+    cell_tag   = f"RAD_l{lat_level}r{rad_level}_g{n_gpus}{mode_suffix(opts.mode)}"
     out_path   = OUTPUT_ROOT / cell_tag
 
     info = dict(
@@ -395,6 +421,7 @@ def render_radial_job_script(cell: dict, opts) -> tuple[Path, Path, dict]:
         f"--refinement-level-mesh-min {mesh_min} --refinement-level-mesh-max {lat_level} "
         f"--radial-extra-levels {k} --lat-sdr {lat_sdr} --rad-sdr {rad_sdr} "
         + solver_overrides(opts.max_timesteps, opts.fgmres, opts.ev_iters)
+        + mode_overrides(opts.mode)
     )
     echo_line = (f"Cell: {cell_tag}  mesh=[{mesh_min}..{lat_level}]  rad_level={rad_level}  "
                  f"lat_sdr={lat_sdr}  rad_sdr={rad_sdr}  subdomains={subdomains}  "
@@ -419,6 +446,10 @@ def main(argv):
                         f"Cray MPICH MR-exhaustion wall); raise to attempt larger runs")
     p.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                    help=f"base config TOML (default: {DEFAULT_CONFIG.name})")
+    p.add_argument("--mode", choices=["std", "low-mem"], default="std",
+                   help="solver precision/restart preset: std = double Krylov basis + "
+                        "Stokes restart 10; low-mem = FP16 basis + restart 5. The cell tag "
+                        "(output dir / job script / job-name) is suffixed _std or _lowmem.")
     p.add_argument("--max-timesteps", type=int, default=DEFAULT_MAX_TIMESTEPS,
                    help=f"timesteps per cell (default: {DEFAULT_MAX_TIMESTEPS})")
     p.add_argument("--fgmres", type=int, default=DEFAULT_FGMRES,
