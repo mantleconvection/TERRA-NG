@@ -37,10 +37,20 @@ Output/job trees live on scratch, NOT $HOME: $HOME hit its hard quota mid-sweep
 on an earlier run and silently truncated timer-tree writes (and a crash left
 ~1000 core dumps that overflowed the quota). Scratch avoids both.
 
+Decomposition: the default is the asymmetric lat_sdr/rad_sdr split (subdomains/GPU held
+constant; see choose_lat_rad). Pass --isotropic for the original uniform single-knob
+--refinement-level-subdomains s decomposition (lat_sdr=rad_sdr=s), tagged _iso.
+
+Solver mode (--mode): std (default) runs the double-precision Krylov basis; low-mem runs
+the FP16/BF16 Krylov basis + lowered restart/smoothing (needs the mc-float-krylov binary)
+to cut the FGMRES workspace -- the dominant memory term at high dofs/GPU. Cells are tagged
+_std / _lowmem so the two never collide.
+
 Usage:
     python3 submit_bench_mt_jb.py            # submit the default strong grid
     python3 submit_bench_mt_jb.py --dry-run  # just print what would be submitted
     python3 submit_bench_mt_jb.py --levels 8 9    # only those mesh levels
+    python3 submit_bench_mt_jb.py --isotropic --mode low-mem   # uniform sdr, FP16 low-mem
     python3 submit_bench_mt_jb.py --config <base.toml> --max-timesteps 10
 """
 
@@ -95,9 +105,23 @@ DEFAULT_SWEEP: list[tuple[int, list[int]]] = [
     (6,  [1, 2, 4, 8, 16]),                   # MT64    actual 2..32  (+g1)
     (7,  [2, 4, 8, 16, 32, 64, 128]),         # MT128   actual 4..256
     (8,  [8, 16, 32, 64, 128, 256, 512]),     # MT256   actual 16..1024
-    (9,  [32, 64, 128, 256, 512, 1024]),      # MT512   actual 64..2048
-    (10, [128, 256, 512, 1024]),              # MT1024  actual 256..2048
-    (11, [512, 1024, 2048, 4096]),            # MT2048  actual 1024..8192
+    # Larger models (MT512+): one denser small-node cell prepended (mirrors the LUMI
+    # driver's "dense small-node cells"). These high-dofs/GPU points cover the smallest
+    # node count the model fits on -- reachable on A100-40GB mainly with --mode low-mem
+    # (the FP16 Krylov basis cuts the FGMRES workspace). actual n_gpus = base * 2.
+    (9,  [16, 32, 64, 128, 256, 512, 1024]),  # MT512   actual 32..2048 (added g32 = 8 nodes)
+    (10, [64, 128, 256, 512, 1024]),          # MT1024  actual 128..2048 (added g128 = 32 nodes)
+    (11, [256, 512, 1024, 2048, 4096]),       # MT2048  actual 512..8192 (added g512 = 128 nodes)
+    (12, [256, 512, 1024, 2048, 4096]),       # MT4096  actual 512..8192 (probes; see below)
+    # ^ MT4096 (~1.03e12 effective dofs) does NOT fit JUWELS Booster's 40 GB A100s at any
+    #   reachable node count -- the dofs/GPU stays far above the ~126 M/GCD that fit LUMI's
+    #   64 GB GCDs. The cells are launchable OOM probes only:
+    #     g512  = 128 nodes  ~2010 M/GPU   (booster, up)
+    #     g1024 = 256 nodes  ~1005 M/GPU   (booster, up)
+    #     g2048 = 512 nodes   ~502 M/GPU   (largebooster, currently DOWN)
+    #   Even g2048 is ~4x LUMI's proven ceiling; reaching ~126 M/GPU would need 8192 GPUs
+    #   (2048 nodes), which the machine (926 nodes) does not have. g4096/g8192 exceed the
+    #   2048-GPU cap and are skipped. None expected to fit, even with --mode low-mem.
 ]
 
 # Multiply every strong-grid GPU count by this (each cell runs at GPU_MULTIPLIER x
@@ -122,6 +146,7 @@ MAX_SAFE_GPUS = 2048
 DOFS_PER_LEVEL = {
     5: 1013958, 6: 7987590, 7: 63406854, 8: 505284102,
     9: 4034399238, 10: 32243718150, 11: 257627107000,
+    12: 2058460585000,   # extrapolated at x7.99 (MT4096)
 }
 
 def dofs_at(level: int) -> float | None:
@@ -225,6 +250,32 @@ def solver_overrides(max_timesteps: int, fgmres: int, ev_iters: int) -> str:
         f"--energy-krylov-relative-tolerance 0 --energy-krylov-absolute-tolerance 0"
     )
 
+# Solver precision / restart presets (--mode), ported from submit_bench_mt_lumi.py.
+# Requires the mc-float-krylov binary: --stokes/--energy-float-krylov-basis store the
+# Krylov basis in FP16 (native BF16 since the Kokkos 5.1.0 upgrade), which removes the
+# dominant memory term (the FGMRES workspace) at high dofs/GPU.
+#   low-mem : FP16 (float) Krylov basis for Stokes + energy, Stokes restart lowered to 5
+#             (energy restart is already 5 by default), and a single pre/post smoothing
+#             step in the velocity multigrid. Minimises both the FGMRES workspace and the
+#             smoother cost.
+#   std     : full double Krylov basis, Stokes restart 10 (= the base-config restart, so
+#             the tmp-vector pool is sized for it), and the default 2 pre/post smoothing
+#             steps. More memory + smoother work, stronger convergence.
+# The app sizes its FGMRES tmp pool from the base-config restart (stokes=10); restart may
+# only be LOWERED at runtime, so std keeps 10 and low-mem lowers Stokes to 5.
+def mode_overrides(mode: str) -> str:
+    if mode == "low-mem":
+        return (" --stokes-float-krylov-basis --energy-float-krylov-basis"
+                " --stokes-krylov-restart 5 --energy-krylov-restart 5"
+                " --stokes-viscous-pc-num-smoothing-steps-prepost 1")
+    return (" --stokes-krylov-restart 10"
+            " --stokes-viscous-pc-num-smoothing-steps-prepost 2")
+
+def mode_suffix(mode: str) -> str:
+    # Tag every cell with its mode so the output dir, job script and SBATCH job-name all
+    # carry it (e.g. MT1024_g128_lowmem vs MT1024_g128_std) -- the two modes never collide.
+    return "_lowmem" if mode == "low-mem" else "_std"
+
 # JUWELS Booster: each node has 4 A100 GPUs and 48 CPU cores (2x 24-core EPYC).
 # booster allocates GPUs via --gres; we bind one rank per GPU with --gpu-bind=closest
 # and give each rank 12 cores. Account / partition can be overridden via env.
@@ -283,6 +334,20 @@ def choose_lat_rad(n_gpus: int, target: int = TARGET_SUBDOM_PER_GPU) -> tuple[in
         raise ValueError(f"no balanced (lat_sdr, rad_sdr) found for n_gpus={n_gpus}")
     return best[1], best[2]
 
+def choose_iso_sdr(n_gpus: int, rad_level: int):
+    """Isotropic (uniform lat_sdr = rad_sdr = s) decomposition: subdomains = 10*8^s
+    (emitted as the old --refinement-level-subdomains s). Smallest s that is >= n_gpus,
+    evenly divides n_gpus, and keeps rad_sdr = s <= rad_level - 1 (else the EpsDivDiv
+    operator hits 1 radial cell/subdomain and aborts). Returns None if no valid s, so
+    the cell is skipped under --isotropic."""
+    for s in range(0, 7):
+        if s > rad_level - 1:
+            break
+        nsub = 10 * 8 ** s
+        if nsub >= n_gpus and nsub % n_gpus == 0:
+            return s
+    return None
+
 def gpu_to_node_layout(n_gpus: int) -> tuple[int, int]:
     """Map a target n_gpus to (#nodes, #ntasks_per_node).
 
@@ -339,30 +404,46 @@ srun --gpu-bind=closest {BINARY} --config {config} {app_args} --outdir {out_path
 def render_job_script(level: int, n_gpus: int, opts) -> tuple[Path, Path, dict]:
     mt_label   = 2 ** level
     rad_level  = level + RADIAL_EXTRA
-    cell_tag   = f"MT{mt_label}_g{n_gpus}"
-    out_path   = OUTPUT_ROOT / cell_tag
-    nodes, tpn       = gpu_to_node_layout(n_gpus)
-    lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
-    subdomains       = subdomains_lr(lat_sdr, rad_sdr)
-    mesh_min         = mesh_min_for(lat_sdr, rad_sdr, RADIAL_EXTRA)
+    nodes, tpn = gpu_to_node_layout(n_gpus)
+
+    if getattr(opts, "isotropic", False):
+        s = choose_iso_sdr(n_gpus, rad_level)
+        if s is None:
+            return None, None, None        # no valid isotropic decomposition -> skip cell
+        lat_sdr = rad_sdr = s
+        subdomains  = subdomains_lr(s, s)
+        mesh_min    = mesh_min_for(s, s, RADIAL_EXTRA)
+        decomp_flag = f"--refinement-level-subdomains {s}"
+        decomp_tag  = "_iso"
+    else:
+        lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
+        subdomains  = subdomains_lr(lat_sdr, rad_sdr)
+        mesh_min    = mesh_min_for(lat_sdr, rad_sdr, RADIAL_EXTRA)
+        decomp_flag = f"--lat-sdr {lat_sdr} --rad-sdr {rad_sdr}"
+        decomp_tag  = ""
+
+    cell_tag = f"MT{mt_label}_g{n_gpus}{decomp_tag}{mode_suffix(opts.mode)}"
+    out_path = OUTPUT_ROOT / cell_tag
 
     info = dict(
         cell_tag=cell_tag, mt_label=mt_label,
         level=level, mesh_min=mesh_min, rad_level=rad_level,
         lat_sdr=lat_sdr, rad_sdr=rad_sdr, subdom_per_gpu=subdomains // n_gpus,
+        mode=opts.mode,
         max_timesteps=opts.max_timesteps, fgmres=opts.fgmres, ev_iters=opts.ev_iters,
         n_gpus=n_gpus, nodes=nodes, tasks_per_node=tpn,
     )
     app_args = (
         f"--refinement-level-mesh-min {mesh_min} --refinement-level-mesh-max {level} "
-        f"--lat-sdr {lat_sdr} --rad-sdr {rad_sdr} --radial-extra-levels {RADIAL_EXTRA} "
+        f"{decomp_flag} --radial-extra-levels {RADIAL_EXTRA} "
         + solver_overrides(opts.max_timesteps, opts.fgmres, opts.ev_iters)
+        + mode_overrides(opts.mode)
     )
     echo_line = (f"Cell: {cell_tag}  mesh=[{mesh_min}..{level}]  rad_level={rad_level}  "
                  f"lat_sdr={lat_sdr}  rad_sdr={rad_sdr}  subdomains={subdomains}  "
-                 f"subdom/GPU={subdomains // n_gpus}  steps={opts.max_timesteps}  "
-                 f"fgmres={opts.fgmres}  ev={opts.ev_iters}  n_gpus={n_gpus}  "
-                 f"nodes={nodes}x{tpn}  partition={partition_for(nodes)}")
+                 f"subdom/GPU={subdomains // n_gpus}  mode={opts.mode}  "
+                 f"steps={opts.max_timesteps}  fgmres={opts.fgmres}  ev={opts.ev_iters}  "
+                 f"n_gpus={n_gpus}  nodes={nodes}x{tpn}  partition={partition_for(nodes)}")
     time_limit = opts.time_limit or time_limit_for(level)
     job_path = write_juwels_job(cell_tag, opts.config, out_path, nodes, tpn,
                                 time_limit, app_args, echo_line)
@@ -380,12 +461,12 @@ def render_radial_job_script(cell: dict, opts) -> tuple[Path, Path, dict]:
     nodes, tpn = gpu_to_node_layout(n_gpus)
     subdomains = 10 * 4 ** lat_sdr * 2 ** rad_sdr
     mesh_min   = mesh_min_for(lat_sdr, rad_sdr, k)
-    cell_tag   = f"RAD_l{lat_level}r{rad_level}_g{n_gpus}"
+    cell_tag   = f"RAD_l{lat_level}r{rad_level}_g{n_gpus}{mode_suffix(opts.mode)}"
     out_path   = OUTPUT_ROOT / cell_tag
 
     info = dict(
         cell_tag=cell_tag, lat_level=lat_level, mesh_min=mesh_min, rad_level=rad_level,
-        lat_sdr=lat_sdr, rad_sdr=rad_sdr, radial_extra=k,
+        lat_sdr=lat_sdr, rad_sdr=rad_sdr, radial_extra=k, mode=opts.mode,
         max_timesteps=opts.max_timesteps, fgmres=opts.fgmres, ev_iters=opts.ev_iters,
         n_gpus=n_gpus, nodes=nodes, tasks_per_node=tpn,
         subdom_per_gpu=subdomains // n_gpus,
@@ -394,11 +475,13 @@ def render_radial_job_script(cell: dict, opts) -> tuple[Path, Path, dict]:
         f"--refinement-level-mesh-min {mesh_min} --refinement-level-mesh-max {lat_level} "
         f"--radial-extra-levels {k} --lat-sdr {lat_sdr} --rad-sdr {rad_sdr} "
         + solver_overrides(opts.max_timesteps, opts.fgmres, opts.ev_iters)
+        + mode_overrides(opts.mode)
     )
     echo_line = (f"Cell: {cell_tag}  mesh=[{mesh_min}..{lat_level}]  rad_level={rad_level}  "
                  f"lat_sdr={lat_sdr}  rad_sdr={rad_sdr}  subdomains={subdomains}  "
-                 f"steps={opts.max_timesteps}  fgmres={opts.fgmres}  ev={opts.ev_iters}  "
-                 f"n_gpus={n_gpus}  nodes={nodes}x{tpn}  partition={partition_for(nodes)}")
+                 f"mode={opts.mode}  steps={opts.max_timesteps}  fgmres={opts.fgmres}  "
+                 f"ev={opts.ev_iters}  n_gpus={n_gpus}  nodes={nodes}x{tpn}  "
+                 f"partition={partition_for(nodes)}")
     time_limit = opts.time_limit or time_limit_for(rad_level)
     job_path = write_juwels_job(cell_tag, opts.config, out_path, nodes, tpn,
                                 time_limit, app_args, echo_line)
@@ -415,6 +498,16 @@ def main(argv):
                         "(applied after the GPU_MULTIPLIER; strong/weak grid only)")
     p.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                    help=f"base config TOML (default: {DEFAULT_CONFIG.name})")
+    p.add_argument("--mode", choices=["std", "low-mem"], default="std",
+                   help="solver precision/restart preset: std = double Krylov basis + "
+                        "Stokes restart 10; low-mem = FP16 basis + restart 5 (needs the "
+                        "mc-float-krylov binary). The cell tag (output dir / job script / "
+                        "job-name) is suffixed _std or _lowmem.")
+    p.add_argument("--isotropic", action="store_true",
+                   help="use the uniform (isotropic) --refinement-level-subdomains s "
+                        "decomposition (lat_sdr=rad_sdr=s, like the original sweep) instead "
+                        "of the asymmetric lat_sdr/rad_sdr. Cells whose required s exceeds "
+                        "rad_level-1 are skipped. Cell tag gets an extra _iso suffix.")
     p.add_argument("--max-timesteps", type=int, default=DEFAULT_MAX_TIMESTEPS,
                    help=f"timesteps per cell (default: {DEFAULT_MAX_TIMESTEPS})")
     p.add_argument("--fgmres", type=int, default=DEFAULT_FGMRES,
@@ -498,7 +591,14 @@ def main(argv):
         else:
             print(f"strong-scaling grid (radial = MT/2, rad_level = lat_level-1): {len(cells)} cells")
         for (level, n_gpus) in cells:
-            lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
+            if args.isotropic:
+                s = choose_iso_sdr(n_gpus, level + RADIAL_EXTRA)
+                if s is None:
+                    print(f"  MT{2**level:<5} n_gpus={n_gpus:5}  SKIP (no isotropic s <= rad_level-1)")
+                    continue
+                lat_sdr = rad_sdr = s
+            else:
+                lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
             subs = subdomains_lr(lat_sdr, rad_sdr)
             nodes, _ = gpu_to_node_layout(n_gpus)
             dpg = dofs_at(level)
@@ -514,6 +614,10 @@ def main(argv):
         else:
             level, n_gpus = item
             job_path, out_path, info = render_job_script(level, n_gpus, args)
+        if job_path is None:
+            print(f"  SKIP MT{2**item[0]}_g{item[1]}: no valid isotropic decomposition "
+                  f"(required s > rad_level-1)")
+            continue
         if args.dry_run:
             print(f"  [dry-run] would submit: {job_path}")
         else:
@@ -529,15 +633,15 @@ def main(argv):
         # Persist a manifest so collect_bench_mt.py can map cells -> job ids.
         if args.weak_radial:
             manifest = JOB_DIR / "manifest_radial.txt"
-            header = ("# cell_tag\tjob_id\tlat_level\trad_level\tlat_sdr\trad_sdr"
+            header = ("# cell_tag\tjob_id\tlat_level\trad_level\tlat_sdr\trad_sdr\tmode"
                       "\tmax_timesteps\tfgmres\tev_iters\tn_gpus\tnodes\ttasks_per_node\n")
-            fields = ["lat_level", "rad_level", "lat_sdr", "rad_sdr",
+            fields = ["lat_level", "rad_level", "lat_sdr", "rad_sdr", "mode",
                       "max_timesteps", "fgmres", "ev_iters", "n_gpus", "nodes", "tasks_per_node"]
         else:
             manifest = JOB_DIR / ("manifest_weak.txt" if args.weak else "manifest.txt")
-            header = ("# cell_tag\tjob_id\tlevel\trad_level\tlat_sdr\trad_sdr\tsubdom_per_gpu"
+            header = ("# cell_tag\tjob_id\tlevel\trad_level\tlat_sdr\trad_sdr\tsubdom_per_gpu\tmode"
                       "\tmax_timesteps\tfgmres\tev_iters\tn_gpus\tnodes\ttasks_per_node\n")
-            fields = ["level", "rad_level", "lat_sdr", "rad_sdr", "subdom_per_gpu",
+            fields = ["level", "rad_level", "lat_sdr", "rad_sdr", "subdom_per_gpu", "mode",
                       "max_timesteps", "fgmres", "ev_iters",
                       "n_gpus", "nodes", "tasks_per_node"]
         with open(manifest, "w") as f:
