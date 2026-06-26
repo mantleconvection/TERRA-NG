@@ -297,6 +297,20 @@ def choose_lat_rad(n_gpus: int, target: int = TARGET_SUBDOM_PER_GPU) -> tuple[in
         raise ValueError(f"no balanced (lat_sdr, rad_sdr) found for n_gpus={n_gpus}")
     return best[1], best[2]
 
+def choose_iso_sdr(n_gpus: int, rad_level: int):
+    """Isotropic (uniform lat_sdr = rad_sdr = s) decomposition: subdomains = 10*8^s
+    (emitted as the old --refinement-level-subdomains s). Smallest s that is >= n_gpus,
+    evenly divides n_gpus, and keeps rad_sdr = s <= rad_level - 1 (else the EpsDivDiv
+    operator hits 1 radial cell/subdomain and aborts). Returns None if no valid s, so
+    the cell is skipped under --isotropic."""
+    for s in range(0, 7):
+        if s > rad_level - 1:
+            break
+        nsub = 10 * 8 ** s
+        if nsub >= n_gpus and nsub % n_gpus == 0:
+            return s
+    return None
+
 def gpu_to_node_layout(n_gpus: int) -> tuple[int, int]:
     """Map a target n_gpus to (#nodes, #ntasks_per_node).
 
@@ -365,12 +379,26 @@ rm -f ${{SELECT_GPU}}
 def render_job_script(level: int, n_gpus: int, opts) -> tuple[Path, Path, dict]:
     mt_label   = 2 ** level
     rad_level  = level + RADIAL_EXTRA
-    cell_tag   = f"MT{mt_label}_g{n_gpus}{mode_suffix(opts.mode)}"
-    out_path   = OUTPUT_ROOT / cell_tag
-    nodes, tpn       = gpu_to_node_layout(n_gpus)
-    lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
-    subdomains       = subdomains_lr(lat_sdr, rad_sdr)
-    mesh_min         = mesh_min_for(lat_sdr, rad_sdr, RADIAL_EXTRA)
+    nodes, tpn = gpu_to_node_layout(n_gpus)
+
+    if getattr(opts, "isotropic", False):
+        s = choose_iso_sdr(n_gpus, rad_level)
+        if s is None:
+            return None, None, None        # no valid isotropic decomposition -> skip cell
+        lat_sdr = rad_sdr = s
+        subdomains  = subdomains_lr(s, s)
+        mesh_min    = mesh_min_for(s, s, RADIAL_EXTRA)
+        decomp_flag = f"--refinement-level-subdomains {s}"
+        decomp_tag  = "_iso"
+    else:
+        lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
+        subdomains  = subdomains_lr(lat_sdr, rad_sdr)
+        mesh_min    = mesh_min_for(lat_sdr, rad_sdr, RADIAL_EXTRA)
+        decomp_flag = f"--lat-sdr {lat_sdr} --rad-sdr {rad_sdr}"
+        decomp_tag  = ""
+
+    cell_tag = f"MT{mt_label}_g{n_gpus}{decomp_tag}{mode_suffix(opts.mode)}"
+    out_path = OUTPUT_ROOT / cell_tag
 
     info = dict(
         cell_tag=cell_tag, mt_label=mt_label,
@@ -381,7 +409,7 @@ def render_job_script(level: int, n_gpus: int, opts) -> tuple[Path, Path, dict]:
     )
     app_args = (
         f"--refinement-level-mesh-min {mesh_min} --refinement-level-mesh-max {level} "
-        f"--lat-sdr {lat_sdr} --rad-sdr {rad_sdr} --radial-extra-levels {RADIAL_EXTRA} "
+        f"{decomp_flag} --radial-extra-levels {RADIAL_EXTRA} "
         + solver_overrides(opts.max_timesteps, opts.fgmres, opts.ev_iters)
         + mode_overrides(opts.mode)
     )
@@ -450,6 +478,11 @@ def main(argv):
                    help="solver precision/restart preset: std = double Krylov basis + "
                         "Stokes restart 10; low-mem = FP16 basis + restart 5. The cell tag "
                         "(output dir / job script / job-name) is suffixed _std or _lowmem.")
+    p.add_argument("--isotropic", action="store_true",
+                   help="use the uniform (isotropic) --refinement-level-subdomains s "
+                        "decomposition (lat_sdr=rad_sdr=s, like the original sweep) instead "
+                        "of the asymmetric lat_sdr/rad_sdr. Cells whose required s exceeds "
+                        "rad_level-1 are skipped. Cell tag gets an extra _iso suffix.")
     p.add_argument("--max-timesteps", type=int, default=DEFAULT_MAX_TIMESTEPS,
                    help=f"timesteps per cell (default: {DEFAULT_MAX_TIMESTEPS})")
     p.add_argument("--fgmres", type=int, default=DEFAULT_FGMRES,
@@ -536,7 +569,14 @@ def main(argv):
         else:
             print(f"strong-scaling grid (radial = MT/2, rad_level = lat_level-1): {len(cells)} cells")
         for (level, n_gpus) in cells:
-            lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
+            if args.isotropic:
+                s = choose_iso_sdr(n_gpus, level + RADIAL_EXTRA)
+                if s is None:
+                    print(f"  MT{2**level:<5} n_gpus={n_gpus:5}  SKIP (no isotropic s <= rad_level-1)")
+                    continue
+                lat_sdr = rad_sdr = s
+            else:
+                lat_sdr, rad_sdr = choose_lat_rad(n_gpus)
             subs = subdomains_lr(lat_sdr, rad_sdr)
             nodes, _ = gpu_to_node_layout(n_gpus)
             dpg = dofs_at(level)
@@ -552,6 +592,10 @@ def main(argv):
         else:
             level, n_gpus = item
             job_path, out_path, info = render_job_script(level, n_gpus, args)
+        if job_path is None:
+            print(f"  SKIP MT{2**item[0]}_g{item[1]}: no valid isotropic decomposition "
+                  f"(required s > rad_level-1)")
+            continue
         if args.dry_run:
             print(f"  [dry-run] would submit: {job_path}")
         else:
