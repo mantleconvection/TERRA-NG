@@ -1,6 +1,13 @@
 #pragma once
 
+#include <Kokkos_Macros.hpp>
+
+#if defined( KOKKOS_ENABLE_HIP )
 #include <hip/hip_runtime.h>
+#elif defined( KOKKOS_ENABLE_CUDA )
+#include <cuda_runtime.h>
+#endif
+
 #include <mpi.h>
 #include <string>
 
@@ -14,8 +21,16 @@ namespace terra::mantlecirculation {
 inline void log_hbm( const std::string& label )
 {
     size_t freeB = 0, totalB = 0;
+#if defined( KOKKOS_ENABLE_HIP )
     if ( hipMemGetInfo( &freeB, &totalB ) != hipSuccess )
         return;
+#elif defined( KOKKOS_ENABLE_CUDA )
+    if ( cudaMemGetInfo( &freeB, &totalB ) != cudaSuccess )
+        return;
+#else
+    (void) label;
+    return;
+#endif
 
     double used = double( totalB - freeB ) / ( 1024.0 * 1024.0 * 1024.0 );
     double used_max = used, used_min = used;
