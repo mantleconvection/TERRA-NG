@@ -1,0 +1,59 @@
+name: basic-test
+
+on:
+  workflow_call:
+
+concurrency:
+  group: ${ {github.event_name }}-${{ github.workflow }}-${{ github.ref }}-cibasic
+  cancel-in-progress: ${{github.event_name == 'pull_request'}}
+
+permissions: read-all
+
+jobs:
+  clang-smoketest:
+    name: clang-smoketest
+    runs-on: [ubuntu-latest]
+
+    steps:
+      - name: checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: kokkos
+
+      - name: Install ccache
+        run: |
+          sudo apt-get update
+          sudo apt-get install ccache
+
+      - uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: ~/.cache/ccache
+          key: kokkos-basic-test-${{ github.ref }}-${{ github.sha }}
+          restore-keys: kokkos-basic-test-${{ github.ref }}
+
+      - name: configure kokkos
+        run: |
+          cmake \
+            -S kokkos \
+            -B builddir \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_INSTALL_PREFIX=$PWD/../install \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_FLAGS="-Werror" \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DKokkos_ENABLE_ATOMICS_BYPASS=ON \
+            -DKokkos_ENABLE_COMPILER_WARNINGS=ON \
+            -DKokkos_ENABLE_DEPRECATED_CODE_4=OFF \
+            -DKokkos_ENABLE_EXAMPLES=ON \
+            -DKokkos_ENABLE_SERIAL=ON \
+            -DKokkos_ENABLE_TESTS=ON
+
+      - name: build_and_install_kokkos
+        run:  |
+          ccache -z
+          cmake --build builddir --target install --parallel $(nproc)
+          ccache -s
+
+      - name: test_kokkos
+        run: ctest --test-dir builddir --timeout 2000 -j$(nproc) --output-on-failure
