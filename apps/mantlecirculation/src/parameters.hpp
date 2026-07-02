@@ -171,8 +171,9 @@ struct PhysicsParameters
     double dissipation_number = 1.0;
     double h_number           = 1.0;
 
-    double thermal_diffusivity     = 1.0;
-    double characteristic_velocity = 1e-10; // characteristic diffusive velocity
+    double thermal_diffusivity_dim    = 1.0;
+    double thermal_diffusivity_nondim = 1.0;
+    double characteristic_velocity    = 1e-10; // characteristic diffusive velocity
 
     double reference_density      = 4500;
     double thermal_expansivity    = 2.5e-5;
@@ -341,7 +342,7 @@ inline void nondimensionalise( Parameters& prm )
     phys.characteristic_velocity =
         phys.thermal_conductivity / ( phys.reference_density * phys.specific_heat_capacity * mesh.mantle_thickness_m );
 
-    phys.thermal_diffusivity = phys.thermal_conductivity / ( phys.reference_density * phys.specific_heat_capacity );
+    phys.thermal_diffusivity_dim = phys.thermal_conductivity / ( phys.reference_density * phys.specific_heat_capacity );
 
     // Precompute conversion factors from non-dim to dimensional quantities
     phys.calc_cm_per_year = phys.characteristic_velocity * 60 * 60 * 24 * 365 * 100; // Velocity in cm/a
@@ -365,10 +366,10 @@ inline void nondimensionalise( Parameters& prm )
         // Rayleigh number = ( rho * alpha * g * L^3 * dT ) / ( eta * kappa )
         phys.rayleigh_number = ( phys.reference_density * phys.gravity * phys.thermal_expansivity *
                                  std::pow( mesh.mantle_thickness_m, 3 ) * boundary.delta_T_K ) /
-                               ( phys.viscosity_parameters.reference_viscosity * phys.thermal_diffusivity );
+                               ( phys.viscosity_parameters.reference_viscosity * phys.thermal_diffusivity_dim );
 
         // Peclet number = ( U * L ) / kappa -> should be 1
-        phys.peclet_number = ( phys.characteristic_velocity * mesh.mantle_thickness_m ) / phys.thermal_diffusivity;
+        phys.peclet_number = ( phys.characteristic_velocity * mesh.mantle_thickness_m ) / phys.thermal_diffusivity_dim;
 
         // Dissipation number = ( alpha * g * L ) / Cp
         phys.dissipation_number =

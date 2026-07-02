@@ -191,6 +191,15 @@ Result<> run( const Parameters& prm )
     logroot << "Avg DoFs/process in (T,u,p)   = (" << num_dofs_temperature / world_size << ", "
             << num_dofs_velocity / world_size << ", " << num_dofs_pressure / world_size << ")" << std::endl;
 
+    // Logging nondimensional numbers
+    logroot << "\n----------Simulation parameters-----------"
+               "\nRayleigh number: "
+            << prm.physics_parameters.rayleigh_number
+            << "\nCharacteristic velocity: " << prm.physics_parameters.characteristic_velocity
+            << "\nThermal diffusivity: " << prm.physics_parameters.thermal_diffusivity_dim
+            << "\n------------------------------------------\n"
+            << std::endl;
+
     // Setting up Stokes velocity boundary conditions.
     //
     // Currently, we can choose either no-slip or free-slip.
