@@ -1,11 +1,11 @@
-# TerraNeo
+# TERRA-NG
 
 [![CI](https://github.com/mantleconvection/terraneo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mantleconvection/terraneo/actions/workflows/ci.yml)
 [![Doxygen Docs](https://github.com/mantleconvection/terraneo/actions/workflows/doxygen.yml/badge.svg?branch=main)](https://github.com/mantleconvection/terraneo/actions/workflows/doxygen.yml)
 
-Extreme-scale mantle convection code for CPU and GPU systems. Originating from the [TerraNeo project](https://terraneo.fau.de).
+Extreme-scale mantle convection code for CPU and GPU systems.
 
-> ❗️The code is early in development, and thus not yet ready for production. But feel free to try it out!
+> ❗️The code is early in development, but feel free to try it out!
 
 ## Documentation
 
@@ -37,7 +37,6 @@ mainly focused on massively parallel mantle convection simulations on GPU (and C
 An incomplete list of features
 * Runs in massively parallel settings on CPU and GPU systems (via [Kokkos](https://github.com/kokkos/kokkos) and MPI)
 * Stable discretization of the generalized, compressible Stokes equations (Q1-iso-Q2 / Q1) using spherical wedge finite-elements
-* Advection-diffusion discretization using hexahedral [finite volumes with algebraic flux corrected transport (FCT)](#advection-diffusion)
 * Plate boundary conditions
 * Fully matrix-free
 * Krylov methods and geometric multigrid preconditioners (using GCA coarse grid operators)
