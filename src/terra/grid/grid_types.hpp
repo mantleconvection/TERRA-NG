@@ -88,10 +88,10 @@ struct Grid4DDataVec
     }
 
     /// @brief Host mirror type for I/O.
-    struct HostMirror
+    struct host_mirror_type
     {
         using value_type = ScalarType;
-        typename Grid4DDataScalar< ScalarType >::HostMirror comp_[VecDim];
+        typename Grid4DDataScalar< ScalarType >::host_mirror_type comp_[VecDim];
 
         ScalarType& operator()( int i0, int i1, int i2, int i3, int d )
         {
@@ -114,10 +114,10 @@ struct Grid4DDataVec
 
 /// @brief Create a host mirror for Grid4DDataVec.
 template < typename ScalarType, int VecDim >
-typename Grid4DDataVec< ScalarType, VecDim >::HostMirror
+typename Grid4DDataVec< ScalarType, VecDim >::host_mirror_type
     create_mirror( Kokkos::HostSpace space, const Grid4DDataVec< ScalarType, VecDim >& src )
 {
-    typename Grid4DDataVec< ScalarType, VecDim >::HostMirror result;
+    typename Grid4DDataVec< ScalarType, VecDim >::host_mirror_type result;
     for ( int d = 0; d < VecDim; ++d )
         result.comp_[d] = Kokkos::create_mirror( space, src.comp_[d] );
     return result;
@@ -125,7 +125,7 @@ typename Grid4DDataVec< ScalarType, VecDim >::HostMirror
 
 /// @brief Create a host mirror for Grid4DDataScalar (delegates to Kokkos).
 template < typename ScalarType >
-typename Grid4DDataScalar< ScalarType >::HostMirror
+typename Grid4DDataScalar< ScalarType >::host_mirror_type
     create_mirror( Kokkos::HostSpace space, const Grid4DDataScalar< ScalarType >& src )
 {
     return Kokkos::create_mirror( space, src );
@@ -134,7 +134,7 @@ typename Grid4DDataScalar< ScalarType >::HostMirror
 /// @brief Deep copy from device Grid4DDataVec to host mirror.
 template < typename ScalarType, int VecDim >
 void deep_copy(
-    typename Grid4DDataVec< ScalarType, VecDim >::HostMirror& dst,
+    typename Grid4DDataVec< ScalarType, VecDim >::host_mirror_type& dst,
     const Grid4DDataVec< ScalarType, VecDim >&                src )
 {
     for ( int d = 0; d < VecDim; ++d )
@@ -145,7 +145,7 @@ void deep_copy(
 template < typename ScalarType, int VecDim >
 void deep_copy(
     Grid4DDataVec< ScalarType, VecDim >&                             dst,
-    const typename Grid4DDataVec< ScalarType, VecDim >::HostMirror&  src )
+    const typename Grid4DDataVec< ScalarType, VecDim >::host_mirror_type&  src )
 {
     for ( int d = 0; d < VecDim; ++d )
         Kokkos::deep_copy( dst.comp_[d], src.comp_[d] );
@@ -155,7 +155,7 @@ void deep_copy(
 template < typename ScalarType >
 void deep_copy(
     Grid4DDataScalar< ScalarType >&                                  dst,
-    const typename Grid4DDataScalar< ScalarType >::HostMirror&       src )
+    const typename Grid4DDataScalar< ScalarType >::host_mirror_type&       src )
 {
     Kokkos::deep_copy( dst, src );
 }
@@ -163,7 +163,7 @@ void deep_copy(
 /// @brief Deep copy for Grid4DDataScalar device to host mirror (delegates to Kokkos).
 template < typename ScalarType >
 void deep_copy(
-    typename Grid4DDataScalar< ScalarType >::HostMirror&  dst,
+    typename Grid4DDataScalar< ScalarType >::host_mirror_type&  dst,
     const Grid4DDataScalar< ScalarType >&                 src )
 {
     Kokkos::deep_copy( dst, src );

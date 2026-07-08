@@ -453,7 +453,7 @@ void write_surface_radial_extruded_to_wedge_vtu(
     auto surface_points_host = Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace{}, surface_points_device_view );
     auto radii_host          = Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace{}, radii_device_view );
 
-    typename AttachedDataType::HostMirror vector_data_host;
+    typename AttachedDataType::host_mirror_type vector_data_host;
     if ( has_attached_data )
     {
         vector_data_host =
@@ -721,8 +721,8 @@ class [[deprecated( "Use XDMF output." )]] VTKOutput
     // Define Host view types for field data storage for clarity
     // Assuming input fields are double, will be cast to float on write.
     // If input fields can be float, this could be templated further or use a base class.
-    using ScalarFieldHostView = ScalarFieldDeviceView::HostMirror;
-    using VectorFieldHostView = VectorFieldDeviceView::HostMirror;
+    using ScalarFieldHostView = ScalarFieldDeviceView::host_mirror_type;
+    using VectorFieldHostView = VectorFieldDeviceView::host_mirror_type;
 
     template < class ShellCoordsView, class RadiiView >
     VTKOutput(
@@ -1344,8 +1344,8 @@ class [[deprecated( "Use XDMF output." )]] VTKOutput
     // --- Member Variables ---
     bool is_quadratic_;
 
-    grid::Grid3DDataVec< double, 3 >::HostMirror h_shell_coords_managed_;
-    grid::Grid2DDataScalar< double >::HostMirror h_radii_managed_;
+    grid::Grid3DDataVec< double, 3 >::host_mirror_type h_shell_coords_managed_;
+    grid::Grid2DDataScalar< double >::host_mirror_type h_radii_managed_;
 
     size_t num_subdomains_;
     size_t NX_nodes_surf_input_, NY_nodes_surf_input_, NR_nodes_rad_input_;

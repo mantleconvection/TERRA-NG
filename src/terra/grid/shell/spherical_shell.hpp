@@ -405,7 +405,7 @@ dense::Vec< T, 3 > compute_node_recursive( int i, int j, const BaseCorners< T >&
 ///
 template < std::floating_point T >
 void compute_subdomain(
-    const typename Grid3DDataVec< T, 3 >::HostMirror& subdomain_coords_host,
+    const typename Grid3DDataVec< T, 3 >::host_mirror_type& subdomain_coords_host,
     int                                               subdomain_idx,
     const BaseCorners< T >&                           corners,
     int                                               i_start_incl,
@@ -464,7 +464,7 @@ void compute_subdomain(
 
 template < std::floating_point T >
 void unit_sphere_single_shell_subdomain_coords(
-    const typename Grid3DDataVec< T, 3 >::HostMirror& subdomain_coords_host,
+    const typename Grid3DDataVec< T, 3 >::host_mirror_type& subdomain_coords_host,
     int                                               subdomain_idx,
     int                                               diamond_id,
     int                                               ntan,
@@ -605,7 +605,7 @@ void unit_sphere_single_shell_subdomain_coords(
 
 template < std::floating_point T >
 void unit_sphere_single_shell_subdomain_coords(
-    const typename Grid3DDataVec< T, 3 >::HostMirror& subdomain_coords_host,
+    const typename Grid3DDataVec< T, 3 >::host_mirror_type& subdomain_coords_host,
     int                                               subdomain_idx,
     int                                               diamond_id,
     int                                               global_refinements,
@@ -2832,7 +2832,7 @@ Grid3DDataVec< T, 3 > subdomain_unit_sphere_single_shell_coords( const Distribut
         domain.domain_info().subdomain_num_nodes_per_side_laterally(),
         domain.domain_info().subdomain_num_nodes_per_side_laterally() );
 
-    typename Grid3DDataVec< T, 3 >::HostMirror subdomain_coords_host = Kokkos::create_mirror_view( subdomain_coords );
+    typename Grid3DDataVec< T, 3 >::host_mirror_type subdomain_coords_host = Kokkos::create_mirror_view( subdomain_coords );
 
     for ( const auto& [subdomain_info, data] : domain.subdomains() )
     {
@@ -2865,7 +2865,7 @@ Grid2DDataScalar< T > subdomain_shell_radii( const DistributedDomain& domain )
     const int layers_per_subdomain = shells_per_subdomain - 1;
 
     Grid2DDataScalar< T > radii_device( "subdomain_shell_radii", domain.subdomains().size(), shells_per_subdomain );
-    typename Grid2DDataScalar< T >::HostMirror radii_host = Kokkos::create_mirror_view( radii_device );
+    typename Grid2DDataScalar< T >::host_mirror_type radii_host = Kokkos::create_mirror_view( radii_device );
 
     for ( const auto& [subdomain_info, data] : domain.subdomains() )
     {
@@ -2898,7 +2898,7 @@ inline Grid2DDataScalar< int > subdomain_shell_idx( const DistributedDomain& dom
     const int layers_per_subdomain = shells_per_subdomain - 1;
 
     Grid2DDataScalar< int > shell_idx_device( "subdomain_shell_idx", domain.subdomains().size(), shells_per_subdomain );
-    Grid2DDataScalar< int >::HostMirror shell_idx_host = Kokkos::create_mirror_view( shell_idx_device );
+    Grid2DDataScalar< int >::host_mirror_type shell_idx_host = Kokkos::create_mirror_view( shell_idx_device );
 
     for ( const auto& [subdomain_info, data] : domain.subdomains() )
     {
@@ -2927,11 +2927,11 @@ KOKKOS_INLINE_FUNCTION dense::Vec< typename CoordsShellType::value_type, 3 > coo
 
     static_assert(
         std::is_same_v< CoordsShellType, Grid3DDataVec< T, 3 > > ||
-        std::is_same_v< CoordsShellType, typename Grid3DDataVec< T, 3 >::HostMirror > );
+        std::is_same_v< CoordsShellType, typename Grid3DDataVec< T, 3 >::host_mirror_type > );
 
     static_assert(
         std::is_same_v< CoordsRadiiType, Grid2DDataScalar< T > > ||
-        std::is_same_v< CoordsRadiiType, typename Grid2DDataScalar< T >::HostMirror > );
+        std::is_same_v< CoordsRadiiType, typename Grid2DDataScalar< T >::host_mirror_type > );
 
     dense::Vec< T, 3 > coords;
     coords( 0 ) = coords_shell( subdomain, x, y, 0 );
@@ -2951,11 +2951,11 @@ KOKKOS_INLINE_FUNCTION dense::Vec< typename CoordsShellType::value_type, 3 > coo
 
     static_assert(
         std::is_same_v< CoordsShellType, Grid3DDataVec< T, 3 > > ||
-        std::is_same_v< CoordsShellType, typename Grid3DDataVec< T, 3 >::HostMirror > );
+        std::is_same_v< CoordsShellType, typename Grid3DDataVec< T, 3 >::host_mirror_type > );
 
     static_assert(
         std::is_same_v< CoordsRadiiType, Grid2DDataScalar< T > > ||
-        std::is_same_v< CoordsRadiiType, typename Grid2DDataScalar< T >::HostMirror > );
+        std::is_same_v< CoordsRadiiType, typename Grid2DDataScalar< T >::host_mirror_type > );
 
     return coords(
         subdomain_x_y_r( 0 ),
