@@ -309,6 +309,33 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     // Allow config files
     app.set_config( "--config" );
 
+    // --low-mem preset. Detect it BEFORE registering the options below so its five
+    // constituent settings become the captured CLI *defaults*: FP16 Krylov basis for the
+    // Stokes and energy solves, Stokes restart lowered 10 -> 5 (energy is already 5), and a
+    // single pre/post velocity-MG smoothing step (vs 2). These minimise the FGMRES
+    // workspace, the dominant memory term at high dofs/GCD. Making them defaults (rather
+    // than patching after parse) means an explicit --stokes-*/--energy-* flag still
+    // overrides through normal parsing, and --write-config-and-exit emits the expanded
+    // preset so a generated config round-trips correctly.
+    bool low_mem = false;
+    for ( int i = 1; i < argc; ++i )
+    {
+        const std::string a{ argv[i] };
+        if ( a == "--low-mem" || a.rfind( "--low-mem=", 0 ) == 0 )
+        {
+            low_mem = true;
+            break;
+        }
+    }
+    if ( low_mem )
+    {
+        parameters.stokes_solver_parameters.float_krylov_basis                     = true;
+        parameters.energy_solver_parameters.float_krylov_basis                     = true;
+        parameters.stokes_solver_parameters.krylov_restart                         = 5;
+        parameters.energy_solver_parameters.krylov_restart                         = 5;
+        parameters.stokes_solver_parameters.viscous_pc_num_smoothing_steps_prepost = 1;
+    }
+
     ///////////////
     /// General ///
     ///////////////
@@ -568,6 +595,16 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     /////////////////////
     /// Stokes solver ///
     /////////////////////
+
+    // --low-mem preset flag (its effect is applied up front in the pre-scan near the top
+    // of this function, before the option defaults below are captured).
+    add_flag_with_default( app, "--low-mem", low_mem )
+        ->group( "Stokes Solver" )
+        ->description(
+            "Low-memory solver preset. Equivalent to --stokes-float-krylov-basis "
+            "--energy-float-krylov-basis --stokes-krylov-restart 5 --energy-krylov-restart 5 "
+            "--stokes-viscous-pc-num-smoothing-steps-prepost 1. Individual flags passed "
+            "explicitly override the corresponding preset value." );
 
     add_option_with_default( app, "--stokes-krylov-restart", parameters.stokes_solver_parameters.krylov_restart )
         ->group( "Stokes Solver" );
