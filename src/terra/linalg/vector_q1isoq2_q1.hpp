@@ -155,6 +155,16 @@ class VectorQ1IsoQ2Q1
 /// @brief Static assertion: VectorQ1IsoQ2Q1 satisfies Block2VectorLike concept.
 static_assert( Block2VectorLike< VectorQ1IsoQ2Q1< double > > );
 
+/// @brief Copy a block vector into another of (possibly) different scalar precision.
+/// Elementwise cast on both blocks. Used to keep a low-precision Krylov basis while
+/// the solver/operator run in higher precision.
+template < typename DstScalar, typename SrcScalar, int VecDim >
+void convert( const VectorQ1IsoQ2Q1< SrcScalar, VecDim >& src, VectorQ1IsoQ2Q1< DstScalar, VecDim >& dst )
+{
+    kernels::common::copy_convert( src.block_1().grid_data(), dst.block_1().grid_data() );
+    kernels::common::copy_convert( src.block_2().grid_data(), dst.block_2().grid_data() );
+}
+
 /// @brief Allocate a VectorQ1IsoQ2Q1 block vector with grid data for both blocks.
 /// @param label Name for the vector.
 /// @param distributed_domain_fine Distributed shell domain for the vector block.

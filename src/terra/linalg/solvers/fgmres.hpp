@@ -149,7 +149,7 @@ class FGMRES
         const int offV   = 1;                    // V_0 .. V_m stored in tmp[1 .. m+1]
         const int offZ   = offV + ( m_req + 1 ); // Z_0 .. Z_{m-1} stored in tmp[offV + m+1 .. offV + 2m]
         const int idxW   = offZ + m_req;         // w = A*z_j
-        const int idxAcc = idxW + 1;             // accumulator for solution update
+        [[maybe_unused]] const int idxAcc = idxW + 1; // accumulator slot (unused: fused update writes x directly)
 
         // Allocate small dense arrays for Hessenberg matrix and Givens rotations.
         Eigen::Matrix< ScalarType, Eigen::Dynamic, Eigen::Dynamic > H( m_req + 1, m_req );
@@ -335,17 +335,18 @@ class FGMRES
                 }
             }
 
-            // Update solution: x += sum_{i=0}^{inner_its-1} y_i * z_i
+            // Update solution: x += sum_{i=0}^{inner_its-1} y_i * z_i.
+            // Fused: accumulate two directions per kernel directly into x (3-input lincomb
+            // x = 1*x + y_i z_i + y_{i+1} z_{i+1}), avoiding the separate accumulator and its
+            // per-direction launches/fences. (idxAcc workspace slot is left unused.)
             {
                 util::Timer t_upd( "fgmres_restart_update" );
-                auto& acc = tmp_[idxAcc];
-                assign( acc, 0 );
-                for ( int i = 0; i < inner_its; ++i )
-                {
-                    auto& zi = tmp_[offZ + i];
-                    lincomb( acc, { 1.0, y( i ) }, { acc, zi } );
-                }
-                lincomb( x, { 1.0, 1.0 }, { x, acc } );
+                int i = 0;
+                for ( ; i + 1 < inner_its; i += 2 )
+                    lincomb(
+                        x, { 1.0, y( i ), y( i + 1 ) }, { x, tmp_[offZ + i], tmp_[offZ + i + 1] } );
+                if ( i < inner_its )
+                    lincomb( x, { 1.0, y( i ) }, { x, tmp_[offZ + i] } );
             }
 
             // Recompute residual r = b - A*x for next restart

@@ -28,10 +28,12 @@
 #include "linalg/solvers/chebyshev.hpp"
 #include "linalg/solvers/diagonal_solver.hpp"
 #include "linalg/solvers/fgmres.hpp"
+#include "linalg/solvers/fgmres_lowmem.hpp"
 #include "linalg/solvers/gca/gca.hpp"
 #include "linalg/solvers/multigrid.hpp"
 #include "linalg/solvers/pcg.hpp"
 #include "linalg/solvers/power_iteration.hpp"
+#include "linalg/solvers/velocity_prec_handle.hpp"
 #include "linalg/vector_q1.hpp"
 #include "linalg/vector_q1isoq2_q1.hpp"
 #include "mpi/mpi.hpp"
@@ -43,7 +45,9 @@
 #include "mpi/level_comms.hpp"
 
 #include "build_radii.hpp"
+#include "hbm_probe.hpp"
 #include "interpolators.hpp"
+#include "low_prec_vcycle.hpp"
 #include "parameters.hpp"
 
 namespace terra::mantlecirculation {
@@ -161,9 +165,24 @@ class StokesContext
                                                           CoarseGridSolver,
                                                           Redistribute >;
     using PrecSchur  = linalg::solvers::DiagonalSolver< PressureMass >;
-    using PrecStokes = linalg::solvers::
-        BlockTriangularPreconditioner2x2< Stokes, Viscous, PressureMass, Gradient, PrecVisc, PrecSchur >;
-    using FGMRESType = linalg::solvers::FGMRES< Stokes, PrecStokes >;
+    // The (1,1) velocity preconditioner is type-erased so its internal precision
+    // (the MG V-cycle precision) can be chosen at runtime via --stokes-mg-precision.
+    using VelPrecHandle = linalg::solvers::VelocityPrecHandle< Viscous >;
+    using PrecStokes     = linalg::solvers::
+        BlockTriangularPreconditioner2x2< Stokes, Viscous, PressureMass, Gradient, VelPrecHandle, PrecSchur >;
+    // Outer solver: either the standard double FGMRES or the low-memory variant
+    // that stores the Krylov basis in single precision (operator/preconditioner/
+    // orthogonalization stay in ScalarType). Selected at runtime via
+    // --stokes-float-krylov-basis.
+    // FP16 Krylov-basis storage: native __half on HIP (Kokkos 4.6+), genuine 2 B/dof
+    // (4x vs double). Validated to match the double residual curve to ~4 sig figs
+    // with 0 NaN. The basis is store-only + convert (never operated on directly), so
+    // no half arithmetic is instantiated; entries (~6e-5) are covered by FP16 denorms.
+    // (BF16 would need Kokkos >= 5.1.0 and gives no benefit here -- fewer mantissa
+    //  bits, and FP16's range proved sufficient.)
+    using BasisVectorType = linalg::VectorQ1IsoQ2Q1< Kokkos::Experimental::bhalf_t, 3 >;
+    using FGMRESDouble    = linalg::solvers::FGMRES< Stokes, PrecStokes >;
+    using FGMRESFloat     = linalg::solvers::FGMRESLowMem< Stokes, BasisVectorType, PrecStokes >;
 
   public:
     StokesContext(
@@ -205,7 +224,10 @@ class StokesContext
             ownership_mask_[pressure_level_], grid::NodeOwnershipFlag::OWNED );
 
         // ---------------- Stokes block vectors ----------------
-        std::vector< std::string > stok_vec_names = { "u", "f", "tmp" };
+        // "tmp" was a dedicated full Stokes vector used only as RHS-assembly
+        // scratch; we reuse the block preconditioner's triangular_prec_tmp_
+        // (idle until the solve) instead, saving one velocity-sized vector.
+        std::vector< std::string > stok_vec_names = { "u", "f" };
         for ( const auto& name : stok_vec_names )
         {
             stok_vecs_[name] = VectorQ1IsoQ2Q1< ScalarType >(
@@ -291,18 +313,12 @@ class StokesContext
             assign( GCAElements_, 1 );
         }
 
-        // ---------------- FGMRES (Stokes) tmp vectors ----------------
-        const auto num_stokes_fgmres_tmps = 2 * prm_.stokes_solver_parameters.krylov_restart + 4;
-        stokes_tmp_fgmres_.reserve( num_stokes_fgmres_tmps );
-        for ( int i = 0; i < num_stokes_fgmres_tmps; i++ )
-        {
-            stokes_tmp_fgmres_.emplace_back(
-                "stokes_tmp_fgmres",
-                *domains_[velocity_level_],
-                *domains_[pressure_level_],
-                ownership_mask_[velocity_level_],
-                ownership_mask_[pressure_level_] );
-        }
+        // FGMRES workspace selector. The workspace (Krylov basis + scratch) is the
+        // single largest allocation, so we DEFER allocating it until just before the
+        // FGMRES objects are built (after the MG hierarchy + the Chebyshev eigenvalue
+        // estimate). Otherwise its ~20+ GB coincides with the estimate's transient
+        // power-iteration temps and inflates the setup-time HBM peak.
+        use_float_basis_ = prm_.stokes_solver_parameters.float_krylov_basis;
 
         // ---------------- Multigrid tmp vectors ----------------
         for ( int level = 0; level < num_levels_; level++ )
@@ -345,6 +361,13 @@ class StokesContext
         M_ = std::make_unique< ViscousMass >(
             *domains_[velocity_level_], coords_shell_[velocity_level_], coords_radii_[velocity_level_], false );
 
+        // The double-precision velocity multigrid (coarse operators, GCA, smoothers,
+        // coarse solver, prec_11_) is only built when --stokes-mg-precision=double.
+        // For float, LowPrecVCycle builds its own hierarchy, so this is skipped and
+        // its memory is never allocated.
+        const bool build_double_mg = ( prm_.stokes_solver_parameters.mg_precision == MGPrecision::DOUBLE );
+        if ( build_double_mg )
+        {
         // ---------------- Coarse grid operators / transfer ----------------
         logroot << "Setting up Stokes solver and preconditioners ..." << std::endl;
 
@@ -555,6 +578,7 @@ class StokesContext
             std::move( redistribute_down ),
             std::move( tmp_mg_r_fine ),
             std::move( tmp_mg_e_fine ) );
+        } // end if ( build_double_mg )
 
         // ---------------- Schur preconditioner ----------------
         logroot << "Setting up Schur complement preconditioner ..." << std::endl;
@@ -592,21 +616,104 @@ class StokesContext
             ownership_mask_[velocity_level_],
             ownership_mask_[pressure_level_] );
 
+        // Select the velocity-preconditioner precision at runtime (--stokes-mg-precision).
+        // double -> forward to the existing double multigrid; float/half -> a V-cycle
+        // whose whole hierarchy runs in that precision (LowPrecVCycle).
+        std::shared_ptr< typename VelPrecHandle::Impl > vel_impl;
+        switch ( prm_.stokes_solver_parameters.mg_precision )
+        {
+        case MGPrecision::FLOAT:
+            vel_impl = std::make_shared< LowPrecVCycle< float, Viscous > >(
+                domains_, coords_shell_, coords_radii_, boundary_mask_, ownership_mask_, eta_, bcs_, prm_, table_ );
+            break;
+        case MGPrecision::HALF:
+            // The EpsDivDiv operator does not compile/run with half-precision geometry
+            // (coordinate differencing in the Jacobian needs >= float). A half *V-cycle*
+            // would require keeping the operator/coords >= float (vectors-only half),
+            // which is a separate mixed-precision-within-the-operator change.
+            logroot << "ERROR: --stokes-mg-precision half is not supported (the velocity "
+                       "operator needs >= float geometry). Use 'float'." << std::endl;
+            Kokkos::abort( "stokes-mg-precision: half unsupported" );
+            break;
+        case MGPrecision::DOUBLE:
+        default:
+            vel_impl = std::make_shared< linalg::solvers::ForwardingPrecImpl< Viscous, PrecVisc > >( *prec_11_ );
+            break;
+        }
+        VelPrecHandle vel_prec( vel_impl );
         prec_stokes_ = std::make_unique< PrecStokes >(
-            K_->block_11(), *pmass_, K_->block_12(), triangular_prec_tmp_, *prec_11_, *inv_lumped_pmass_ );
+            K_->block_11(), *pmass_, K_->block_12(), triangular_prec_tmp_, vel_prec, *inv_lumped_pmass_ );
 
         // ---------------- Outer FGMRES ----------------
-        logroot << "Setting up FGMRES ..." << std::endl;
-        stokes_fgmres_ = std::make_unique< FGMRESType >(
-            stokes_tmp_fgmres_,
-            linalg::solvers::FGMRESOptions{
-                .restart                     = prm_.stokes_solver_parameters.krylov_restart,
-                .relative_residual_tolerance = prm_.stokes_solver_parameters.krylov_relative_tolerance,
-                .absolute_residual_tolerance = prm_.stokes_solver_parameters.krylov_absolute_tolerance,
-                .max_iterations              = prm_.stokes_solver_parameters.krylov_max_iterations },
-            table_,
-            *prec_stokes_ );
-        stokes_fgmres_->set_tag( "stokes_fgmres" );
+        logroot << "Setting up FGMRES ... (Krylov basis precision: "
+                << ( use_float_basis_ ? "single" : "double" ) << ")" << std::endl;
+
+        // ---------------- FGMRES (Stokes) workspace (deferred — see note above) ----------------
+        // Allocated here, AFTER the MG hierarchy + Chebyshev eigenvalue estimate, so the
+        // estimate's transient temps do not coincide with this (the largest) allocation.
+        //   double path: 2*restart+4 full-precision vectors.
+        //   float-basis path: 3 full-precision scratch (r/w aliased, v, z) + 2*restart+1 basis.
+        log_hbm( "stokes: before FGMRES workspace" );
+        if ( use_float_basis_ )
+        {
+            constexpr int kNumStokesWork = 3; // FGMRESLowMem aliases r/w
+            stokes_work_fgmres_.reserve( kNumStokesWork );
+            for ( int i = 0; i < kNumStokesWork; i++ )
+            {
+                stokes_work_fgmres_.emplace_back(
+                    "stokes_work_fgmres",
+                    *domains_[velocity_level_],
+                    *domains_[pressure_level_],
+                    ownership_mask_[velocity_level_],
+                    ownership_mask_[pressure_level_] );
+            }
+            const int num_stokes_basis = 2 * prm_.stokes_solver_parameters.krylov_restart + 1;
+            stokes_basis_fgmres_.reserve( num_stokes_basis );
+            for ( int i = 0; i < num_stokes_basis; i++ )
+            {
+                stokes_basis_fgmres_.emplace_back(
+                    "stokes_basis_fgmres",
+                    *domains_[velocity_level_],
+                    *domains_[pressure_level_],
+                    ownership_mask_[velocity_level_],
+                    ownership_mask_[pressure_level_] );
+            }
+        }
+        else
+        {
+            const int num_stokes_fgmres_tmps = 2 * prm_.stokes_solver_parameters.krylov_restart + 4;
+            stokes_tmp_fgmres_.reserve( num_stokes_fgmres_tmps );
+            for ( int i = 0; i < num_stokes_fgmres_tmps; i++ )
+            {
+                stokes_tmp_fgmres_.emplace_back(
+                    "stokes_tmp_fgmres",
+                    *domains_[velocity_level_],
+                    *domains_[pressure_level_],
+                    ownership_mask_[velocity_level_],
+                    ownership_mask_[pressure_level_] );
+            }
+        }
+        log_hbm( "stokes: after FGMRES workspace (delta = Krylov basis+scratch)" );
+
+        const linalg::solvers::FGMRESOptions< ScalarType > stokes_fgmres_opts{
+            .restart                     = prm_.stokes_solver_parameters.krylov_restart,
+            .relative_residual_tolerance = prm_.stokes_solver_parameters.krylov_relative_tolerance,
+            .absolute_residual_tolerance = prm_.stokes_solver_parameters.krylov_absolute_tolerance,
+            .max_iterations              = prm_.stokes_solver_parameters.krylov_max_iterations };
+        if ( use_float_basis_ )
+        {
+            stokes_fgmres_float_ = std::make_unique< FGMRESFloat >(
+                stokes_work_fgmres_, stokes_basis_fgmres_, stokes_fgmres_opts, table_, *prec_stokes_ );
+            stokes_fgmres_float_->set_tag( "stokes_fgmres" );
+        }
+        else
+        {
+            stokes_fgmres_double_ = std::make_unique< FGMRESDouble >(
+                stokes_tmp_fgmres_, stokes_fgmres_opts, table_, *prec_stokes_ );
+            stokes_fgmres_double_->set_tag( "stokes_fgmres" );
+        }
+
+        log_hbm( "stokes: ctor end (delta = MG hierarchy + operators + coarse + preconditioner)" );
     }
 
     // Public accessors needed by the rest of the app.
@@ -653,11 +760,11 @@ class StokesContext
             RHSVelocityInterpolator(
                 coords_shell_[velocity_level_],
                 coords_radii_[velocity_level_],
-                stok_vecs_["tmp"].block_1().grid_data(),
+                triangular_prec_tmp_.block_1().grid_data(),
                 T_for_buoyancy.grid_data(),
                 prm_.physics_parameters.rayleigh_number ) );
 
-        linalg::apply( *M_, stok_vecs_["tmp"].block_1(), stok_vecs_["f"].block_1() );
+        linalg::apply( *M_, triangular_prec_tmp_.block_1(), stok_vecs_["f"].block_1() );
 
         fe::strong_algebraic_homogeneous_velocity_dirichlet_enforcement_stokes_like(
             stok_vecs_["f"],
@@ -672,7 +779,10 @@ class StokesContext
 
         util::logroot << "Solving Stokes ..." << std::endl;
 
-        ::terra::linalg::solvers::solve( *stokes_fgmres_, *K_, stok_vecs_["u"], stok_vecs_["f"] );
+        if ( use_float_basis_ )
+            ::terra::linalg::solvers::solve( *stokes_fgmres_float_, *K_, stok_vecs_["u"], stok_vecs_["f"] );
+        else
+            ::terra::linalg::solvers::solve( *stokes_fgmres_double_, *K_, stok_vecs_["u"], stok_vecs_["f"] );
 
         if ( log_convergence )
         {
@@ -715,7 +825,9 @@ class StokesContext
     std::vector< linalg::VectorQ1Scalar< ScalarType > >    eta_;
     linalg::VectorQ1Scalar< ScalarType >                   GCAElements_;
     std::map< std::string, linalg::VectorQ1IsoQ2Q1< ScalarType > > stok_vecs_;
-    std::vector< linalg::VectorQ1IsoQ2Q1< ScalarType > >   stokes_tmp_fgmres_;
+    std::vector< linalg::VectorQ1IsoQ2Q1< ScalarType > >   stokes_tmp_fgmres_;   // double path
+    std::vector< linalg::VectorQ1IsoQ2Q1< ScalarType > >   stokes_work_fgmres_;  // float-basis path: scratch
+    std::vector< BasisVectorType >                         stokes_basis_fgmres_; // float-basis path: basis
     std::vector< linalg::VectorQ1Vec< ScalarType > >       tmp_mg_;
     std::vector< linalg::VectorQ1Vec< ScalarType > >       tmp_mg_2_;
     std::vector< linalg::VectorQ1Vec< ScalarType > >       tmp_mg_r_;
@@ -746,10 +858,13 @@ class StokesContext
     linalg::VectorQ1Scalar< ScalarType >                   lumped_diagonal_pmass_;
     std::unique_ptr< PrecSchur >                           inv_lumped_pmass_;
 
-    // Outer Stokes preconditioner / solver.
+    // Outer Stokes preconditioner / solver. Exactly one of the two FGMRES variants
+    // is allocated, selected by use_float_basis_ (--stokes-float-krylov-basis).
     linalg::VectorQ1IsoQ2Q1< ScalarType >                  triangular_prec_tmp_;
     std::unique_ptr< PrecStokes >                          prec_stokes_;
-    std::unique_ptr< FGMRESType >                          stokes_fgmres_;
+    bool                                                   use_float_basis_ = false;
+    std::unique_ptr< FGMRESDouble >                        stokes_fgmres_double_;
+    std::unique_ptr< FGMRESFloat >                         stokes_fgmres_float_;
 };
 
 } // namespace terra::mantlecirculation

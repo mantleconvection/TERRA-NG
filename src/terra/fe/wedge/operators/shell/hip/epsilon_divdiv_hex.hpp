@@ -39,7 +39,9 @@ size_t team_shmem_size_dn_hex() const
     constexpr int nlev = kHexCellsPerWave + 1; // 17 radial layers
     // coords_sh(nxy,3) + src_sh(nxy,3,nlev) + k_sh(nxy,nlev) + r_sh(nlev)
     const size_t nscalars = size_t( nxy ) * 3 + size_t( nxy ) * 3 * nlev + size_t( nxy ) * nlev + size_t( nlev );
-    return sizeof( ScalarType ) * nscalars;
+    // Scratch tiles are double regardless of ScalarType; sizeof(ScalarType) would
+    // under-allocate by 2x in single precision -> overlapping tiles -> NaN.
+    return sizeof( double ) * nscalars;
 }
 
 /**

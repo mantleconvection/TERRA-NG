@@ -1,0 +1,71 @@
+name: github-windows
+
+on:
+  workflow_call:
+
+concurrency:
+  group: ${ {github.event_name }}-${{ github.workflow }}-${{ github.ref }}-win-x64
+  cancel-in-progress: ${{github.event_name == 'pull_request'}}
+
+permissions: read-all
+
+jobs:
+  windows-cuda:
+    # Cuda build on Windows
+    name: Cuda VS-2022
+    runs-on: windows-2022
+
+    steps:
+    - uses: Jimver/cuda-toolkit@b6fc3a9f3f15256d9d94ffe1254f9c5a2565cde6 # v0.2.30
+      id: cuda-toolkit
+      with:
+        cuda: '12.4.1'
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - name: configure
+      shell: bash
+      run: |
+        cmake -B build -DCMAKE_CUDA_FLAGS="-Xcompiler=-bigobj" -DBUILD_SHARED_LIBS=ON -DKokkos_ENABLE_CUDA=ON -DKokkos_ARCH_VOLTA70=ON -DKokkos_ENABLE_TESTS=ON -DKokkos_ENABLE_COMPILE_AS_CMAKE_LANGUAGE=ON
+    - name: build library
+      shell: bash
+      run: |
+        cmake --build build --parallel 4 --config Debug
+  windows-serial:
+    # Serial build on Windows
+    name: Serial VS-2022
+    runs-on: windows-2025
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - name: configure
+      shell: bash
+      run: |
+        cmake -B build -DBUILD_SHARED_LIBS=ON -DKokkos_ENABLE_SERIAL=ON -DKokkos_ENABLE_TESTS=ON
+    - name: build library
+      shell: bash
+      run: |
+        cmake --build build --parallel 4 --config Release
+    - name: run tests
+      shell: bash
+      run: |
+        export PATH="$(pwd)/build/core/src/Release:$(pwd)/build/containers/src/Release:$PATH"
+        ctest --test-dir build -C Release -j 4 --output-on-failure
+
+  windows-clang:
+   # Threads build on Windows using ClangCL
+    name: Threads Clang VS-2022
+    runs-on: windows-2025
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - name: configure
+      shell: bash
+      run: |
+        cmake -B build -T ClangCL -DKokkos_ENABLE_SERIAL=ON -DKokkos_ENABLE_THREADS=ON -DKokkos_ENABLE_TESTS=ON
+    - name: build library
+      shell: bash
+      run: |
+        cmake --build build --parallel 4 --config Release
+    - name: run tests
+      shell: bash
+      run: |
+        ctest --test-dir build -C Release -j 4 --output-on-failure

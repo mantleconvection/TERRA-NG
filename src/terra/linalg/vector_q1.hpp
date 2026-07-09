@@ -306,4 +306,38 @@ class VectorQ1Vec
 /// @brief Static assertion: VectorQ1Vec satisfies VectorLike concept.
 static_assert( VectorLike< VectorQ1Vec< double, 3 > > );
 
+/// @brief Copy a scalar vector into one of (possibly) different precision (elementwise cast).
+/// Used for reduced-precision storage (e.g. a float Krylov basis with a double solver).
+template < typename DstScalar, typename SrcScalar >
+void convert( const VectorQ1Scalar< SrcScalar >& src, VectorQ1Scalar< DstScalar >& dst )
+{
+    kernels::common::copy_convert( src.grid_data(), dst.grid_data() );
+}
+
+template < typename DstScalar, typename SrcScalar, int VecDim >
+void convert( const VectorQ1Vec< SrcScalar, VecDim >& src, VectorQ1Vec< DstScalar, VecDim >& dst )
+{
+    kernels::common::copy_convert( src.grid_data(), dst.grid_data() );
+}
+
+/// @brief Fused Chebyshev-smoother update for VectorQ1Vec (single-kernel fast path).
+///
+/// Equivalent to the generic terra::linalg::chebyshev_fused_update, but collapses the
+/// residual / diagonal-preconditioner / recurrence / solution-update into one kernel per
+/// component with a single fence (vs. 4 ops x VecDim launches + fences). Found via ADL.
+/// @p z holds A*x on entry and is read-only; old @p d is read only when beta != 0.
+template < typename ScalarT, int VecDim >
+void chebyshev_fused_update(
+    VectorQ1Vec< ScalarT, VecDim >&       x,
+    VectorQ1Vec< ScalarT, VecDim >&       d,
+    VectorQ1Vec< ScalarT, VecDim >&       z,
+    const VectorQ1Vec< ScalarT, VecDim >& b,
+    const VectorQ1Vec< ScalarT, VecDim >& inv_diag,
+    ScalarT                               alpha,
+    ScalarT                               beta )
+{
+    kernels::common::chebyshev_fused_update(
+        x.grid_data(), d.grid_data(), z.grid_data(), b.grid_data(), inv_diag.grid_data(), alpha, beta );
+}
+
 } // namespace terra::linalg

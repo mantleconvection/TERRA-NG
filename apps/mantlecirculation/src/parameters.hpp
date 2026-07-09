@@ -152,12 +152,32 @@ struct PhysicsParameters
     double constant_internal_heating_value = 1.0;
 };
 
+/// Storage/working precision of the velocity-block multigrid V-cycle preconditioner.
+/// The outer Stokes FGMRES, block preconditioner and operators stay double; only the
+/// MG hierarchy (operators, smoothers, transfers, coarse solve, level vectors) runs in
+/// this precision, with convert at the preconditioner boundary. Lower precision trims
+/// the MG memory; the outer double Krylov solve absorbs the preconditioner inexactness.
+enum class MGPrecision
+{
+    DOUBLE,
+    FLOAT,
+    HALF,
+};
+
 struct StokesSolverParameters
 {
     int    krylov_restart            = 10;
     int    krylov_max_iterations     = 10;
     double krylov_relative_tolerance = 1e-6;
     double krylov_absolute_tolerance = 1e-12;
+
+    /// Store the outer FGMRES Krylov basis in single precision while the operator,
+    /// preconditioner and orthogonalization stay double. Roughly halves the FGMRES
+    /// workspace memory; convergence is unaffected (the operator never sees float).
+    bool   float_krylov_basis        = false;
+
+    /// Precision of the velocity-block multigrid V-cycle preconditioner (see MGPrecision).
+    MGPrecision mg_precision = MGPrecision::DOUBLE;
 
     int viscous_pc_num_vcycles                 = 1;
     int viscous_pc_chebyshev_order             = 2;
@@ -190,6 +210,11 @@ struct EnergySolverParameters
     int    krylov_max_iterations     = 100;
     double krylov_relative_tolerance = 1e-6;
     double krylov_absolute_tolerance = 1e-12;
+
+    /// Store the energy FGMRES Krylov basis in single precision (operator stays
+    /// double). The energy advection-diffusion solve is well-conditioned and runs
+    /// fine in reduced precision; this trims the energy FGMRES workspace.
+    bool   float_krylov_basis        = false;
 
     /// Entropy-viscosity stabilization parameters (only used when
     /// `energy_solver == ENTROPY_VISCOSITY`).  Defaults match ASPECT.
@@ -276,6 +301,33 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
 
     // Allow config files
     app.set_config( "--config" );
+
+    // --low-mem preset. Detect it BEFORE registering the options below so its five
+    // constituent settings become the captured CLI *defaults*: FP16 Krylov basis for the
+    // Stokes and energy solves, Stokes restart lowered 10 -> 5 (energy is already 5), and a
+    // single pre/post velocity-MG smoothing step (vs 2). These minimise the FGMRES
+    // workspace, the dominant memory term at high dofs/GCD. Making them defaults (rather
+    // than patching after parse) means an explicit --stokes-*/--energy-* flag still
+    // overrides through normal parsing, and --write-config-and-exit emits the expanded
+    // preset so a generated config round-trips correctly.
+    bool low_mem = false;
+    for ( int i = 1; i < argc; ++i )
+    {
+        const std::string a{ argv[i] };
+        if ( a == "--low-mem" || a.rfind( "--low-mem=", 0 ) == 0 )
+        {
+            low_mem = true;
+            break;
+        }
+    }
+    if ( low_mem )
+    {
+        parameters.stokes_solver_parameters.float_krylov_basis                     = true;
+        parameters.energy_solver_parameters.float_krylov_basis                     = true;
+        parameters.stokes_solver_parameters.krylov_restart                         = 5;
+        parameters.energy_solver_parameters.krylov_restart                         = 5;
+        parameters.stokes_solver_parameters.viscous_pc_num_smoothing_steps_prepost = 1;
+    }
 
     ///////////////
     /// General ///
@@ -537,6 +589,16 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     /// Stokes solver ///
     /////////////////////
 
+    // --low-mem preset flag (its effect is applied up front in the pre-scan near the top
+    // of this function, before the option defaults below are captured).
+    add_flag_with_default( app, "--low-mem", low_mem )
+        ->group( "Stokes Solver" )
+        ->description(
+            "Low-memory solver preset. Equivalent to --stokes-float-krylov-basis "
+            "--energy-float-krylov-basis --stokes-krylov-restart 5 --energy-krylov-restart 5 "
+            "--stokes-viscous-pc-num-smoothing-steps-prepost 1. Individual flags passed "
+            "explicitly override the corresponding preset value." );
+
     add_option_with_default( app, "--stokes-krylov-restart", parameters.stokes_solver_parameters.krylov_restart )
         ->group( "Stokes Solver" );
     add_option_with_default(
@@ -547,6 +609,19 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Stokes Solver" );
     add_option_with_default(
         app, "--stokes-krylov-absolute-tolerance", parameters.stokes_solver_parameters.krylov_absolute_tolerance )
+        ->group( "Stokes Solver" );
+    add_flag_with_default(
+        app, "--stokes-float-krylov-basis", parameters.stokes_solver_parameters.float_krylov_basis )
+        ->group( "Stokes Solver" );
+    static const std::map< std::string, MGPrecision > mg_precision_map{
+        { "double", MGPrecision::DOUBLE },
+        { "float", MGPrecision::FLOAT },
+        { "single", MGPrecision::FLOAT },
+        { "half", MGPrecision::HALF },
+        { "fp16", MGPrecision::HALF },
+    };
+    add_option_with_default( app, "--stokes-mg-precision", parameters.stokes_solver_parameters.mg_precision )
+        ->transform( CLI::CheckedTransformer( mg_precision_map, CLI::ignore_case ) )
         ->group( "Stokes Solver" );
     add_option_with_default(
         app, "--stokes-viscous-pc-num-vcycles", parameters.stokes_solver_parameters.viscous_pc_num_vcycles )
@@ -586,6 +661,9 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     /////////////////////
 
     add_option_with_default( app, "--energy-krylov-restart", parameters.energy_solver_parameters.krylov_restart )
+        ->group( "Energy Solver" );
+    add_flag_with_default(
+        app, "--energy-float-krylov-basis", parameters.energy_solver_parameters.float_krylov_basis )
         ->group( "Energy Solver" );
     add_option_with_default(
         app, "--energy-krylov-max-iterations", parameters.energy_solver_parameters.krylov_max_iterations )

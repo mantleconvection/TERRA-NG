@@ -579,9 +579,9 @@ class XDMFOutput
     {
         // Copy mesh to host.
         // We assume the mesh is only written once so we throw away the host copies after this method returns.
-        const typename grid::Grid3DDataVec< InputGridScalarType, 3 >::HostMirror coords_shell_host =
+        const typename grid::Grid3DDataVec< InputGridScalarType, 3 >::host_mirror_type coords_shell_host =
             Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace{}, coords_shell_device_ );
-        const typename grid::Grid2DDataScalar< InputGridScalarType >::HostMirror coords_radii_host =
+        const typename grid::Grid2DDataScalar< InputGridScalarType >::host_mirror_type coords_radii_host =
             Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace{}, coords_radii_device_ );
 
         for ( int local_subdomain_id = 0; local_subdomain_id < coords_shell_host.extent( 0 ); local_subdomain_id++ )
@@ -1085,11 +1085,11 @@ class XDMFOutput
     std::vector< std::pair< grid::Grid4DDataVec< float, 3 >, OutputTypeFloat > >  device_data_views_vec_float_;
 
     // Just a single mirror for buffering during write.
-    std::optional< grid::Grid4DDataScalar< double >::HostMirror > host_data_mirror_scalar_double_;
-    std::optional< grid::Grid4DDataScalar< float >::HostMirror >  host_data_mirror_scalar_float_;
+    std::optional< grid::Grid4DDataScalar< double >::host_mirror_type > host_data_mirror_scalar_double_;
+    std::optional< grid::Grid4DDataScalar< float >::host_mirror_type >  host_data_mirror_scalar_float_;
 
-    std::optional< grid::Grid4DDataVec< double, 3 >::HostMirror > host_data_mirror_vec_double_;
-    std::optional< grid::Grid4DDataVec< float, 3 >::HostMirror >  host_data_mirror_vec_float_;
+    std::optional< grid::Grid4DDataVec< double, 3 >::host_mirror_type > host_data_mirror_vec_double_;
+    std::optional< grid::Grid4DDataVec< float, 3 >::host_mirror_type >  host_data_mirror_vec_float_;
 
     int  write_counter_        = 0;
     bool first_write_happened_ = false;
@@ -1400,7 +1400,7 @@ template < typename GridDataType >
 
     // Now write from buffer to grid.
 
-    typename GridDataType::HostMirror grid_data_host = grid::create_mirror( Kokkos::HostSpace{}, grid_data_device );
+    typename GridDataType::host_mirror_type grid_data_host = grid::create_mirror( Kokkos::HostSpace{}, grid_data_device );
 
     const auto checkpoint_is_float =
         requested_grid_data_file.value().scalar_data_type == 2 && requested_grid_data_file.value().scalar_bytes == 4;

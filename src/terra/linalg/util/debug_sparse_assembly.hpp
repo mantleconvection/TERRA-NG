@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include <type_traits>
+
 #include "linalg/vector_q1.hpp"
 #include "terra/eigen/eigen_wrapper.hpp"
 #include "terra/linalg/operator.hpp"
@@ -17,7 +19,8 @@ Eigen::SparseVector< ScalarType > debug_sparse_assembly_vector_vec_q1_scalar( co
         throw std::runtime_error( "debug_sparse_assembly_vector_vec_q1_scalar: only works in serial case" );
     }
 
-    if ( !vec.grid_data().is_hostspace )
+    if ( !Kokkos::SpaceAccessibility< Kokkos::HostSpace,
+                                      typename std::decay_t< decltype( vec.grid_data() ) >::memory_space >::accessible )
     {
         throw std::runtime_error( "debug_sparse_assembly_vector_vec_q1_scalar: vec must be on host space" );
     }
@@ -83,7 +86,8 @@ Eigen::SparseMatrix< double > debug_sparse_assembly_operator_vec_q1_scalar(
         throw std::runtime_error( "debug_sparse_assembly_operator_vec_q1_scalar: only works in serial case" );
     }
 
-    if ( !tmp_src.grid_data().is_hostspace )
+    if ( !Kokkos::SpaceAccessibility< Kokkos::HostSpace,
+                                      typename std::decay_t< decltype( tmp_src.grid_data() ) >::memory_space >::accessible )
     {
         throw std::runtime_error( "debug_sparse_assembly_vec_q1_scalar: tmp_src must be on host space" );
     }

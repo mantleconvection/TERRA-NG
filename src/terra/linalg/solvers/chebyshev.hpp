@@ -131,14 +131,9 @@ class Chebyshev
             // z = M_inv(r);
 
             apply( A, x, z );
-            lincomb( z, { 1.0, -1.0 }, { b, z } );
-            scale_in_place( z, inverse_diagonal_ );
-
-            // d = z / theta;   // first Chebyshev direction
-            // x = x + d;
-
-            lincomb( d, { 1.0 / theta }, { z } );
-            lincomb( x, { 1.0, 1.0 }, { x, d } );
+            // Fused tail (z holds A*x): z = D^-1(b - A x); d = (1/theta) z; x = x + d.
+            // First Chebyshev direction => beta = 0 (old d not read).
+            chebyshev_fused_update( x, d, z, b, inverse_diagonal_, ScalarType( 1.0 / theta ), ScalarType( 0 ) );
 
             // cheby recurrence
 
@@ -150,14 +145,8 @@ class Chebyshev
                 const auto alpha = 2.0 * rho_new / delta;
 
                 apply( A, x, z );
-                lincomb( z, { 1.0, -1.0 }, { b, z } );
-                scale_in_place( z, inverse_diagonal_ );
-
-                // d = alpha * z + beta * d;
-                // x = x + d;
-
-                lincomb( d, { alpha, beta }, { z, d } );
-                lincomb( x, { 1.0, 1.0 }, { x, d } );
+                // Fused tail (z holds A*x): z = D^-1(b - A x); d = alpha z + beta d; x = x + d.
+                chebyshev_fused_update( x, d, z, b, inverse_diagonal_, ScalarType( alpha ), ScalarType( beta ) );
 
                 rho = rho_new;
             }

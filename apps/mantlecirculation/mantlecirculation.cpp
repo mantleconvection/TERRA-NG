@@ -43,6 +43,7 @@
 #include "linalg/vector_q1isoq2_q1.hpp"
 #include "src/diagnostics.hpp"
 #include "src/build_radii.hpp"
+#include "src/hbm_probe.hpp"
 #include "src/energy_solver.hpp"
 #include "src/interpolators.hpp"
 #include "src/io.hpp"
@@ -215,6 +216,7 @@ Result<> run( const Parameters& prm )
     }
 
     // ---- Stokes solver context: viscosity hierarchy, GCA, MG, Schur, FGMRES.
+    log_hbm( "before StokesContext (domains + grids only)" );
     StokesContext< ScalarType > stokes(
         domains,
         coords_shell,
@@ -345,6 +347,14 @@ Result<> run( const Parameters& prm )
             break;
     }
 
+    // fv_cell_centers is consumed only by the FCT advection solver after
+    // initialization; for SUPG/EV it is dead weight (a 3-component FV field,
+    // ~0.5 GB/GCD at production scale). Release it for the non-FCT solvers.
+    if ( prm.time_stepping_parameters.energy_solver != EnergySolverType::FCT )
+    {
+        fv_cell_centers = linalg::VectorFVVec< ScalarType, 3 >();
+    }
+
     // EV-specific: register the Q1-projected per-wedge ν_h diagnostic field
     // with XDMF if the energy solver exposes one.  Must happen before any
     // xdmf_output.write() call.
@@ -410,6 +420,8 @@ Result<> run( const Parameters& prm )
                 << "  [timestep 0, before time stepping]" << std::endl;
     }
 
+    log_hbm( "after all solver setup (Stokes + Energy), before time stepping" );
+
     for ( int timestep = timestep_initial + 1; timestep < prm.time_stepping_parameters.max_timesteps; timestep++ )
     {
         logroot << "\n### Timestep " << timestep << " ###" << std::endl;
@@ -418,7 +430,9 @@ Result<> run( const Parameters& prm )
 
         const int num_picard = prm.time_stepping_parameters.picard_iterations;
 
-        // Snapshot any solver-internal state that needs restoring across Picard iterations.
+        // Per-step pre-hook (e.g. EV marks ν_h stale here, every step). Always called;
+        // the backup copies inside are individually gated on num_picard > 1, so no
+        // unallocated backup buffers are touched when there is a single Picard sweep.
         energy->snapshot_for_picard();
 
         // Compute dt once from current velocity (before Picard loop).
@@ -438,6 +452,9 @@ Result<> run( const Parameters& prm )
 
             // --- Stokes solve ---
             stokes.solve( T, /*log_convergence=*/( picard == num_picard - 1 ) );
+
+            if ( timestep == timestep_initial + 1 && picard == 0 )
+                log_hbm( "after first Stokes solve (peak)" );
 
             // --- Energy solve (polymorphic dispatch) ---
             energy->step( dt, /*print_convergence=*/( picard == num_picard - 1 ) );

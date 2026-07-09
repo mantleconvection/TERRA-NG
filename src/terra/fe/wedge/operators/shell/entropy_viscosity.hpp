@@ -100,7 +100,7 @@ ScalarT max_entry_owned(
 
     Kokkos::parallel_reduce(
         "ev_max_entry_owned",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 },
             { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int id, int i, int j, int k, ScalarT& lmax ) {
@@ -128,7 +128,7 @@ ScalarT min_entry_owned(
 
     Kokkos::parallel_reduce(
         "ev_min_entry_owned",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+        Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 },
             { x.extent( 0 ), x.extent( 1 ), x.extent( 2 ), x.extent( 3 ) } ),
         KOKKOS_LAMBDA( int id, int i, int j, int k, ScalarT& lmin ) {

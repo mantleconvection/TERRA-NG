@@ -31,7 +31,7 @@ double power_iteration(
     {
         return 1.0; // safe fallback
     }
-    lincomb( tmpIt, { 1.0 / norm }, { tmpIt }, 0.0 );
+    lincomb( tmpIt, { typename std::remove_reference_t< decltype( tmpIt ) >::ScalarType( 1.0 / norm ) }, { tmpIt }, 0.0 );
 
     // apply operator
     apply( op, tmpIt, tmpAux );
@@ -45,7 +45,7 @@ double power_iteration(
         {
             return radius > 0.0 ? radius : 1.0;
         }
-        lincomb( tmpIt, { 1.0 / norm }, { tmpAux }, 0.0 );
+        lincomb( tmpIt, { typename std::remove_reference_t< decltype( tmpIt ) >::ScalarType( 1.0 / norm ) }, { tmpAux }, 0.0 );
 
         // apply operator
         apply( op, tmpIt, tmpAux );

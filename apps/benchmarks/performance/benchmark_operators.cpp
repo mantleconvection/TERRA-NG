@@ -137,7 +137,15 @@ struct Parameters
     int min_level                   = 1;
     int max_level                   = 6;
     int executions                  = 5;
+    int warmup                      = 5;
     int refinement_level_subdomains = 0;
+    // Anisotropic (radial-only) controls. radial_extra_levels adds radial diamond
+    // levels on top of the loop level (rad_level = level + this), so total dofs
+    // scale x2 per extra radial level while the lateral resolution is unchanged.
+    // lat_sdr / rad_sdr (>= 0) override refinement_level_subdomains per axis.
+    int radial_extra_levels = 0;
+    int lat_sdr             = -1;
+    int rad_sdr             = -1;
     // Tile-sweep overrides for the production EpsDivDivKerngen kernel.
     // 0 = use the hardcoded default (lat=4, r=16, r_passes=2).
     int lat_tile  = 0;
@@ -145,14 +153,28 @@ struct Parameters
     int r_passes  = 0;
 };
 
+// Number of untimed warmup matvecs run before the timed region (set from --warmup).
+// Amortizes first-call/launch overhead, lazy allocation, and page-in so the timed
+// matvecs reflect steady state and run-to-run variance shrinks.
+static int g_warmup_iterations = 5;
+
 template < OperatorLike OperatorT >
 double measure_run_time( int executions, OperatorT& A, const SrcOf< OperatorT >& src, DstOf< OperatorT >& dst )
 {
     Kokkos::Timer timer;
 
+    for ( int i = 0; i < g_warmup_iterations; ++i )
+    {
+        apply( A, src, dst );
+    }
+
     Kokkos::fence();
     MPI_Barrier( MPI_COMM_WORLD );
     timer.reset();
+    // Drop the warmup iterations from the timing tree so the aggregated JSON
+    // reflects only the timed executions below (warmup is cold: first-touch
+    // allocation, cold caches/halo buffers, and would inflate the breakdown).
+    util::TimerTree::instance().clear();
 
     for ( int i = 0; i < executions; ++i )
     {
@@ -172,15 +194,20 @@ double measure_run_time( int executions, OperatorT& A, const SrcOf< OperatorT >&
 }
 
 BenchmarkData
-    run( const BenchmarkType benchmark, const int level, const int executions, const int refinement_level_subdomains )
+    run( const BenchmarkType benchmark, const int level, const int executions,
+         const int lat_sdr, const int rad_sdr, const int radial_extra_levels )
 {
     if ( level < 1 )
     {
         Kokkos::abort( "level must be >= 1" );
     }
 
+    // Lateral level stays at `level`; radial level may be refined independently so
+    // that total dofs scale x2 per extra radial level.
+    const int rad_level = level + radial_extra_levels;
+
     const auto domain = grid::shell::DistributedDomain::create_uniform(
-        level, level, 0.5, 1.0, refinement_level_subdomains, refinement_level_subdomains );
+        level, rad_level, 0.5, 1.0, lat_sdr, rad_sdr );
     const auto subdomain_distr = grid::shell::subdomain_distribution( domain );
     logroot << "Subdomain distribution: \n";
     logroot << " - total: " << subdomain_distr.total << "\n";
@@ -189,7 +216,7 @@ BenchmarkData
     logroot << " - max:   " << subdomain_distr.max << "\n\n";
 
     const auto domain_coarse = grid::shell::DistributedDomain::create_uniform(
-        level - 1, level - 1, 0.5, 1.0, refinement_level_subdomains, refinement_level_subdomains );
+        level - 1, rad_level - 1, 0.5, 1.0, lat_sdr, rad_sdr );
 
     const auto coords_shell_double = grid::shell::subdomain_unit_sphere_single_shell_coords< double >( domain );
     const auto coords_radii_double = grid::shell::subdomain_shell_radii< double >( domain );
@@ -456,13 +483,20 @@ BenchmarkData
     return BenchmarkData{ level, dofs, duration };
 }
 
-void run_all( const int min_level, const int max_level, const int executions, const int refinement_level_subdomains )
+void run_all( const int min_level, const int max_level, const int executions,
+              const int refinement_level_subdomains, const int lat_sdr_override,
+              const int rad_sdr_override, const int radial_extra_levels )
 {
+    const int lat_sdr = ( lat_sdr_override >= 0 ) ? lat_sdr_override : refinement_level_subdomains;
+    const int rad_sdr = ( rad_sdr_override >= 0 ) ? rad_sdr_override : refinement_level_subdomains;
+
     logroot << "Running operator (matvec) benchmarks." << std::endl;
     logroot << "min_level:            " << min_level << std::endl;
     logroot << "max_level:            " << max_level << std::endl;
     logroot << "executions per level: " << executions << std::endl;
-    logroot << "refinement for subdomains " << refinement_level_subdomains << std::endl;
+    logroot << "warmup iterations:    " << g_warmup_iterations << std::endl;
+    logroot << "lat_sdr / rad_sdr:    " << lat_sdr << " / " << rad_sdr << std::endl;
+    logroot << "radial_extra_levels:  " << radial_extra_levels << std::endl;
     logroot << std::endl;
     int world_size = 0;
     MPI_Comm_size( MPI_COMM_WORLD, &world_size ); // total number of MPI processes
@@ -475,7 +509,7 @@ void run_all( const int min_level, const int max_level, const int executions, co
 
         for ( int i = min_level; i <= max_level; ++i )
         {
-            const auto data = run( benchmark, i, executions, refinement_level_subdomains );
+            const auto data = run( benchmark, i, executions, lat_sdr, rad_sdr, radial_extra_levels );
             table.add_row(
                 { { "level", i },
                   { "dofs", data.dofs },
@@ -489,8 +523,10 @@ void run_all( const int min_level, const int max_level, const int executions, co
         if ( mpi::rank() == 0 )
         {
             std::ofstream out(
-                "./csv/bo_np" + std::to_string( world_size ) + "_sdr" + std::to_string( refinement_level_subdomains ) +
-                "_ml" + std::to_string( max_level ) + ".csv" );
+                "./csv/bo_np" + std::to_string( world_size ) +
+                "_latsdr" + std::to_string( lat_sdr ) + "_radsdr" + std::to_string( rad_sdr ) +
+                "_lat" + std::to_string( max_level ) + "_rad" + std::to_string( max_level + radial_extra_levels ) +
+                ".csv" );
             table.print_csv( out );
         }
         table.print_csv( logroot );
@@ -503,8 +539,10 @@ void run_all( const int min_level, const int max_level, const int executions, co
     if ( mpi::rank() == 0 )
     {
         std::ofstream out(
-            "./tts/bo_np" + std::to_string( world_size ) + "_sdr" + std::to_string( refinement_level_subdomains ) +
-            "_ml" + std::to_string( max_level ) + ".json" );
+            "./tts/bo_np" + std::to_string( world_size ) +
+            "_latsdr" + std::to_string( lat_sdr ) + "_radsdr" + std::to_string( rad_sdr ) +
+            "_lat" + std::to_string( max_level ) + "_rad" + std::to_string( max_level + radial_extra_levels ) +
+            ".json" );
         out << util::TimerTree::instance().json_aggregate();
         out.close();
     }
@@ -533,6 +571,9 @@ int main( int argc, char** argv )
     util::add_option_with_default(
         app, "--executions", parameters.executions, "Number of matrix-vector multiplications to be executed." );
     util::add_option_with_default(
+        app, "--warmup", parameters.warmup,
+        "Number of untimed warmup matvecs before the timed region (0 = none)." );
+    util::add_option_with_default(
         app, "--lat-tile", parameters.lat_tile,
         "EpsDivDivKerngen lateral tile size override (0 = default 4)." );
     util::add_option_with_default(
@@ -541,6 +582,16 @@ int main( int argc, char** argv )
     util::add_option_with_default(
         app, "--r-passes", parameters.r_passes,
         "EpsDivDivKerngen radial-passes override (0 = default 2)." );
+    util::add_option_with_default(
+        app, "--radial-extra-levels", parameters.radial_extra_levels,
+        "Extra radial diamond levels on top of the loop level (rad_level = level + this); "
+        "total dofs scale x2 per extra radial level. Lateral level is unchanged." );
+    util::add_option_with_default(
+        app, "--lat-sdr", parameters.lat_sdr,
+        "Lateral subdomain refinement (>= 0 overrides --refinement-level-subdomains)." );
+    util::add_option_with_default(
+        app, "--rad-sdr", parameters.rad_sdr,
+        "Radial subdomain refinement (>= 0 overrides --refinement-level-subdomains)." );
 
     CLI11_PARSE( app, argc, argv );
 
@@ -549,6 +600,8 @@ int main( int argc, char** argv )
     terra::fe::wedge::operators::shell::g_epsdivdiv_lat_tile_override = parameters.lat_tile;
     terra::fe::wedge::operators::shell::g_epsdivdiv_r_tile_override   = parameters.r_tile;
     terra::fe::wedge::operators::shell::g_epsdivdiv_r_passes_override = parameters.r_passes;
+
+    g_warmup_iterations = parameters.warmup;
 
     if ( parameters.min_level < 1 )
     {
@@ -562,7 +615,9 @@ int main( int argc, char** argv )
     logroot << "\n\n";
 
     run_all(
-        parameters.min_level, parameters.max_level, parameters.executions, parameters.refinement_level_subdomains );
+        parameters.min_level, parameters.max_level, parameters.executions,
+        parameters.refinement_level_subdomains, parameters.lat_sdr, parameters.rad_sdr,
+        parameters.radial_extra_levels );
 
     MPI_Finalize();
 }
