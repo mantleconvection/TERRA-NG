@@ -618,10 +618,6 @@ int main( int argc, char** argv )
         return EXIT_SUCCESS;
     }
 
-    // Wire the CLI overlap toggle to the viscous operator (read in its constructor).
-    terra::fe::wedge::operators::shell::g_epsdivdiv_overlap_comm =
-        actual_parameters.stokes_solver_parameters.viscous_overlap_comm;
-
     if ( auto run_result = run( actual_parameters ); run_result.is_err() )
     {
         logroot << run_result.error() << std::endl;

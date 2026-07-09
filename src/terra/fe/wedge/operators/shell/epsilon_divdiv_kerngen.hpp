@@ -43,12 +43,6 @@ inline int g_epsdivdiv_lat_tile_override = 0;
 inline int g_epsdivdiv_r_tile_override   = 0;
 inline int g_epsdivdiv_r_passes_override = 0;
 
-// Overlap the free-slip matvec's additive halo exchange with interior compute.
-// Set from the app CLI (--stokes-viscous-overlap-comm). Default off: measured a wash
-// at these subdomain sizes (the hideable comm is only ~8% of the matvec, almost all
-// MPI wait; the split's overhead offsets it). Kept for larger-subdomain regimes.
-inline bool g_epsdivdiv_overlap_comm = false;
-
 /**
  * @brief Matrix-free / matrix-based epsilon-div-div operator on wedge elements in a spherical shell.
  *
@@ -176,22 +170,6 @@ class EpsilonDivDivKerngen
     ScalarT r_min_;
 
     KernelPath kernel_path_ = KernelPath::FastDirichletNeumann;
-
-    // Compute/communication overlap (free-slip matvec only). The element sweep is
-    // split into interface tiles (those touching a subdomain face, whose cells
-    // carry all local contributions to shared nodes) and interior tiles. The
-    // additive halo exchange of dst is fired between the two passes so the network
-    // transfer hides behind the (bulk) interior compute.
-    //   partition_mode_: 0 = all tiles, 1 = interface tiles only, 2 = interior only.
-    // overlap_comm_ defaults on; app CLI --stokes-viscous-overlap-comm toggles it.
-    // When partitioned, the kernel is launched over only the active partition's blocks
-    // (interface_blocks_ or interior_blocks_) via active_blocks_, so no team is wasted
-    // on an early return. Built once in the ctor for the free-slip path.
-    int                  partition_mode_ = 0;
-    bool                 overlap_comm_   = true;
-    Kokkos::View< int* > interface_blocks_;
-    Kokkos::View< int* > interior_blocks_;
-    Kokkos::View< int* > active_blocks_;
 
     // Rotation null-space penalty (active only for fs/fs)
     bool                                              penalty_active_  = false;
@@ -324,41 +302,6 @@ class EpsilonDivDivKerngen
 
         // Host-side path selection (no in-kernel path branching)
         update_kernel_path_flag_host_only();
-
-        // Compute/comm overlap toggle (app CLI: --stokes-viscous-overlap-comm).
-        overlap_comm_ = g_epsdivdiv_overlap_comm;
-
-        // Precompute the interface/interior block partition for the free-slip overlap
-        // path, so each pass launches only its own teams (no wasted early returns).
-        if ( overlap_comm_ && kernel_path_ == KernelPath::FastFreeslip )
-        {
-            std::vector< int > iface, inter;
-            iface.reserve( blocks_ );
-            inter.reserve( blocks_ );
-            for ( int b = 0; b < blocks_; ++b )
-            {
-                int       tmp       = b;
-                const int r_tile_id = tmp % r_tiles_;
-                tmp /= r_tiles_;
-                const int lat_y_id = tmp % lat_tiles_;
-                tmp /= lat_tiles_;
-                const int lat_x_id = tmp % lat_tiles_;
-                const int x0       = lat_x_id * lat_tile_;
-                const int y0       = lat_y_id * lat_tile_;
-                const int r0       = r_tile_id * r_tile_block_;
-                ( tile_is_interface_( x0, y0, r0 ) ? iface : inter ).push_back( b );
-            }
-            interface_blocks_ = Kokkos::View< int* >( "eps_interface_blocks", iface.size() );
-            interior_blocks_  = Kokkos::View< int* >( "eps_interior_blocks", inter.size() );
-            auto h_if = Kokkos::create_mirror_view( interface_blocks_ );
-            auto h_in = Kokkos::create_mirror_view( interior_blocks_ );
-            for ( size_t i = 0; i < iface.size(); ++i )
-                h_if( i ) = iface[i];
-            for ( size_t i = 0; i < inter.size(); ++i )
-                h_in( i ) = inter[i];
-            Kokkos::deep_copy( interface_blocks_, h_if );
-            Kokkos::deep_copy( interior_blocks_, h_in );
-        }
 #if 0
         util::logroot << "[EpsilonDivDiv] tile size (x,y,r)=(" << lat_tile_ << "," << lat_tile_ << "," << r_tile_
                       << "), r_passes=" << r_passes_ << std::endl;
@@ -653,40 +596,6 @@ class EpsilonDivDivKerngen
         dst_ = dst.grid_data();
         src_ = src.grid_data();
 
-        // ---- Compute/communication overlap (free-slip matvec, additive comm) ----
-        // Interface tiles first (so all local contributions to shared nodes, incl.
-        // the rotation penalty, are final), fire the additive halo exchange, then run
-        // the interior tiles while the network transfer is in flight, then reduce in.
-        const bool do_overlap = overlap_comm_ && kernel_path_ == KernelPath::FastFreeslip && !diagonal_ &&
-                                operator_communication_mode_ == linalg::OperatorCommunicationMode::CommunicateAdditively;
-        if ( do_overlap )
-        {
-            {
-                util::Timer timer_kernel( "epsilon_divdiv_kernel" );
-                partition_mode_ = 1; // interface tiles
-                active_blocks_  = interface_blocks_;
-                launch_fast_freeslip_matvec_( static_cast< int >( interface_blocks_.extent( 0 ) ) );
-                Kokkos::fence();
-            }
-            apply_rotation_penalty_(); // interface dst now final (incl. penalty)
-            {
-                util::Timer timer_comm( "epsilon_divdiv_comm" );
-                comm_plan_.start_exchange( dst_, recv_buffers_ );
-            }
-            {
-                util::Timer timer_kernel( "epsilon_divdiv_kernel" );
-                partition_mode_ = 2; // interior tiles, overlapping the transfer
-                active_blocks_  = interior_blocks_;
-                launch_fast_freeslip_matvec_( static_cast< int >( interior_blocks_.extent( 0 ) ) );
-            }
-            {
-                util::Timer timer_comm( "epsilon_divdiv_comm" );
-                comm_plan_.finish_exchange( dst_, recv_buffers_ );
-            }
-            partition_mode_ = 0;
-            return;
-        }
-
         util::Timer          timer_kernel( "epsilon_divdiv_kernel" );
         Kokkos::TeamPolicy<> policy( blocks_, team_size_ );
 
@@ -814,17 +723,6 @@ class EpsilonDivDivKerngen
             util::Timer timer_comm( "epsilon_divdiv_comm" );
             terra::communication::shell::send_recv_with_plan( comm_plan_, dst_, recv_buffers_ );
         }
-    }
-
-    // Free-slip kernel launch for the matvec (no fence), reused by the overlap path.
-    // league_size is the number of teams to launch (interface or interior block count).
-    void launch_fast_freeslip_matvec_( int league_size )
-    {
-        Kokkos::TeamPolicy<> policy( league_size, team_size_ );
-        policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
-        Kokkos::parallel_for(
-            "epsilon_divdiv_apply_kernel_fast_fs_matvec", policy,
-            KOKKOS_CLASS_LAMBDA( const Team& team ) { this->template run_team_fast_freeslip< false >( team ); } );
     }
 
     // Rotation null-space penalty for fs/fs: dst += epsilon * sum_i (n_i^T src) n_i.
@@ -1125,23 +1023,10 @@ class EpsilonDivDivKerngen
      * Templated on Diagonal so the compiler can dead-code-eliminate the
      * unused matvec or diagonal-only path, reducing register pressure.
      */
-    // A tile touches a subdomain face (and so carries local contributions to shared
-    // nodes) iff its cell span reaches the first or last cell in any direction. Uses
-    // the full tile span (lat_tile_, r_tile_block_); over-marking is safe (it only
-    // shifts a tile from the interior pass to the interface pass, never drops work).
-    KOKKOS_INLINE_FUNCTION bool tile_is_interface_( int x0, int y0, int r0 ) const
-    {
-        return ( x0 == 0 ) || ( y0 == 0 ) || ( r0 == 0 ) ||
-               ( x0 + lat_tile_ - 1 >= hex_lat_ - 1 ) || ( y0 + lat_tile_ - 1 >= hex_lat_ - 1 ) ||
-               ( r0 + r_tile_block_ - 1 >= hex_rad_ - 1 );
-    }
-
     template < bool Diagonal >
     KOKKOS_INLINE_FUNCTION void run_team_fast_freeslip( const Team& team ) const
     {
-        // When partitioned, league_rank indexes into the active partition's block list,
-        // so every launched team does real work (no early-return waste).
-        const int league_index = ( partition_mode_ == 0 ) ? team.league_rank() : active_blocks_( team.league_rank() );
+        const int league_index = team.league_rank();
 
         int local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell;
         decode_team_indices(

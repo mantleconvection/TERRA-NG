@@ -70,37 +70,6 @@ class ShellBoundaryCommPlan
         Kokkos::fence();
     }
 
-    // Split of exchange_and_reduce for compute/communication overlap. Call
-    // start_exchange() once the data's boundary values are final, then run
-    // independent (interior) compute, then finish_exchange() to reduce the
-    // received neighbour contributions in. Between the two, the network transfer
-    // proceeds (progressed by the MPI_Waitany inside finish) while the GPU runs
-    // the interior kernel. The combined effect is identical to exchange_and_reduce.
-    void start_exchange(
-        const GridDataType&                                       data,
-        SubdomainNeighborhoodSendRecvBuffer< ScalarType, VecDim >& boundary_recv_buffers ) const
-    {
-        util::Timer timer_all( "shell_boundary_start_exchange" );
-
-        post_irecvs_();
-        local_comm_copy_into_recv_buffers_( data, boundary_recv_buffers );
-        pack_remote_sends_( data );
-        post_isends_();
-    }
-
-    void finish_exchange(
-        const GridDataType&                                       data,
-        SubdomainNeighborhoodSendRecvBuffer< ScalarType, VecDim >& boundary_recv_buffers,
-        CommunicationReduction reduction = CommunicationReduction::SUM ) const
-    {
-        util::Timer timer_all( "shell_boundary_finish_exchange" );
-
-        unpack_local_( data, boundary_recv_buffers, reduction );
-        wait_and_unpack_remote_( data, reduction );
-
-        Kokkos::fence();
-    }
-
     // Optional: if domain topology changes (rare), rebuild everything.
     void rebuild()
     {
