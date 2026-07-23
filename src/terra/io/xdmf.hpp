@@ -2,6 +2,8 @@
 #pragma once
 
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 
 #include "mpi/mpi.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
@@ -11,6 +13,8 @@
 #include "util/xml.hpp"
 
 namespace terra::io {
+
+static constexpr int32_t checkpoint_version = 2;
 
 /// @brief XDMF output that simultaneously serves for visualization with software like Paraview and as a simulation
 /// checkpoint.
@@ -185,12 +189,14 @@ class XDMFOutput
         const grid::shell::DistributedDomain&                distributed_domain,
         const grid::Grid3DDataVec< InputGridScalarType, 3 >& coords_shell_device,
         const grid::Grid2DDataScalar< InputGridScalarType >& coords_radii_device,
+        const InputGridScalarType                            coords_scale_factor      = InputGridScalarType( 1 ),
         const OutputTypeFloat                                output_type_points       = OutputTypeFloat::Float32,
         const OutputTypeInt                                  output_type_connectivity = OutputTypeInt::Int64 )
     : directory_path_( directory_path )
     , distributed_domain_( distributed_domain )
     , coords_shell_device_( coords_shell_device )
     , coords_radii_device_( coords_radii_device )
+    , coords_scale_factor_( coords_scale_factor )
     , output_type_points_( output_type_points )
     , output_type_connectivity_( output_type_connectivity )
     {
@@ -200,11 +206,14 @@ class XDMFOutput
         }
     }
 
-    /// @brief Set the write counter manually.
+    /// @brief Set the write counter and according zero-padding width manually.
     ///
     /// This will only affect the step number attached to the file names. The geometry is still written once during the
     /// first write() call.
-    void set_write_counter( int write_counter ) { write_counter_ = write_counter; }
+    void set_pad_width( int pad_width ) { pad_width_ = pad_width; }
+
+    /// @brief Sets metadata flag whether output is dimensional or not
+    void set_is_dimensional( const bool is_dimensional ) { is_dimensional_ = is_dimensional; }
 
     /// @brief Adds a new scalar data grid to be written out.
     ///
@@ -290,7 +299,7 @@ class XDMFOutput
     /// The write() calls will allocate temporary storage on the host if host and device memory are not shared.
     /// Currently, for data grids, some host-side temporary buffers are kept after this method returns (the sizes depend
     /// on the type of data added) to avoid frequent reallocation.
-    void write()
+    void write( int time )
     {
         using util::XML;
 
@@ -302,15 +311,20 @@ class XDMFOutput
         const auto geometry_file_path = directory_path_ + "/" + geometry_file_base;
         const auto topology_file_path = directory_path_ + "/" + topology_file_base;
 
-        const auto step_file_path = directory_path_ + "/step_" + std::to_string( write_counter_ ) + ".xmf";
+        // Construct file path and name with zero-padded time/timestep.
+        std::ostringstream oss;
+        oss << std::setw( pad_width_ ) << std::setfill( '0' ) << time;
+        time_str_                 = oss.str();
+        const auto step_file_path = directory_path_ + "/step_" + time_str_ + ".xmf";
 
         const int num_subdomains = coords_shell_device_.extent( 0 );
         const int nodes_x        = coords_shell_device_.extent( 1 );
         const int nodes_y        = coords_shell_device_.extent( 2 );
         const int nodes_r        = coords_radii_device_.extent( 1 );
 
-        const int64_t number_of_nodes_local    = static_cast< int64_t >( num_subdomains ) * nodes_x * nodes_y * nodes_r;
-        const int64_t number_of_elements_local = static_cast< int64_t >( num_subdomains ) * ( nodes_x - 1 ) * ( nodes_y - 1 ) * ( nodes_r - 1 ) * 2;
+        const int64_t number_of_nodes_local = static_cast< int64_t >( num_subdomains ) * nodes_x * nodes_y * nodes_r;
+        const int64_t number_of_elements_local =
+            static_cast< int64_t >( num_subdomains ) * ( nodes_x - 1 ) * ( nodes_y - 1 ) * ( nodes_r - 1 ) * 2;
 
         if ( !first_write_happened_ )
         {
@@ -318,7 +332,8 @@ class XDMFOutput
 
             int64_t num_nodes_elements_subdomains_global[3] = {
                 number_of_nodes_local, number_of_elements_local, static_cast< int64_t >( num_subdomains ) };
-            MPI_Allreduce( MPI_IN_PLACE, &num_nodes_elements_subdomains_global, 3, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD );
+            MPI_Allreduce(
+                MPI_IN_PLACE, &num_nodes_elements_subdomains_global, 3, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD );
             number_of_nodes_global_      = num_nodes_elements_subdomains_global[0];
             number_of_elements_global_   = num_nodes_elements_subdomains_global[1];
             number_of_subdomains_global_ = num_nodes_elements_subdomains_global[2];
@@ -331,7 +346,8 @@ class XDMFOutput
             // Third entry: number of subdomains of processes before this
             int64_t offsets[3];
 
-            int64_t local_values[3] = { number_of_nodes_local, number_of_elements_local, static_cast< int64_t >( num_subdomains ) };
+            int64_t local_values[3] = {
+                number_of_nodes_local, number_of_elements_local, static_cast< int64_t >( num_subdomains ) };
 
             // Compute the prefix sum (inclusive)
             MPI_Scan( &local_values, &offsets, 3, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD );
@@ -418,7 +434,8 @@ class XDMFOutput
                     MPI_COMM_WORLD, topology_file_path.c_str(), MPI_MODE_CREATE | MPI_MODE_RDWR, MPI_INFO_NULL, &fh );
 
                 // Define the file view: each process writes its local data sequentially
-                MPI_Offset disp = static_cast< int64_t >( 6 ) * number_of_elements_offset_ * static_cast< int64_t >( output_type_connectivity_ );
+                MPI_Offset disp = static_cast< int64_t >( 6 ) * number_of_elements_offset_ *
+                                  static_cast< int64_t >( output_type_connectivity_ );
                 MPI_File_set_view( fh, disp, MPI_CHAR, MPI_CHAR, "native", MPI_INFO_NULL );
 
                 std::string topo_str = topology_stream.str();
@@ -442,6 +459,8 @@ class XDMFOutput
         auto xml    = XML( "Xdmf", { { "Version", "2.0" } } );
         auto domain = XML( "Domain" );
         auto grid   = XML( "Grid", { { "Name", "Grid" }, { "GridType", "Uniform" } } );
+
+        grid.add_child( XML( "Time", { { "Value", std::to_string( time ) } } ) );
 
         auto geometry =
             XML( "Geometry", { { "Type", "XYZ" } } )
@@ -508,7 +527,6 @@ class XDMFOutput
             step_stream.close();
         }
 
-        write_counter_++;
         first_write_happened_ = true;
     }
 
@@ -597,7 +615,7 @@ class XDMFOutput
 
                         for ( int d = 0; d < 3; d++ )
                         {
-                            const auto cd = static_cast< FloatingPointOutputType >( c( d ) );
+                            const auto cd = static_cast< FloatingPointOutputType >( c( d ) * coords_scale_factor_ );
                             out.write( reinterpret_cast< const char* >( &cd ), sizeof( FloatingPointOutputType ) );
                         }
                     }
@@ -635,8 +653,7 @@ class XDMFOutput
                         v[2] = v[0] + nodes_x;
                         v[3] = v[0] + nodes_x + 1;
 
-                        v[4] = offset + local_subdomain_id * stride_0 + ( r + 1 ) * stride_1 +
-                               y * stride_2 + x;
+                        v[4] = offset + local_subdomain_id * stride_0 + ( r + 1 ) * stride_1 + y * stride_2 + x;
                         v[5] = v[4] + 1;
                         v[6] = v[4] + nodes_x;
                         v[7] = v[4] + nodes_x + 1;
@@ -721,7 +738,7 @@ class XDMFOutput
         const grid::Grid4DDataScalar< ScalarTypeIn >& data,
         const OutputTypeFloat&                        output_type )
     {
-        const auto attribute_file_base = data.label() + "_" + std::to_string( write_counter_ ) + ".bin";
+        const auto attribute_file_base = data.label() + "_" + time_str_ + ".bin";
         const auto attribute_file_path = directory_path_ + "/" + attribute_file_base;
 
         {
@@ -756,15 +773,14 @@ class XDMFOutput
 
         auto attribute =
             util::XML( "Attribute", { { "Name", data.label() }, { "AttributeType", "Scalar" }, { "Center", "Node" } } )
-                .add_child(
-                    util::XML(
-                        "DataItem",
-                        { { "Format", "Binary" },
-                          { "DataType", "Float" },
-                          { "Precision", std::to_string( static_cast< int >( output_type ) ) },
-                          { "Endian", "Little" },
-                          { "Dimensions", std::to_string( number_of_nodes_global_ ) } },
-                        attribute_file_base ) );
+                .add_child( util::XML(
+                    "DataItem",
+                    { { "Format", "Binary" },
+                      { "DataType", "Float" },
+                      { "Precision", std::to_string( static_cast< int >( output_type ) ) },
+                      { "Endian", "Little" },
+                      { "Dimensions", std::to_string( number_of_nodes_global_ ) } },
+                    attribute_file_base ) );
 
         return attribute;
     }
@@ -846,7 +862,7 @@ class XDMFOutput
         const grid::Grid4DDataVec< ScalarTypeIn, VecDim >& data,
         const OutputTypeFloat&                             output_type )
     {
-        const auto attribute_file_base = data.label() + "_" + std::to_string( write_counter_ ) + ".bin";
+        const auto attribute_file_base = data.label() + "_" + time_str_ + ".bin";
         const auto attribute_file_path = directory_path_ + "/" + attribute_file_base;
 
         {
@@ -866,7 +882,8 @@ class XDMFOutput
                 MPI_COMM_WORLD, attribute_file_path.c_str(), MPI_MODE_CREATE | MPI_MODE_RDWR, MPI_INFO_NULL, &fh );
 
             // Define the file view: each process writes its local data sequentially
-            MPI_Offset disp = static_cast< int64_t >( VecDim ) * number_of_nodes_offset_ * static_cast< int64_t >( output_type_points_ );
+            MPI_Offset disp = static_cast< int64_t >( VecDim ) * number_of_nodes_offset_ *
+                              static_cast< int64_t >( output_type_points_ );
             MPI_File_set_view( fh, disp, MPI_CHAR, MPI_CHAR, "native", MPI_INFO_NULL );
 
             std::string attr_str = attribute_stream.str();
@@ -881,16 +898,14 @@ class XDMFOutput
 
         auto attribute =
             util::XML( "Attribute", { { "Name", data.label() }, { "AttributeType", "Vector" }, { "Center", "Node" } } )
-                .add_child(
-                    util::XML(
-                        "DataItem",
-                        { { "Format", "Binary" },
-                          { "DataType", "Float" },
-                          { "Precision", std::to_string( static_cast< int >( output_type ) ) },
-                          { "Endian", "Little" },
-                          { "Dimensions",
-                            std::to_string( number_of_nodes_global_ ) + " " + std::to_string( VecDim ) } },
-                        attribute_file_base ) );
+                .add_child( util::XML(
+                    "DataItem",
+                    { { "Format", "Binary" },
+                      { "DataType", "Float" },
+                      { "Precision", std::to_string( static_cast< int >( output_type ) ) },
+                      { "Endian", "Little" },
+                      { "Dimensions", std::to_string( number_of_nodes_global_ ) + " " + std::to_string( VecDim ) } },
+                    attribute_file_base ) );
 
         return attribute;
     }
@@ -913,7 +928,7 @@ class XDMFOutput
             checkpoint_metadata_stream.write( reinterpret_cast< const char* >( &value ), sizeof( double ) );
         };
 
-        write_i32( 1 ); // version
+        write_i32( checkpoint_version ); // version
         write_i32( distributed_domain_.domain_info().num_subdomains_per_diamond_side() );
         write_i32( distributed_domain_.domain_info().num_subdomains_in_radial_direction() );
 
@@ -927,6 +942,8 @@ class XDMFOutput
         }
 
         write_i32( static_cast< int32_t >( output_type_points_ ) );
+
+        write_i32( static_cast< int32_t >( is_dimensional_ ) ); // new in version 2: is_dimensional (0 or 1)
 
         write_i32(
             device_data_views_scalar_float_.size() + device_data_views_scalar_double_.size() +
@@ -1074,6 +1091,8 @@ class XDMFOutput
     grid::Grid3DDataVec< InputGridScalarType, 3 > coords_shell_device_;
     grid::Grid2DDataScalar< InputGridScalarType > coords_radii_device_;
 
+    InputGridScalarType coords_scale_factor_ = InputGridScalarType( 1 );
+
     OutputTypeFloat output_type_points_;
     OutputTypeInt   output_type_connectivity_;
 
@@ -1091,8 +1110,10 @@ class XDMFOutput
     std::optional< grid::Grid4DDataVec< double, 3 >::HostMirror > host_data_mirror_vec_double_;
     std::optional< grid::Grid4DDataVec< float, 3 >::HostMirror >  host_data_mirror_vec_float_;
 
-    int  write_counter_        = 0;
-    bool first_write_happened_ = false;
+    std::string time_str_;
+    int         pad_width_            = 0;
+    bool        first_write_happened_ = false;
+    bool        is_dimensional_       = false;
 
     int64_t number_of_nodes_offset_      = -1;
     int64_t number_of_elements_offset_   = -1;
@@ -1113,6 +1134,7 @@ struct CheckpointMetadata
     int32_t size_x{};
     int32_t size_y{};
     int32_t size_r{};
+    int32_t is_dimensional{ -1 };
 
     std::vector< double > radii;
 
@@ -1225,6 +1247,13 @@ struct CheckpointMetadata
             return read_error;
     }
 
+    if ( metadata.version > 1 )
+    {
+        // new in version 2: flag to indicate whether contents are dimensional or nondimensional
+        if ( read_i32( metadata.is_dimensional ) )
+            return read_error;
+    }
+
     int32_t num_grid_data_files;
     if ( read_i32( num_grid_data_files ) )
         return read_error;
@@ -1296,10 +1325,10 @@ template < typename GridDataType >
 
     const auto& checkpoint_metadata = checkpoint_metadata_result.unwrap();
 
-    if ( !( checkpoint_metadata.version == 0 || checkpoint_metadata.version == 1 ) )
+    if ( !( checkpoint_metadata.version == 0 || checkpoint_metadata.version == 1 || checkpoint_metadata.version == 2 ) )
     {
         return {
-            "Supported checkpoint verions: 0, 1. This checkpoint has version " +
+            "Supported checkpoint versions: 0, 1, 2. This checkpoint has version " +
             std::to_string( checkpoint_metadata.version ) + "." };
     }
 

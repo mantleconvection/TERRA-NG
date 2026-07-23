@@ -12,50 +12,91 @@ concept VectorLike = requires(
     const T&                                     x,
     T&                                           x_non_const,
     const std::vector< T >&                      xx,
-    const typename T::ScalarType                 c0 ) {
+    const typename T::ScalarType                 c0 )
+{
     // Requires exposing the scalar type.
     typename T::ScalarType;
 
     // Required lincomb overload
-    { self.lincomb_impl( c, xx, c0 ) } -> std::same_as< void >;
+    {
+        self.lincomb_impl( c, xx, c0 )
+        } -> std::same_as< void >;
 
     // Required dot product
-    { self_const.dot_impl( x ) } -> std::same_as< typename T::ScalarType >;
+    {
+        self_const.dot_impl( x )
+        } -> std::same_as< typename T::ScalarType >;
 
     // Required entries inversion
-    { self.invert_entries_impl() } -> std::same_as< void >;
+    {
+        self.invert_entries_impl()
+        } -> std::same_as< void >;
 
     // Required scale with vector
-    { self.scale_with_vector_impl( x ) } -> std::same_as< void >;
+    {
+        self.scale_with_vector_impl( x )
+        } -> std::same_as< void >;
 
     // Required randomization
-    { self.randomize_impl() } -> std::same_as< void >;
+    {
+        self.randomize_impl()
+        } -> std::same_as< void >;
+
+    // Required min magnitude
+    {
+        self_const.min_entry_impl()
+        } -> std::same_as< typename T::ScalarType >;
+
+    // Required min abs magnitude
+    {
+        self_const.min_abs_entry_impl()
+        } -> std::same_as< typename T::ScalarType >;
 
     // Required max magnitude
-    { self_const.max_abs_entry_impl() } -> std::same_as< typename T::ScalarType >;
+    {
+        self_const.max_entry_impl()
+        } -> std::same_as< typename T::ScalarType >;
+
+    // Required max abs magnitude
+    {
+        self_const.max_abs_entry_impl()
+        } -> std::same_as< typename T::ScalarType >;
 
     // Required nan/inf check
-    { self_const.has_nan_or_inf_impl() } -> std::same_as< bool >;
+    {
+        self_const.has_nan_or_inf_impl()
+        } -> std::same_as< bool >;
 
     // Required swap operation
-    { self.swap_impl( x_non_const ) } -> std::same_as< void >;
+    {
+        self.swap_impl( x_non_const )
+        } -> std::same_as< void >;
 };
 
 /// @brief Concept for types that behave like block 2-vectors.
 /// Extends VectorLike and requires block types and accessors.
 template < typename T >
-concept Block2VectorLike = VectorLike< T > && requires( const T& self_const, T& self ) {
+concept Block2VectorLike = VectorLike< T > && requires( const T& self_const, T& self )
+{
     typename T::Block1Type;
     typename T::Block2Type;
 
     requires VectorLike< typename T::Block1Type >;
     requires VectorLike< typename T::Block2Type >;
 
-    { self_const.block_1() } -> std::same_as< const typename T::Block1Type& >;
-    { self_const.block_2() } -> std::same_as< const typename T::Block2Type& >;
+    {
+        self_const.block_1()
+        } -> std::same_as< const typename T::Block1Type& >;
+    {
+        self_const.block_2()
+        } -> std::same_as< const typename T::Block2Type& >;
 
-    { self.block_1() } -> std::same_as< typename T::Block1Type& >;
-    { self.block_2() } -> std::same_as< typename T::Block2Type& >;
+    {
+        self.block_1()
+        } -> std::same_as< typename T::Block1Type& >;
+    {
+        self.block_2()
+        } -> std::same_as< typename T::Block2Type& >;
 };
 
 /// @brief Alias for the scalar type of a vector.
@@ -148,6 +189,46 @@ void randomize( Vector& y )
     y.randomize_impl();
 }
 
+/// @brief Compute the minimum entry of a vector.
+/// Computes: \f$ \min_i y_i \f$
+/// @param y Input vector.
+/// @return Minimum value
+template < VectorLike Vector >
+ScalarOf< Vector > min_entry( const Vector& y )
+{
+    return y.min_entry_impl();
+}
+
+/// @brief Compute the minimum absolute entry of a vector.
+/// Computes: \f$ \min_i |y_i| \f$
+/// @param y Input vector.
+/// @return Minimum absolute value
+template < VectorLike Vector >
+ScalarOf< Vector > min_abs_entry( const Vector& y )
+{
+    return y.min_abs_entry_impl();
+}
+
+/// @brief Compute the maximum entry of a vector.
+/// Computes: \f$ \max_i y_i \f$
+/// @param y Input vector.
+/// @return Maximum value
+template < VectorLike Vector >
+ScalarOf< Vector > max_entry( const Vector& y )
+{
+    return y.max_entry_impl();
+}
+
+/// @brief Compute the maximum absolute entry of a vector.
+/// Computes: \f$ \max_i |y_i| \f$
+/// @param y Input vector.
+/// @return Maximum absolute value
+template < VectorLike Vector >
+ScalarOf< Vector > max_abs_entry( const Vector& y )
+{
+    return y.max_abs_entry_impl();
+}
+
 /// @brief Compute the infinity norm (max absolute entry) of a vector.
 /// Implements: \f$ \|y\|_\infty = \max_i |y_i| \f$
 /// @param y Input vector.
@@ -236,6 +317,15 @@ class DummyVector
     /// @brief Dummy implementation of randomize.
     void randomize_impl() {}
 
+    /// @brief Dummy implementation of min entry.
+    ScalarType min_entry_impl() const { return 0; }
+
+    /// @brief Dummy implementation of min absolute entry.
+    ScalarType min_abs_entry_impl() const { return 0; }
+
+    /// @brief Dummy implementation of max entry.
+    ScalarType max_entry_impl() const { return 0; }
+
     /// @brief Dummy implementation of max absolute entry.
     ScalarType max_abs_entry_impl() const { return 0; }
 
@@ -286,6 +376,15 @@ class DummyBlock2Vector
 
     /// @brief Dummy implementation of randomize.
     void randomize_impl() {}
+
+    /// @brief Dummy implementation of min entry.
+    ScalarType min_entry_impl() const { return 0; }
+
+    /// @brief Dummy implementation of min absolute entry.
+    ScalarType min_abs_entry_impl() const { return 0; }
+
+    /// @brief Dummy implementation of max entry.
+    ScalarType max_entry_impl() const { return 0; }
 
     /// @brief Dummy implementation of max absolute entry.
     ScalarType max_abs_entry_impl() const { return 0; }

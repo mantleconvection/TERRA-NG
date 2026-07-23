@@ -8,15 +8,14 @@
 #include "fv/hex/helpers.hpp"
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
+#include "interpolators.hpp"
+#include "io.hpp"
 #include "kokkos/kokkos_wrapper.hpp"
 #include "linalg/vector_fv.hpp"
 #include "linalg/vector_q1.hpp"
+#include "parameters.hpp"
 #include "shell/spherical_harmonics.hpp"
 #include "util/logging.hpp"
-
-#include "interpolators.hpp"
-#include "io.hpp"
-#include "parameters.hpp"
 
 namespace terra::mantlecirculation {
 
@@ -36,24 +35,24 @@ namespace terra::mantlecirculation {
 /// the L2-projected Q1 representation of T_fct.
 template < typename ScalarType >
 void initialize_temperature_fields(
-    linalg::VectorQ1Scalar< ScalarType >&                                   T,
-    linalg::VectorFVScalar< ScalarType >&                                   T_fct,
-    const fv::hex::DirichletBCs< ScalarType >&                              fct_bcs,
-    const grid::shell::DistributedDomain&                                   domain,
-    const grid::Grid3DDataVec< ScalarType, 3 >&                             coords_shell,
-    const grid::Grid2DDataScalar< ScalarType >&                             coords_radii,
-    const linalg::VectorFVVec< ScalarType, 3 >&                             fv_cell_centers,
-    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&                ownership_mask,
-    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >&         boundary_mask,
-    const Parameters&                                                       prm )
+    linalg::VectorQ1Scalar< ScalarType >&                           T,
+    linalg::VectorFVScalar< ScalarType >&                           T_fct,
+    const fv::hex::DirichletBCs< ScalarType >&                      fct_bcs,
+    const grid::shell::DistributedDomain&                           domain,
+    const grid::Grid3DDataVec< ScalarType, 3 >&                     coords_shell,
+    const grid::Grid2DDataScalar< ScalarType >&                     coords_radii,
+    const linalg::VectorFVVec< ScalarType, 3 >&                     fv_cell_centers,
+    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&        ownership_mask,
+    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
+    const Parameters&                                               prm )
 {
     using util::logroot;
     const auto& init_temp = prm.physics_parameters.initial_temperature;
 
     if ( init_temp.profile == InitialTemperatureProfile::CONDUCTIVE )
     {
-        const bool has_sph_2 = ( init_temp.sph_degree_l_2 > 0 && init_temp.sph_factor_2 != 0.0 &&
-                                 init_temp.sph_epsilon != 0.0 );
+        const bool has_sph_2 =
+            ( init_temp.sph_degree_l_2 > 0 && init_temp.sph_factor_2 != 0.0 && init_temp.sph_epsilon != 0.0 );
 
         logroot << "Initial temperature: conductive profile";
         if ( init_temp.sph_degree_l > 0 && init_temp.sph_epsilon != 0.0 )
@@ -70,7 +69,7 @@ void initialize_temperature_fields(
 
         // Compute spherical-harmonic coefficients on unit-sphere Q1 nodes.
         grid::Grid3DDataScalar< ScalarType > sph_coeffs;
-        const bool has_sph = ( init_temp.sph_degree_l > 0 && init_temp.sph_epsilon != 0.0 );
+        const bool                           has_sph = ( init_temp.sph_degree_l > 0 && init_temp.sph_epsilon != 0.0 );
         if ( has_sph )
         {
             sph_coeffs = shell::spherical_harmonics_coefficients_grid< ScalarType, ScalarType >(
@@ -103,6 +102,7 @@ void initialize_temperature_fields(
                 domain.domain_info().radii().front(),
                 domain.domain_info().radii().back(),
                 init_temp.sph_epsilon,
+                prm.boundary_parameters.temperature_min,
                 coords_shell,
                 coords_radii,
                 T.grid_data(),
@@ -127,6 +127,8 @@ void initialize_temperature_fields(
             FVInitialConditionInterpolator{
                 domain.domain_info().radii().front(),
                 domain.domain_info().radii().back(),
+                prm.boundary_parameters.temperature_min,
+                prm.boundary_parameters.temperature_max,
                 fv_cell_centers.grid_data(),
                 T_fct.grid_data() } );
         Kokkos::fence();
@@ -134,7 +136,11 @@ void initialize_temperature_fields(
         Kokkos::parallel_for(
             "adding noise to temp (FCT)",
             grid::shell::local_domain_md_range_policy_cells_fv_skip_ghost_layers( domain ),
-            FVNoiseAdder{ T_fct.grid_data(), Kokkos::Random_XorShift64_Pool<>( 12345 ) } );
+            FVNoiseAdder{
+                prm.boundary_parameters.temperature_min,
+                prm.boundary_parameters.temperature_max,
+                T_fct.grid_data(),
+                Kokkos::Random_XorShift64_Pool<>( 12345 ) } );
         Kokkos::fence();
     }
 
@@ -150,11 +156,9 @@ void initialize_temperature_fields(
         init_l2_tmps.reserve( 5 );
         for ( int i = 0; i < 5; ++i )
         {
-            init_l2_tmps.emplace_back(
-                "init_l2_tmp_" + std::to_string( i ), domain, ownership_mask );
+            init_l2_tmps.emplace_back( "init_l2_tmp_" + std::to_string( i ), domain, ownership_mask );
         }
-        fv::hex::l2_project_fv_to_fe(
-            T, T_fct, domain, coords_shell, coords_radii, init_l2_tmps );
+        fv::hex::l2_project_fv_to_fe_lumped( T, T_fct, domain, coords_shell, coords_radii, init_l2_tmps );
     }
 }
 
@@ -163,10 +167,11 @@ void initialize_temperature_fields(
 /// added to XDMF output for visualisation.
 template < typename ScalarType >
 void compute_reference_conductive_profile(
-    linalg::VectorQ1Scalar< ScalarType >&                                   T_ref,
-    const grid::shell::DistributedDomain&                                   domain,
-    const grid::Grid3DDataVec< ScalarType, 3 >&                             coords_shell,
-    const grid::Grid2DDataScalar< ScalarType >&                             coords_radii )
+    linalg::VectorQ1Scalar< ScalarType >&       T_ref,
+    const grid::shell::DistributedDomain&       domain,
+    const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
+    const grid::Grid2DDataScalar< ScalarType >& coords_radii,
+    const Parameters&                           prm )
 {
     Kokkos::parallel_for(
         "conductive profile T_ref",
@@ -175,6 +180,7 @@ void compute_reference_conductive_profile(
             domain.domain_info().radii().front(),
             domain.domain_info().radii().back(),
             ScalarType( 0 ),
+            prm.boundary_parameters.temperature_min,
             coords_shell,
             coords_radii,
             T_ref.grid_data(),
@@ -187,36 +193,48 @@ void compute_reference_conductive_profile(
 }
 
 /// Load (u, T) from an XDMF checkpoint and rebuild T_fct via FE→FV projection.
-/// Returns the simulation timestep to resume from (uses
-/// `checkpoint_timestep` if set, else falls back to the file step).
-///
-/// Pre-condition: `prm.io_parameters.checkpoint_dir` is non-empty and
-/// `checkpoint_step >= 0`.
 template < typename ScalarType >
-int load_temperature_checkpoint(
-    linalg::VectorQ1Vec< ScalarType, 3 >&                                   u_velocity,
-    linalg::VectorQ1Scalar< ScalarType >&                                   T,
-    linalg::VectorFVScalar< ScalarType >&                                   T_fct,
-    const grid::shell::DistributedDomain&                                   domain,
-    const grid::Grid3DDataVec< ScalarType, 3 >&                             coords_shell,
-    const grid::Grid2DDataScalar< ScalarType >&                             coords_radii,
-    const Parameters&                                                       prm )
+void load_temperature_checkpoint(
+    linalg::VectorQ1Vec< ScalarType, 3 >&       u_velocity,
+    linalg::VectorQ1Scalar< ScalarType >&       T,
+    linalg::VectorFVScalar< ScalarType >&       T_fct,
+    const grid::shell::DistributedDomain&       domain,
+    const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
+    const grid::Grid2DDataScalar< ScalarType >& coords_radii,
+    const Parameters&                           prm )
 {
     using util::logroot;
 
-    const int  checkpoint_file_step = prm.io_parameters.checkpoint_step;
-    const int  timestep_initial     = ( prm.io_parameters.checkpoint_timestep >= 0 )
-                                          ? prm.io_parameters.checkpoint_timestep
-                                          : checkpoint_file_step;
+    logroot << "Loading checkpoint from " << prm.io_parameters.checkpoint_dir << " at simulation step "
+            << prm.io_parameters.checkpoint_step << std::endl;
 
-    logroot << "Loading checkpoint from " << prm.io_parameters.checkpoint_dir
-            << " (file step " << checkpoint_file_step
-            << ", simulation timestep " << timestep_initial << ")" << std::endl;
+    // Checking if checkpoint is dimensional or nondimensional
+    auto metadata_result = io::read_xdmf_checkpoint_metadata( prm.io_parameters.checkpoint_dir );
+    if ( metadata_result.is_err() )
+    {
+        Kokkos::abort( metadata_result.error().c_str() );
+    }
+    const auto& metadata = metadata_result.unwrap();
+
+    if ( metadata.is_dimensional == -1 )
+    {
+        // Checkpoint version 0 or 1 - no flag present.
+        logroot << "\nWARNING: Checkpoint predates is_dimensional flag (version " << metadata.version
+                << "). Assuming nondimensional.\n"
+                << std::endl;
+    }
+
+    else if ( static_cast< bool >( metadata.is_dimensional ) != prm.devel_parameters.output_dimensional )
+    {
+        logroot
+            << "\nWARNING: Read and write checkpoint details are inconsistent - one is dimensional,  one is nondimensional.\n"
+            << std::endl;
+    }
 
     auto success_vel = io::read_xdmf_checkpoint_grid(
         prm.io_parameters.checkpoint_dir,
         std::string( "u_u" ),
-        checkpoint_file_step,
+        prm.io_parameters.checkpoint_step,
         domain,
         u_velocity.grid_data() );
     if ( success_vel.is_err() )
@@ -227,7 +245,7 @@ int load_temperature_checkpoint(
     auto success_temp = io::read_xdmf_checkpoint_grid(
         prm.io_parameters.checkpoint_dir,
         std::string( "T" ),
-        checkpoint_file_step,
+        prm.io_parameters.checkpoint_step,
         domain,
         T.grid_data() );
     if ( success_temp.is_err() )
@@ -235,12 +253,17 @@ int load_temperature_checkpoint(
         Kokkos::abort( success_temp.error().c_str() );
     }
 
+    // Nondimensionalise checkpoint, if necessary
+    if ( metadata.is_dimensional )
+    {
+        scale( T.grid_data(), 1.0 / prm.boundary_parameters.delta_T_K );
+        scale( u_velocity.grid_data(), 1.0 / prm.physics_parameters.calc_cm_per_year );
+    }
+
     // T_fct is not stored in checkpoints (only Q1 T is).  Recover it via FE→FV
     // projection.  Ghost layers are populated inside l2_project_fe_to_fv, so
     // the result is immediately usable by FCT kernels.
     fv::hex::l2_project_fe_to_fv( T_fct, T, domain, coords_shell, coords_radii );
-
-    return timestep_initial;
 }
 
 } // namespace terra::mantlecirculation

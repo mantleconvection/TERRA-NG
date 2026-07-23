@@ -20,9 +20,7 @@
 #include "fv/hex/conversion.hpp"
 #include "fv/hex/helpers.hpp"
 #include "fv/hex/operators/fct_advection_diffusion.hpp"
-#include "fv/hex/conversion.hpp"
 #include "geophysics/viscosity/viscosity_interpolation.hpp"
-#include "shell/spherical_harmonics.hpp"
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "io/xdmf.hpp"
@@ -33,7 +31,6 @@
 #include "linalg/solvers/chebyshev.hpp"
 #include "linalg/solvers/diagonal_solver.hpp"
 #include "linalg/solvers/fgmres.hpp"
-#include "mpi/mpi.hpp"
 #include "linalg/solvers/gca/gca.hpp"
 #include "linalg/solvers/jacobi.hpp"
 #include "linalg/solvers/multigrid.hpp"
@@ -41,8 +38,10 @@
 #include "linalg/solvers/power_iteration.hpp"
 #include "linalg/vector_fv.hpp"
 #include "linalg/vector_q1isoq2_q1.hpp"
-#include "src/diagnostics.hpp"
+#include "mpi/mpi.hpp"
+#include "shell/spherical_harmonics.hpp"
 #include "src/build_radii.hpp"
+#include "src/diagnostics.hpp"
 #include "src/energy_solver.hpp"
 #include "src/interpolators.hpp"
 #include "src/io.hpp"
@@ -72,6 +71,7 @@ using linalg::VectorQ1IsoQ2Q1;
 using linalg::VectorQ1Scalar;
 using linalg::VectorQ1Vec;
 using linalg::solvers::TwoGridGCA;
+using terra::kernels::common::scale;
 using util::logroot;
 using util::Ok;
 using util::Result;
@@ -116,10 +116,10 @@ Result<> run( const Parameters& prm )
     std::vector< Grid4DDataScalar< grid::NodeOwnershipFlag > >        ownership_mask_data;
     std::vector< Grid4DDataScalar< grid::shell::ShellBoundaryFlag > > boundary_mask_data;
 
-    const int lat_sdr = ( prm.mesh_parameters.lat_sdr >= 0 ) ? prm.mesh_parameters.lat_sdr
-                                                             : prm.mesh_parameters.refinement_level_subdomains;
-    const int rad_sdr = ( prm.mesh_parameters.rad_sdr >= 0 ) ? prm.mesh_parameters.rad_sdr
-                                                             : prm.mesh_parameters.refinement_level_subdomains;
+    const int lat_sdr = ( prm.mesh_parameters.lat_sdr >= 0 ) ? prm.mesh_parameters.lat_sdr :
+                                                               prm.mesh_parameters.refinement_level_subdomains;
+    const int rad_sdr = ( prm.mesh_parameters.rad_sdr >= 0 ) ? prm.mesh_parameters.rad_sdr :
+                                                               prm.mesh_parameters.refinement_level_subdomains;
 
     // MG-level communicator + subdomain-to-rank ladder for the (optional) MG
     // preconditioner agglomeration.  Every DistributedDomain built below is
@@ -137,22 +137,21 @@ Result<> run( const Parameters& prm )
         const int lat_level = level;
         const int rad_level = level + prm.mesh_parameters.radial_extra_levels;
 
-        domains.push_back(
-            std::make_shared< DistributedDomain >(
-                DistributedDomain::create_uniform_on_comm(
-                    agglom.comm( idx ),
-                    lat_level,
-                    build_shell_radii< double >( prm.mesh_parameters, ( 1 << rad_level ) + 1 ),
-                    lat_sdr,
-                    rad_sdr,
-                    agglom.subdomain_fn( idx ) ) ) );
-        coords_shell.push_back( grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( (*domains[idx]) ) );
-        coords_radii.push_back( grid::shell::subdomain_shell_radii< ScalarType >( (*domains[idx]) ) );
-        ownership_mask_data.push_back( grid::setup_node_ownership_mask_data( (*domains[idx]) ) );
-        boundary_mask_data.push_back( grid::shell::setup_boundary_mask_data( (*domains[idx]) ) );
+        domains.push_back( std::make_shared< DistributedDomain >( DistributedDomain::create_uniform_on_comm(
+            agglom.comm( idx ),
+            lat_level,
+            build_shell_radii< double >( prm.mesh_parameters, ( 1 << rad_level ) + 1 ),
+            lat_sdr,
+            rad_sdr,
+            agglom.subdomain_fn( idx ) ) ) );
+        coords_shell.push_back(
+            grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( ( *domains[idx] ) ) );
+        coords_radii.push_back( grid::shell::subdomain_shell_radii< ScalarType >( ( *domains[idx] ) ) );
+        ownership_mask_data.push_back( grid::setup_node_ownership_mask_data( ( *domains[idx] ) ) );
+        boundary_mask_data.push_back( grid::shell::setup_boundary_mask_data( ( *domains[idx] ) ) );
     }
 
-    const auto subdomain_distr = grid::shell::subdomain_distribution( (*domains.back()) );
+    const auto subdomain_distr = grid::shell::subdomain_distribution( ( *domains.back() ) );
     logroot << "Subdomain distribution (subdomains per MPI process): \n";
     logroot << " - total: " << subdomain_distr.total << "\n";
     logroot << " - min:   " << subdomain_distr.min << "\n";
@@ -163,20 +162,19 @@ Result<> run( const Parameters& prm )
     const auto velocity_level = num_levels - 1;
     const auto pressure_level = num_levels - 2;
 
-    Grid2DDataScalar< int > subdomain_shell_idx = grid::shell::subdomain_shell_idx( (*domains[velocity_level]) );
+    Grid2DDataScalar< int > subdomain_shell_idx = grid::shell::subdomain_shell_idx( ( *domains[velocity_level] ) );
 
     // Set up the prognostic Q1 temperature.
-    VectorQ1Scalar< ScalarType > T(
-        "T", (*domains[velocity_level]), ownership_mask_data[velocity_level] );
+    VectorQ1Scalar< ScalarType > T( "T", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
 
     // Finite-volume functions/vectors.
 
     // FV cell-centred temperature field (the FCT prognostic variable).
-    linalg::VectorFVScalar< ScalarType > T_fct( "T_fct", (*domains[velocity_level]) );
+    linalg::VectorFVScalar< ScalarType > T_fct( "T_fct", ( *domains[velocity_level] ) );
     // Pre-computed cell centres (with ghost layers filled once and reused every step).
-    linalg::VectorFVVec< ScalarType, 3 > fv_cell_centers( "fv_cell_centers", (*domains[velocity_level]) );
+    linalg::VectorFVVec< ScalarType, 3 > fv_cell_centers( "fv_cell_centers", ( *domains[velocity_level] ) );
     fv::hex::initialize_cell_centers(
-        fv_cell_centers, (*domains[velocity_level]), coords_shell[velocity_level], coords_radii[velocity_level] );
+        fv_cell_centers, ( *domains[velocity_level] ), coords_shell[velocity_level], coords_radii[velocity_level] );
 
     // Counting DoFs.
     int world_size = mpi::num_processes();
@@ -193,6 +191,15 @@ Result<> run( const Parameters& prm )
     logroot << "Avg DoFs/process in (T,u,p)   = (" << num_dofs_temperature / world_size << ", "
             << num_dofs_velocity / world_size << ", " << num_dofs_pressure / world_size << ")" << std::endl;
 
+    // Logging nondimensional numbers
+    logroot << "\n----------Simulation parameters-----------"
+               "\nRayleigh number: "
+            << prm.physics_parameters.rayleigh_number
+            << "\nCharacteristic velocity: " << prm.physics_parameters.characteristic_velocity
+            << "\nThermal diffusivity: " << prm.physics_parameters.thermal_diffusivity_dim
+            << "\n------------------------------------------\n"
+            << std::endl;
+
     // Setting up Stokes velocity boundary conditions.
     //
     // Currently, we can choose either no-slip or free-slip.
@@ -204,30 +211,21 @@ Result<> run( const Parameters& prm )
         { SURFACE, DIRICHLET },
     };
 
-    if ( prm.boundary_conditions_parameters.velocity_bc_cmb == BoundaryConditionsParameters::VelocityBC::FREE_SLIP )
+    if ( prm.boundary_parameters.velocity_bc_cmb == BoundaryConditionsParameters::VelocityBC::FREE_SLIP )
     {
         grid::shell::set_boundary_condition_flag( bcs, CMB, FREESLIP );
     }
 
-    if ( prm.boundary_conditions_parameters.velocity_bc_surface == BoundaryConditionsParameters::VelocityBC::FREE_SLIP )
+    if ( prm.boundary_parameters.velocity_bc_surface == BoundaryConditionsParameters::VelocityBC::FREE_SLIP )
     {
         grid::shell::set_boundary_condition_flag( bcs, SURFACE, FREESLIP );
     }
 
     // ---- Stokes solver context: viscosity hierarchy, GCA, MG, Schur, FGMRES.
     StokesContext< ScalarType > stokes(
-        domains,
-        coords_shell,
-        coords_radii,
-        ownership_mask_data,
-        boundary_mask_data,
-        bcs,
-        agglom,
-        prm,
-        table );
+        domains, coords_shell, coords_radii, ownership_mask_data, boundary_mask_data, bcs, agglom, prm, table );
 
     auto& u = stokes.solution();
-
 
     /////////////////////
     /// ENERGY SOLVER ///
@@ -237,16 +235,21 @@ Result<> run( const Parameters& prm )
 
     // FCT Dirichlet BCs (also used by FCTSolver below for the FV step).
     const fv::hex::DirichletBCs< ScalarType > fct_bcs{
-        .T_cmb         = static_cast< ScalarType >( prm.boundary_conditions_parameters.temperature_cmb ),
-        .T_surface     = static_cast< ScalarType >( prm.boundary_conditions_parameters.temperature_surface ),
+        .T_cmb         = static_cast< ScalarType >( prm.boundary_parameters.temperature_max ),
+        .T_surface     = static_cast< ScalarType >( prm.boundary_parameters.temperature_min ),
         .apply_cmb     = true,
         .apply_surface = true };
 
     initialize_temperature_fields(
-        T, T_fct, fct_bcs,
-        (*domains[velocity_level]), coords_shell[velocity_level], coords_radii[velocity_level],
+        T,
+        T_fct,
+        fct_bcs,
+        ( *domains[velocity_level] ),
+        coords_shell[velocity_level],
+        coords_radii[velocity_level],
         fv_cell_centers,
-        ownership_mask_data[velocity_level], boundary_mask_data[velocity_level],
+        ownership_mask_data[velocity_level],
+        boundary_mask_data[velocity_level],
         prm );
 
     // If temperature-dependent viscosity is enabled, compute the initial viscosity from the initial T.
@@ -270,36 +273,55 @@ Result<> run( const Parameters& prm )
 
     // Setting up XDMF output (serves for both checkpointing and visualization).
 
-    io::XDMFOutput xdmf_output(
-        prm.io_parameters.outdir + "/" + prm.io_parameters.xdmf_dir,
-        (*domains[velocity_level]),
-        coords_shell[velocity_level],
-        coords_radii[velocity_level] );
+    // Initialize two XDMFOutput insances - one at the finest level (velocity_level) and a second optional one if pressure (at pressure_level) is written out.
+    // Both are created as std::optional objects so that access syntax remains uniform.
+    std::optional< io::XDMFOutput< ScalarType > > xdmf_output;
+    std::optional< io::XDMFOutput< ScalarType > > xdmf_output_pressure;
 
-    xdmf_output.add( T.grid_data() );
-    xdmf_output.add( u.block_1().grid_data() );
-    xdmf_output.add( stokes.eta_fine().grid_data() );
+    const auto coords_scale_factor =
+        prm.mesh_parameters.mantle_thickness_m /
+        prm.mesh_parameters.radius_surface_m; // Used to rescale output coords to be on unit sphere
+
+    xdmf_output.emplace(
+        prm.io_parameters.outdir + "/" + prm.io_parameters.xdmf_dir,
+        ( *domains[velocity_level] ),
+        coords_shell[velocity_level],
+        coords_radii[velocity_level],
+        coords_scale_factor );
 
     // Reference conductive temperature profile (also used for the Nusselt number).
-    VectorQ1Scalar< ScalarType > T_ref( "T_ref", (*domains[velocity_level]), ownership_mask_data[velocity_level] );
+    VectorQ1Scalar< ScalarType > T_ref( "T_ref", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
     compute_reference_conductive_profile(
-        T_ref,
-        (*domains[velocity_level]),
-        coords_shell[velocity_level],
-        coords_radii[velocity_level] );
+        T_ref, ( *domains[velocity_level] ), coords_shell[velocity_level], coords_radii[velocity_level], prm );
 
-    xdmf_output.add( T_ref.grid_data() );
+    xdmf_output->add( T_ref.grid_data() );
+    xdmf_output->add( T.grid_data() );                 // Temperature
+    xdmf_output->add( u.block_1().grid_data() );       // Velocity
+    xdmf_output->add( stokes.eta_fine().grid_data() ); // Viscosity
 
-    int timestep_initial = 0;
-
-    const bool loading_checkpoint = !prm.io_parameters.checkpoint_dir.empty() && prm.io_parameters.checkpoint_step >= 0;
-
-    if ( loading_checkpoint )
+    if ( prm.io_parameters.output_pressure )
     {
-        timestep_initial = load_temperature_checkpoint(
-            u.block_1(), T, T_fct,
-            (*domains[velocity_level]), coords_shell[velocity_level], coords_radii[velocity_level],
+        xdmf_output_pressure.emplace(
+            prm.io_parameters.outdir + "/" + prm.io_parameters.xdmf_dir + "_p",
+            ( *domains[pressure_level] ),
+            coords_shell[pressure_level],
+            coords_radii[pressure_level],
+            coords_scale_factor );
+
+        xdmf_output_pressure->add( u.block_2().grid_data() ); // Pressure
+    }
+
+    if ( prm.io_parameters.load_checkpoint )
+    {
+        load_temperature_checkpoint(
+            u.block_1(),
+            T,
+            T_fct,
+            ( *domains[velocity_level] ),
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
             prm );
+
         // Refresh viscosity from the loaded T: the IC-based eta computed
         // earlier would otherwise drive the first Stokes solve with a stale
         // viscosity field and produce an unphysical velocity at restart.
@@ -307,11 +329,25 @@ Result<> run( const Parameters& prm )
         {
             stokes.update_viscosity( T );
         }
-        // Continue XDMF output sequence from the checkpoint file step.
-        xdmf_output.set_write_counter( prm.io_parameters.checkpoint_step );
     }
 
-    ScalarType simulated_time = ScalarType( 0 );
+    // Setting XDMF file padding width according to max_timesteps.
+    xdmf_output->set_pad_width(
+        std::to_string( prm.time_stepping_parameters.timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 )
+            .size() );
+    xdmf_output->set_is_dimensional( prm.devel_parameters.output_dimensional );
+
+    if ( prm.io_parameters.output_pressure )
+    {
+        xdmf_output_pressure->set_pad_width(
+            std::to_string(
+                prm.time_stepping_parameters.timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 )
+                .size() );
+        xdmf_output_pressure->set_is_dimensional( prm.devel_parameters.output_dimensional );
+    }
+
+    ScalarType simulated_time    = ScalarType( 0 );
+    ScalarType simulated_time_Ma = ScalarType( 0 );
 
     // We need some global h. Let's, for simplicity (does not need to be too accurate) just choose the smallest h in
     // radial direction.
@@ -324,25 +360,47 @@ Result<> run( const Parameters& prm )
     std::unique_ptr< EnergySolver< ScalarType > > energy;
     switch ( prm.time_stepping_parameters.energy_solver )
     {
-        case EnergySolverType::SUPG:
-            energy = std::make_unique< SUPGSolver< ScalarType > >(
-                domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level],
-                boundary_mask_data[velocity_level], ownership_mask_data[velocity_level],
-                u.block_1(), T, h, prm, table );
-            break;
-        case EnergySolverType::ENTROPY_VISCOSITY:
-            energy = std::make_unique< EVSolver< ScalarType > >(
-                domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level],
-                boundary_mask_data[velocity_level], ownership_mask_data[velocity_level],
-                u.block_1(), T, h, prm, table );
-            break;
-        case EnergySolverType::FCT:
-            energy = std::make_unique< FCTSolver< ScalarType > >(
-                domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level],
-                boundary_mask_data[velocity_level], ownership_mask_data[velocity_level],
-                u.block_1(), T, T_fct, fv_cell_centers, fct_bcs,
-                prm, table );
-            break;
+    case EnergySolverType::SUPG:
+        energy = std::make_unique< SUPGSolver< ScalarType > >(
+            domains[velocity_level],
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            boundary_mask_data[velocity_level],
+            ownership_mask_data[velocity_level],
+            u.block_1(),
+            T,
+            h,
+            prm,
+            table );
+        break;
+    case EnergySolverType::ENTROPY_VISCOSITY:
+        energy = std::make_unique< EVSolver< ScalarType > >(
+            domains[velocity_level],
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            boundary_mask_data[velocity_level],
+            ownership_mask_data[velocity_level],
+            u.block_1(),
+            T,
+            h,
+            prm,
+            table );
+        break;
+    case EnergySolverType::FCT:
+        energy = std::make_unique< FCTSolver< ScalarType > >(
+            domains[velocity_level],
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            boundary_mask_data[velocity_level],
+            ownership_mask_data[velocity_level],
+            u.block_1(),
+            T,
+            T_fct,
+            fv_cell_centers,
+            fct_bcs,
+            prm,
+            table );
+        break;
     }
 
     // EV-specific: register the Q1-projected per-wedge ν_h diagnostic field
@@ -350,30 +408,79 @@ Result<> run( const Parameters& prm )
     // xdmf_output.write() call.
     if ( auto* nu_h_view = energy->nu_h_nodal_view() )
     {
-        xdmf_output.add( nu_h_view->grid_data() );
+        xdmf_output->add( nu_h_view->grid_data() );
     }
 
     if ( !prm.io_parameters.no_xdmf )
     {
         logroot << "Writing initial XDMF ..." << std::endl;
-        xdmf_output.write();
+
+        // Write to xdmf
+        write_xdmf(
+            xdmf_output,
+            xdmf_output_pressure,
+            prm,
+            prm.time_stepping_parameters.timestep_initial,
+            T.grid_data(),
+            u.block_1().grid_data(),
+            stokes.eta_fine().grid_data(),
+            u.block_2().grid_data() );
+    }
+
+    // ---Radial profiles---
+
+    // Scaling factors for redimensionalisation
+    ScalarType T_scale   = ScalarType( 1 );
+    ScalarType eta_scale = ScalarType( 1 );
+    ScalarType u_scale   = ScalarType( 1 );
+
+    // We either want to write out dimensional depth or nondimensional radius
+    std::vector< double > radial_coords = domains[velocity_level]->domain_info().radii();
+    std::string           radial_label  = "radius";
+
+    if ( prm.devel_parameters.output_dimensional )
+    {
+        T_scale   = prm.boundary_parameters.delta_T_K;
+        eta_scale = prm.physics_parameters.viscosity_parameters.reference_viscosity;
+        u_scale   = prm.physics_parameters.calc_cm_per_year;
+
+        // Convert radii to dimensional depth
+        std::transform( radial_coords.begin(), radial_coords.end(), radial_coords.begin(), [&]( double r ) {
+            return std::max( 0.0, prm.mesh_parameters.radius_surface_m - r * prm.mesh_parameters.mantle_thickness_m );
+        } );
+        radial_label = "depth";
     }
 
     if ( !prm.io_parameters.no_radial_profiles )
     {
         logroot << "Writing initial radial profiles ..." << std::endl;
         compute_and_write_radial_profiles(
-            T, subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep_initial );
+            T,
+            subdomain_shell_idx,
+            radial_coords,
+            prm,
+            prm.time_stepping_parameters.timestep_initial,
+            T_scale,
+            radial_label );
         compute_and_write_radial_profiles(
-            stokes.eta_fine(), subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep_initial );
+            stokes.eta_fine(),
+            subdomain_shell_idx,
+            radial_coords,
+            prm,
+            prm.time_stepping_parameters.timestep_initial,
+            eta_scale,
+            radial_label );
         compute_and_write_velocity_radial_profiles(
             u.block_1(),
             coords_shell[velocity_level],
             subdomain_shell_idx,
-            (*domains[velocity_level]),
+            ( *domains[velocity_level] ),
+            radial_coords,
             ownership_mask_data[velocity_level],
-            prm.io_parameters,
-            timestep_initial );
+            prm,
+            prm.time_stepping_parameters.timestep_initial,
+            u_scale,
+            radial_label );
 
         // EV-specific diagnostic profiles: per-wedge h_w (geometry-only,
         // available from construction).  lap_T_ is not meaningful before any
@@ -381,10 +488,13 @@ Result<> run( const Parameters& prm )
         if ( auto* hw_view = energy->h_w_diag_view() )
         {
             compute_and_write_radial_profiles(
-                *hw_view, subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep_initial );
+                *hw_view,
+                subdomain_shell_idx,
+                domains[velocity_level]->domain_info().radii(),
+                prm,
+                prm.time_stepping_parameters.timestep_initial );
         }
     }
-
 
     // Time stepping
 
@@ -393,28 +503,35 @@ Result<> run( const Parameters& prm )
     // Compute Nusselt at timestep 0 (before any FCT steps) for diagnostics.
     {
         const auto Nu_top_0 = compute_nusselt(
-            (*domains[velocity_level]), T, T_ref, coords_shell[velocity_level], coords_radii[velocity_level], boundary_mask_data[velocity_level], ownership_mask_data[velocity_level], true );
-        const auto Nu_top_fv_0 = compute_nusselt_fv(
-            (*domains[velocity_level]), T_fct,
-            boundary_mask_data[velocity_level],
-            prm.boundary_conditions_parameters.temperature_surface,
-            prm.boundary_conditions_parameters.temperature_cmb,
-            prm.mesh_parameters.radius_min, prm.mesh_parameters.radius_max, true );
-        const auto V_rms_0 = compute_v_rms(
-            (*domains[velocity_level]),
-            u.block_1(),
+            ( *domains[velocity_level] ),
+            T,
+            T_ref,
             coords_shell[velocity_level],
-            coords_radii[velocity_level] );
-        logroot << "Nu_top (Q1) = " << Nu_top_0 << ", Nu_top (FV) = " << Nu_top_fv_0
-                << ", V_rms = " << V_rms_0
+            coords_radii[velocity_level],
+            boundary_mask_data[velocity_level],
+            ownership_mask_data[velocity_level],
+            true );
+        const auto Nu_top_fv_0 = compute_nusselt_fv(
+            ( *domains[velocity_level] ),
+            T_fct,
+            boundary_mask_data[velocity_level],
+            prm.boundary_parameters.temperature_min,
+            prm.boundary_parameters.temperature_max,
+            prm.mesh_parameters.radius_min,
+            prm.mesh_parameters.radius_max,
+            true );
+        const auto V_rms_0 = compute_v_rms(
+            ( *domains[velocity_level] ), u.block_1(), coords_shell[velocity_level], coords_radii[velocity_level] );
+        logroot << "Nu_top (Q1) = " << Nu_top_0 << ", Nu_top (FV) = " << Nu_top_fv_0 << ", V_rms = " << V_rms_0
                 << "  [timestep 0, before time stepping]" << std::endl;
     }
 
-    for ( int timestep = timestep_initial + 1; timestep < prm.time_stepping_parameters.max_timesteps; timestep++ )
+    for ( int timestep = prm.time_stepping_parameters.timestep_initial + 1;
+          timestep < prm.time_stepping_parameters.max_timesteps;
+          timestep++ )
     {
         logroot << "\n### Timestep " << timestep << " ###" << std::endl;
         util::Timer timer_timestep( "timestep" );
-
 
         const int num_picard = prm.time_stepping_parameters.picard_iterations;
 
@@ -455,8 +572,16 @@ Result<> run( const Parameters& prm )
 
         if ( write_output && !prm.io_parameters.no_xdmf )
         {
-            logroot << "Writing XDMF output ..." << std::endl;
-            xdmf_output.write();
+            // Write to xdmf
+            write_xdmf(
+                xdmf_output,
+                xdmf_output_pressure,
+                prm,
+                timestep,
+                T.grid_data(),
+                u.block_1().grid_data(),
+                stokes.eta_fine().grid_data(),
+                u.block_2().grid_data() );
         }
 
         // Energy-solver-specific diagnostics dump first — refreshes EV
@@ -471,28 +596,31 @@ Result<> run( const Parameters& prm )
         {
             logroot << "Writing radial profiles ..." << std::endl;
             compute_and_write_radial_profiles(
-                T, subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep );
+                T, subdomain_shell_idx, radial_coords, prm, timestep, T_scale, radial_label );
             compute_and_write_radial_profiles(
-                stokes.eta_fine(), subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep );
+                stokes.eta_fine(), subdomain_shell_idx, radial_coords, prm, timestep, eta_scale, radial_label );
             compute_and_write_velocity_radial_profiles(
                 u.block_1(),
                 coords_shell[velocity_level],
                 subdomain_shell_idx,
-                (*domains[velocity_level]),
+                ( *domains[velocity_level] ),
+                radial_coords,
                 ownership_mask_data[velocity_level],
-                prm.io_parameters,
-                timestep );
+                prm,
+                timestep,
+                u_scale,
+                radial_label );
 
             // EV-specific diagnostic profiles (refreshed by dump_diagnostics).
             if ( auto* lap_view = energy->lap_diag_view() )
             {
                 compute_and_write_radial_profiles(
-                    *lap_view, subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep );
+                    *lap_view, subdomain_shell_idx, domains[velocity_level]->domain_info().radii(), prm, timestep );
             }
             if ( auto* hw_view = energy->h_w_diag_view() )
             {
                 compute_and_write_radial_profiles(
-                    *hw_view, subdomain_shell_idx, (*domains[velocity_level]), prm.io_parameters, timestep );
+                    *hw_view, subdomain_shell_idx, domains[velocity_level]->domain_info().radii(), prm, timestep );
             }
         }
 
@@ -501,7 +629,7 @@ Result<> run( const Parameters& prm )
         if ( write_output )
         {
             const auto Nu_top = compute_nusselt(
-                (*domains[velocity_level]),
+                ( *domains[velocity_level] ),
                 T,
                 T_ref,
                 coords_shell[velocity_level],
@@ -510,44 +638,45 @@ Result<> run( const Parameters& prm )
                 ownership_mask_data[velocity_level],
                 /*at_surface=*/true );
             const auto Nu_top_fv = compute_nusselt_fv(
-                (*domains[velocity_level]),
+                ( *domains[velocity_level] ),
                 T_fct,
                 boundary_mask_data[velocity_level],
-                prm.boundary_conditions_parameters.temperature_surface,
-                prm.boundary_conditions_parameters.temperature_cmb,
+                prm.boundary_parameters.temperature_min,
+                prm.boundary_parameters.temperature_max,
                 prm.mesh_parameters.radius_min,
                 prm.mesh_parameters.radius_max,
                 /*at_surface=*/true );
             const auto V_rms = compute_v_rms(
-                (*domains[velocity_level]),
-                u.block_1(),
-                coords_shell[velocity_level],
-                coords_radii[velocity_level] );
+                ( *domains[velocity_level] ), u.block_1(), coords_shell[velocity_level], coords_radii[velocity_level] );
             if ( timestep % 10 == 0 )
             {
-                logroot << "Nu_top (Q1) = " << Nu_top << ", Nu_top (FV) = " << Nu_top_fv
-                        << ", V_rms = " << V_rms << std::endl;
+                logroot << "Nu_top (Q1) = " << Nu_top << ", Nu_top (FV) = " << Nu_top_fv << ", V_rms = " << V_rms
+                        << std::endl;
             }
             // Per-step CSV. simulated_time is updated below; the value here is
             // the time at the *end* of this step (current T just solved).
             if ( mpi::rank() == 0 )
             {
                 const std::string path = prm.io_parameters.outdir + "/nu.csv";
-                std::ofstream out( path, std::ios::app );
+                std::ofstream     out( path, std::ios::app );
                 if ( out.tellp() == 0 )
                 {
                     out << "timestep,sim_time,Nu_top_Q1,Nu_top_FV,V_rms\n";
                 }
                 const double t_end_of_step = simulated_time + prm.time_stepping_parameters.energy_substeps * dt;
-                out << timestep << "," << t_end_of_step << "," << Nu_top << "," << Nu_top_fv
-                    << "," << V_rms << "\n";
+                out << timestep << "," << t_end_of_step << "," << Nu_top << "," << Nu_top_fv << "," << V_rms << "\n";
             }
         }
 
         simulated_time += prm.time_stepping_parameters.energy_substeps * dt;
+        simulated_time_Ma = simulated_time * prm.physics_parameters.calc_time_Ma;
 
-        logroot << "Simulated time: " << simulated_time << " (stopping at " << prm.time_stepping_parameters.t_end
-                << ", we're at " << simulated_time / prm.time_stepping_parameters.t_end * 100.0 << "%)" << std::endl;
+        logroot << "Simulated time: " << simulated_time_Ma << " Ma\n";
+        logroot << "  Stopping at " << prm.time_stepping_parameters.t_end_Ma << " Ma, "
+                << std::round( simulated_time_Ma / prm.time_stepping_parameters.t_end_Ma * 100.0 * 10.0 ) / 10.0
+                << "% done.\n";
+        logroot << std::endl;
+
         timer_timestep.stop();
 
         if ( write_output )

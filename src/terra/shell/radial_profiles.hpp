@@ -127,13 +127,33 @@ RadialProfiles< ScalarType > radial_profiles(
         auto host_cnt = Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace(), radial_profiles.radial_cnt_ );
 
         MPI_Allreduce(
-            MPI_IN_PLACE, host_min.data(), host_min.size(), mpi::mpi_datatype< ScalarType >(), MPI_MIN, MPI_COMM_WORLD );
+            MPI_IN_PLACE,
+            host_min.data(),
+            host_min.size(),
+            mpi::mpi_datatype< ScalarType >(),
+            MPI_MIN,
+            MPI_COMM_WORLD );
         MPI_Allreduce(
-            MPI_IN_PLACE, host_max.data(), host_max.size(), mpi::mpi_datatype< ScalarType >(), MPI_MAX, MPI_COMM_WORLD );
+            MPI_IN_PLACE,
+            host_max.data(),
+            host_max.size(),
+            mpi::mpi_datatype< ScalarType >(),
+            MPI_MAX,
+            MPI_COMM_WORLD );
         MPI_Allreduce(
-            MPI_IN_PLACE, host_sum.data(), host_sum.size(), mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+            MPI_IN_PLACE,
+            host_sum.data(),
+            host_sum.size(),
+            mpi::mpi_datatype< ScalarType >(),
+            MPI_SUM,
+            MPI_COMM_WORLD );
         MPI_Allreduce(
-            MPI_IN_PLACE, host_cnt.data(), host_cnt.size(), mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+            MPI_IN_PLACE,
+            host_cnt.data(),
+            host_cnt.size(),
+            mpi::mpi_datatype< ScalarType >(),
+            MPI_SUM,
+            MPI_COMM_WORLD );
 
         Kokkos::deep_copy( radial_profiles.radial_min_, host_min );
         Kokkos::deep_copy( radial_profiles.radial_max_, host_max );
@@ -183,8 +203,11 @@ RadialProfiles< ScalarType > radial_profiles(
 /// @param radii Vector of shell radii. Can for instance be obtained from the DomainInfo.
 /// @return Table with columns: tag, shell_idx, radius, min, max, avg, cnt.
 template < typename ScalarType >
-util::Table
-    radial_profiles_to_table( const RadialProfiles< ScalarType >& radial_profiles, const std::vector< double >& radii )
+util::Table radial_profiles_to_table(
+    const RadialProfiles< ScalarType >& radial_profiles,
+    const std::vector< double >&        radii,
+    const ScalarType                    field_scale  = 1.0,
+    const std::string                   radial_label = "radius" )
 {
     if ( radii.size() != radial_profiles.radial_min_.extent( 0 ) ||
          radii.size() != radial_profiles.radial_max_.extent( 0 ) ||
@@ -206,18 +229,19 @@ util::Table
         Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace(), radial_profiles.radial_avg_ );
 
     util::Table table;
-    for ( int r = 0; r < radii.size(); r++ )
+    for ( int r = static_cast< int >( radii.size() ) - 1; r >= 0; r-- )
     {
         table.add_row(
             { { "tag", "radial_profiles" },
               { "shell_idx", r },
-              { "radius", radii[r] },
-              { "min", radial_profiles_host_min( r ) },
-              { "max", radial_profiles_host_max( r ) },
-              { "sum", radial_profiles_host_sum( r ) },
-              { "avg", radial_profiles_host_avg( r ) },
+              { radial_label, radii[r] },
+              { "min", radial_profiles_host_min( r ) * field_scale },
+              { "max", radial_profiles_host_max( r ) * field_scale },
+              { "sum", radial_profiles_host_sum( r ) * field_scale },
+              { "avg", radial_profiles_host_avg( r ) * field_scale },
               { "cnt", radial_profiles_host_cnt( r ) } } );
     }
+    table.set_column_order( { radial_label, "avg", "min", "max", "cnt", "sum", "shell_idx", "tag" } );
     return table;
 }
 

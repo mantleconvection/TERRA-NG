@@ -115,6 +115,21 @@ class VectorQ1Scalar
     /// Sets each entry of grid_data to a random value.
     void randomize_impl() { return kernels::common::rand( grid_data_ ); }
 
+    /// @brief Min entry implementation for VectorLike concept.
+    /// Computes: \f$ \min_i y_i \f$
+    /// @return Minimum value.
+    ScalarType min_entry_impl() const { return kernels::common::min_entry( grid_data_ ); }
+
+    /// @brief Min absolute entry implementation for VectorLike concept.
+    /// Computes: \f$ \min_i |y_i| \f$
+    /// @return Minimum absolute value.
+    ScalarType min_abs_entry_impl() const { return kernels::common::min_abs_entry( grid_data_ ); }
+
+    /// @brief Max entry implementation for VectorLike concept.
+    /// Computes: \f$ \max_i y_i \f$
+    /// @return Maximum value.
+    ScalarType max_entry_impl() const { return kernels::common::max_entry( grid_data_ ); }
+
     /// @brief Max absolute entry implementation for VectorLike concept.
     /// Computes: \f$ \max_i |y_i| \f$
     /// @return Maximum absolute value.
@@ -263,6 +278,21 @@ class VectorQ1Vec
     /// @brief Randomize entries implementation for VectorLike concept.
     /// Sets each entry of grid_data to a random value.
     void randomize_impl() { return kernels::common::rand( grid_data_ ); }
+
+    /// @brief Min entry implementation for VectorLike concept.
+    /// Computes: \f$ \min_i y_i \f$
+    /// @return Minimum value.
+    ScalarType min_entry_impl() const { return kernels::common::min_entry( grid_data_ ); }
+
+    /// @brief Min absolute entry implementation for VectorLike concept.
+    /// Computes: \f$ \min_i |y_i| \f$
+    /// @return Minimum absolute value.
+    ScalarType min_abs_entry_impl() const { return kernels::common::min_abs_entry( grid_data_ ); }
+
+    /// @brief Max entry implementation for VectorLike concept.
+    /// Computes: \f$ \max_i y_i \f$
+    /// @return Maximum value.
+    ScalarType max_entry_impl() const { return kernels::common::max_entry( grid_data_ ); }
 
     /// @brief Max absolute entry implementation for VectorLike concept.
     /// Computes: \f$ \max_i |y_i| \f$

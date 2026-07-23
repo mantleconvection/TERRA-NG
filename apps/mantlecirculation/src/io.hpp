@@ -6,6 +6,7 @@
 
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
+#include "io/xdmf.hpp"
 #include "linalg/vector_q1isoq2_q1.hpp"
 #include "parameters.hpp"
 #include "shell/radial_profiles.hpp"
@@ -33,6 +34,8 @@ using util::logroot;
 using util::Ok;
 using util::Result;
 
+using terra::kernels::common::scale;
+
 using ScalarType = double;
 
 namespace terra::mantlecirculation {
@@ -57,23 +60,89 @@ inline Result<> create_directories( const IOParameters& io_parameters )
     return { Ok{} };
 }
 
+inline Result<> write_xdmf(
+    std::optional< io::XDMFOutput< ScalarType > >& xdmf_output,
+    std::optional< io::XDMFOutput< ScalarType > >& xdmf_output_pressure,
+    const Parameters&                              prm,
+    const int                                      timestep,
+    Grid4DDataScalar< ScalarType >&                Temperature_data,
+    Grid4DDataVec< ScalarType, 3 >&                Velocity_data,
+    Grid4DDataScalar< ScalarType >&                Viscosity_data,
+    Grid4DDataScalar< ScalarType >&                Pressure_data )
+{
+    logroot << "Writing XDMF output ..." << std::endl;
+
+    if ( prm.devel_parameters.output_dimensional )
+    {
+        // Redimensionalise ...
+        scale( Temperature_data, prm.boundary_parameters.delta_T_K );
+        scale( Velocity_data, prm.physics_parameters.calc_cm_per_year );
+        scale( Viscosity_data, prm.physics_parameters.viscosity_parameters.reference_viscosity );
+
+        xdmf_output->write( timestep );
+
+        // ... and nondimensionalise again.
+        scale( Temperature_data, 1.0 / prm.boundary_parameters.delta_T_K );
+        scale( Velocity_data, 1.0 / prm.physics_parameters.calc_cm_per_year );
+        scale( Viscosity_data, 1.0 / prm.physics_parameters.viscosity_parameters.reference_viscosity );
+
+        // Redim, write and nondim pressure
+        if ( xdmf_output_pressure )
+        {
+            scale(
+                Pressure_data,
+                ( prm.physics_parameters.viscosity_parameters.reference_viscosity *
+                  prm.physics_parameters.characteristic_velocity ) /
+                    prm.mesh_parameters.mantle_thickness_m );
+
+            xdmf_output_pressure->write( timestep );
+
+            scale(
+                Pressure_data,
+                prm.mesh_parameters.mantle_thickness_m /
+                    ( prm.physics_parameters.viscosity_parameters.reference_viscosity *
+                      prm.physics_parameters.characteristic_velocity ) );
+        }
+    }
+    else
+    {
+        xdmf_output->write( timestep );
+        if ( xdmf_output_pressure )
+            xdmf_output_pressure->write( timestep );
+    }
+
+    return { Ok{} };
+}
+
 inline Result<> compute_and_write_radial_profiles(
     const VectorQ1Scalar< ScalarType >& scalar_function,
     const Grid2DDataScalar< int >&      subdomain_shell_idx,
-    const DistributedDomain&            domain,
-    const IOParameters&                 io_parameters,
-    const int                           timestep )
+    const std::vector< double >&        radial_coords,
+    const Parameters&                   prm,
+    const int                           timestep,
+    const ScalarType                    field_scale  = 1.0,
+    const std::string&                  radial_label = "radius" )
 {
     const auto profiles = shell::radial_profiles_to_table< ScalarType >(
-        shell::radial_profiles(
-            scalar_function, subdomain_shell_idx, static_cast< int >( domain.domain_info().radii().size() ) ),
-        domain.domain_info().radii() );
+        shell::radial_profiles( scalar_function, subdomain_shell_idx, static_cast< int >( radial_coords.size() ) ),
+        radial_coords,
+        field_scale,
+        radial_label );
+
+    // Zero padding
+    std::ostringstream sst;
+    sst << std::setfill( '0' )
+        << std::setw(
+               std::to_string(
+                   prm.time_stepping_parameters.timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 )
+                   .size() )
+        << timestep;
 
     if ( mpi::rank() == 0 )
     {
         std::ofstream out(
-            io_parameters.outdir + "/" + io_parameters.radial_profiles_out_dir + "/radial_profiles_" +
-            scalar_function.grid_data().label() + "_" + std::to_string( timestep ) + ".csv" );
+            prm.io_parameters.outdir + "/" + prm.io_parameters.radial_profiles_out_dir + "/radial_profiles_" +
+            scalar_function.grid_data().label() + "_" + sst.str() + ".csv" );
         profiles.print_csv( out );
     }
 
@@ -89,9 +158,12 @@ inline Result<> compute_and_write_velocity_radial_profiles(
     const grid::Grid3DDataVec< ScalarType, 3 >&              coords_shell,
     const grid::Grid2DDataScalar< int >&                     subdomain_shell_idx,
     const DistributedDomain&                                 domain,
+    const std::vector< double >&                             radial_coords,
     const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask,
-    const IOParameters&                                      io_parameters,
-    const int                                                timestep )
+    const Parameters&                                        prm,
+    const int                                                timestep,
+    const ScalarType                                         field_scale  = 1.0,
+    const std::string&                                       radial_label = "radius" )
 {
     VectorQ1Scalar< ScalarType > u_r( "u_r", domain, mask );
     VectorQ1Scalar< ScalarType > u_t( "u_t", domain, mask );
@@ -103,8 +175,7 @@ inline Result<> compute_and_write_velocity_radial_profiles(
     Kokkos::parallel_for(
         "decompose velocity into radial and tangential",
         Kokkos::MDRangePolicy(
-            { 0, 0, 0, 0 },
-            { u_grid.extent( 0 ), u_grid.extent( 1 ), u_grid.extent( 2 ), u_grid.extent( 3 ) } ),
+            { 0, 0, 0, 0 }, { u_grid.extent( 0 ), u_grid.extent( 1 ), u_grid.extent( 2 ), u_grid.extent( 3 ) } ),
         KOKKOS_LAMBDA( int sd, int x, int y, int r ) {
             const ScalarType ux      = u_grid( sd, x, y, r, 0 );
             const ScalarType uy      = u_grid( sd, x, y, r, 1 );
@@ -120,12 +191,14 @@ inline Result<> compute_and_write_velocity_radial_profiles(
         } );
     Kokkos::fence();
 
-    auto res1 = compute_and_write_radial_profiles( u_r, subdomain_shell_idx, domain, io_parameters, timestep );
+    auto res1 = compute_and_write_radial_profiles(
+        u_r, subdomain_shell_idx, radial_coords, prm, timestep, field_scale, radial_label );
     if ( res1.is_err() )
     {
         return res1;
     }
-    return compute_and_write_radial_profiles( u_t, subdomain_shell_idx, domain, io_parameters, timestep );
+    return compute_and_write_radial_profiles(
+        u_t, subdomain_shell_idx, radial_coords, prm, timestep, field_scale, radial_label );
 }
 
 inline Result<> write_timer_tree( const IOParameters& io_parameters, const int timestep )
