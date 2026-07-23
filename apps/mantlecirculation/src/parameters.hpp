@@ -180,8 +180,13 @@ struct PhysicsParameters
     double thermal_conductivity   = 3.0;
     double specific_heat_capacity = 1230;
 
+    // Parameter profiles -- to be done
+    double density_profile = 1.0;
+    double alpha_profile   = 1.0;
+    double cp_profile      = 1.0;
+
     bool   internal_heating      = false;
-    double internal_heating_rate = 1.0;
+    double internal_heating_rate = 3e-12;
 
     double calc_cm_per_year = 3e-4; // from non-dim velocity to cm/a
     double calc_time_Ma     = 1e6;  // from non-dim time to Ma
