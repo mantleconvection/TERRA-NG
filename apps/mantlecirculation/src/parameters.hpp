@@ -633,6 +633,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     //////////////////////////////
     add_flag_with_default( app, "--compressible", parameters.physics_parameters.compressible )
         ->group( "Physical Parameters" );
+    add_flag_with_default( app, "--shear-heating", parameters.physics_parameters.shear_heating )
+        ->group( "Physical Parameters" );
 
     std::map< std::string, CompressibleForm > compressible_form_map{
         { "tala", CompressibleForm::TALA },
