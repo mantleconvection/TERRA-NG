@@ -13,6 +13,7 @@
 #include "communication/shell/redistribute.hpp"
 #include "fe/strong_algebraic_dirichlet_enforcement.hpp"
 #include "fe/strong_algebraic_freeslip_enforcement.hpp"
+#include "fe/wedge/linearforms/shell/inv_rho_drho_dt.hpp"
 #include "fe/wedge/linearforms/shell/inv_rho_grad_rho_dot_u.hpp"
 #include "fe/wedge/operators/shell/epsilon_divdiv_stokes.hpp"
 #include "fe/wedge/operators/shell/kmass.hpp"
@@ -45,6 +46,7 @@
 #include "mpi/level_comms.hpp"
 #include "mpi/mpi.hpp"
 #include "parameters.hpp"
+#include "pda_utils.hpp"
 #include "shell/spherical_harmonics.hpp"
 #include "util/logging.hpp"
 #include "util/table.hpp"
@@ -822,11 +824,15 @@ class StokesContext
         const RhoFieldType&                                           rho,
         const grid::Grid2DDataScalar< ScalarType >&                   alpha,
         bool                                                          compressible,
-        bool                                                          log_convergence )
+        bool                                                          log_convergence,
+        const std::optional< VectorW1Scalar< ScalarType > >&          drho_dt )
     {
         util::Timer timer_stokes( "stokes" );
 
         util::logroot << "Setting up Stokes rhs ..." << std::endl;
+
+        // unwrap to raw Kokkos::View for BuoyancyForceAssembly, if applicable
+        auto rho_grid = extractGridData( rho );
 
         Kokkos::parallel_for(
             "Stokes rhs interpolation",
@@ -836,7 +842,7 @@ class StokesContext
                 coords_radii_[velocity_level_],
                 triangular_prec_tmp_.block_1().grid_data(),
                 T_for_buoyancy.grid_data(),
-                rho,
+                rho_grid,
                 alpha,
                 prm_.physics_parameters.rayleigh_number,
                 1.0 ) );
@@ -898,6 +904,42 @@ class StokesContext
                 stok_vecs_["u_prev"].block_1() );
 
             linalg::apply( mass_rhs, stok_vecs_["f"].block_2() );
+
+            // PDA mass RHS
+            // guard against compilation mismatch when rho is not VectorW1Scalar, pda-branch is not needed then.
+            if constexpr ( std::is_same_v< RhoFieldType, VectorW1Scalar< ScalarType > > )
+            {
+                if ( drho_dt.has_value() )
+                {
+                    using MassRHSPDA = fe::wedge::linearforms::shell::InvRhoDrhoDt< ScalarType >;
+
+                    MassRHSPDA mass_rhs_pda(
+                        *domains_[pressure_level_],
+                        *domains_[velocity_level_],
+                        coords_shell_[pressure_level_],
+                        coords_shell_[velocity_level_],
+                        coords_radii_[pressure_level_],
+                        coords_radii_[velocity_level_],
+                        rho,
+                        *drho_dt,
+                        linalg::OperatorApplyMode::Add );
+
+                    linalg::apply( mass_rhs_pda, stok_vecs_["f"].block_2() );
+                }
+            }
+            else
+            {
+                // PDA requires rho to be a full 3-D VectorW1Scalar field. If a
+                // caller ever passes drho_dt with an incompatible RhoFieldType,
+                // that's a logic error at the call site -- throw error rather than
+                // silently skipping the derivative term.
+                if ( drho_dt.has_value() )
+                {
+                    throw std::logic_error(
+                        "stokes.solve(): drho_dt was provided, but RhoFieldType is not VectorW1Scalar, for some reason."
+                        " The PDA mass-RHS term cannot be assembled and would otherwise be silently skipped." );
+                }
+            }
         }
 
         util::logroot << "Solving Stokes ..." << std::endl;
@@ -921,7 +963,7 @@ class StokesContext
             static_cast< ScalarType >( num_dofs_pressure_ );
         linalg::lincomb( p, { 1.0 }, { p }, -avg_pressure_approximation );
 
-        // Store u_prev for the next timestep
+        // Store u_prev for the next timestep or picard step
         linalg::assign( stok_vecs_["u_prev"], stok_vecs_["u"] );
     }
 

@@ -42,6 +42,7 @@
 #include "src/interpolators.hpp"
 #include "src/io.hpp"
 #include "src/parameters.hpp"
+#include "src/pda_utils.hpp"
 #include "src/plates.hpp"
 #include "src/stokes_solver.hpp"
 #include "src/temperature_init.hpp"
@@ -172,12 +173,12 @@ Result<> run( const Parameters& prm )
           ( prm.physics_parameters.compressible_form == CompressibleForm::PDA ||
             prm.physics_parameters.compressible_form == CompressibleForm::PDA_ENTROPY ) );
 
-    // Optional 3-D density field for PDA
-    // Density is needed in Stokes and energy -- so we set it up here
-    std::optional< VectorW1Scalar< ScalarType > > density;
+    // Optional PDA class constructor
+    std::optional< PDAManager< ScalarType > > pda;
+
     if ( pda_form )
     {
-        density.emplace( "density", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
+        pda.emplace( *domains[velocity_level], coords_radii[velocity_level], ownership_mask_data[velocity_level], prm );
     }
 
     // Radial parameter profiles
@@ -219,21 +220,10 @@ Result<> run( const Parameters& prm )
     radial_profile_init(
         rho_profile, alpha_profile, cp_profile, *domains[velocity_level], coords_radii[velocity_level], prm );
 
-    // Initialise density W1 field from radial profile -- before Stokes solver setup
-    if ( pda_form )
-    {
-        Kokkos::parallel_for(
-            "RadialProfileToW1",
-            grid::shell::local_domain_md_range_policy_nodes( *domains[velocity_level] ),
-            RadialProfileToW1{ density->grid_data(), rho_profile } );
-        Kokkos::fence();
-    }
-
     // Setting up Stokes velocity boundary conditions.
     //
     // We can choose either no-slip or free-slip.
     // Plates are also a Dirichlet BC.
-
     BoundaryConditions bcs = {
         { CMB, DIRICHLET },
         { SURFACE, DIRICHLET },
@@ -315,7 +305,7 @@ Result<> run( const Parameters& prm )
     xdmf_output->add( stokes.eta_fine().grid_data() ); // Viscosity
     if ( pda_form )
     {
-        xdmf_output->add( density->grid_data() ); // Density
+        xdmf_output->add( pda->density().grid_data() ); // Density
     }
 
     if ( prm.io_parameters.output_pressure )
@@ -346,7 +336,8 @@ Result<> run( const Parameters& prm )
         };
 
         if ( pda_form ) // Add density output
-            fields.scalar_fields.push_back( { density->grid_data(), prm.physics_parameters.reference_density, true } );
+            fields.scalar_fields.push_back(
+                { pda->density().grid_data(), prm.physics_parameters.reference_density, true } );
 
         if ( prm.io_parameters.output_pressure )
             fields.pressure_field.emplace(
@@ -385,6 +376,14 @@ Result<> run( const Parameters& prm )
         {
             stokes.update_viscosity( T );
         }
+    }
+
+    // Initialise density W1 field for PDA from initial temperature via lookup-table
+    if ( pda_form )
+    {
+        pda->update_density_from_table( T );
+        // Save density history for first timestep -> density will change after energy solve
+        pda->seed_history();
     }
 
     // Setting XDMF file padding width according to max_timesteps.
@@ -445,18 +444,15 @@ Result<> run( const Parameters& prm )
     logroot << "\n--------- Initial Stokes solve -----------------\n" << std::endl;
 
     // Pass full 3-D density to Stokes for PDA, else radial density profile.
-    // Contrary to Tdev, 3-D density is passed already unwrapped, to accomodate
-    // the data structure differences: VectorW1Scalar class (3-D rho)
-    // serves as a wrapper around the raw Kokkos::View Grid4DDataScalar,
-    // whereas rho_profile (Grid2DDataScalar) is already a plain Kokkos::View.
     if ( pda_form )
         stokes.solve(
             Tdev,
             plate_velocities,
-            density->grid_data(),
+            pda->density(),
             alpha_profile,
             prm.physics_parameters.compressible,
-            /*log_convergence=*/true );
+            /*log_convergence=*/true,
+            std::nullopt ); // First stokes solve is TALA-like, since density history is not yet available.
     else
         stokes.solve(
             Tdev,
@@ -464,7 +460,8 @@ Result<> run( const Parameters& prm )
             rho_profile,
             alpha_profile,
             prm.physics_parameters.compressible,
-            /*log_convergence=*/true );
+            /*log_convergence=*/true,
+            std::nullopt );
 
     if ( prm.devel_parameters.extended_diagnostics )
         log_hbm( "after first Stokes solve (peak)" );
@@ -680,6 +677,8 @@ Result<> run( const Parameters& prm )
     // Time stepping
 
     logroot << "Starting time stepping!" << std::endl;
+    
+    ScalarType dt_prev = ScalarType( 0 ); // needed for pda
 
     for ( int timestep = prm.time_stepping_parameters.timestep_initial + 1;
           timestep < prm.time_stepping_parameters.max_timesteps;
@@ -780,27 +779,43 @@ Result<> run( const Parameters& prm )
             }
 
             // --- Stokes solve ---
-            // Using full density for PDA, radial density profile else.
-            // 3-D density for pda_form is passed unwrapped, see comment at
-            // initial stokes solve.
+            // Pass 3-D density and it's precomputed time-derivative for PDA, radial density profile else.
             if ( pda_form )
+            {
+                // Update density from tables (pda) -- and compute time-derivative
+                pda->update_density_from_table( T );
+                pda->compute_density_time_derivative(
+                    timestep - prm.time_stepping_parameters.timestep_initial, dt, dt_prev );
+
                 stokes.solve(
                     Tdev,
                     plate_velocities,
-                    density->grid_data(),
+                    pda->density(),
                     alpha_profile,
                     prm.physics_parameters.compressible,
-                    /*log_convergence=*/( picard == num_picard - 1 ) );
+                    /*log_convergence=*/( picard == num_picard - 1 ),
+                    std::optional( pda->drho_dt() ) );
+            }
             else
+            {
                 stokes.solve(
                     Tdev,
                     plate_velocities,
                     rho_profile,
                     alpha_profile,
                     prm.physics_parameters.compressible,
-                    /*log_convergence=*/( picard == num_picard - 1 ) );
+                    /*log_convergence=*/( picard == num_picard - 1 ),
+                    std::nullopt );
+            }
 
         } // end Picard loop
+
+        // Update density history and store previous timestep length for pda
+        dt_prev = dt;
+        if ( pda_form )
+        {
+            pda->shift_history();
+        }
 
         // Output stuff, logging etc.
 

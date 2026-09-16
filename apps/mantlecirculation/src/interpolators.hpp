@@ -14,6 +14,23 @@ using grid::Grid3DDataVec;
 using grid::Grid4DDataScalar;
 using grid::Grid4DDataVec;
 
+// Helper to check whether given datatype exposes .grid_data() method,
+// i.e. distinguish between wrapped vector classes and raw Kokkos::View.
+template < typename T >
+concept HasGridData = requires( const T& t )
+{
+    t.grid_data();
+};
+
+template < typename FieldType >
+auto extractGridData( const FieldType& field )
+{
+    if constexpr ( HasGridData< FieldType > )
+        return field.grid_data();
+    else
+        return field;
+}
+
 // Interpolate from radial profile to W1 field
 struct RadialProfileToW1
 {
@@ -81,14 +98,13 @@ struct ConductiveProfileInterpolator
     }
 };
 
-template < typename RhoFieldType >
 struct BuoyancyForceAssembly
 {
     Grid3DDataVec< ScalarType, 3 > grid_;
     Grid2DDataScalar< ScalarType > radii_;
     Grid4DDataVec< ScalarType, 3 > data_f_;
     Grid4DDataScalar< ScalarType > data_T_;
-    RhoFieldType                   data_rho_;
+    Grid2DDataScalar< ScalarType > data_rho_;
     Grid2DDataScalar< ScalarType > alpha_;
     ScalarType                     rayleigh_number_;
     ScalarType                     prefactor_;
@@ -98,7 +114,7 @@ struct BuoyancyForceAssembly
         const Grid2DDataScalar< ScalarType >& radii,
         const Grid4DDataVec< ScalarType, 3 >& data_f,
         const Grid4DDataScalar< ScalarType >& data_T,
-        const RhoFieldType&                   data_rho,
+        const Grid2DDataScalar< ScalarType >& data_rho,
         const Grid2DDataScalar< ScalarType >& alpha,
         const ScalarType                      rayleigh_number,
         const ScalarType                      prefactor = ScalarType( 1 ) )
@@ -118,18 +134,47 @@ struct BuoyancyForceAssembly
         const dense::Vec< ScalarType, 3 > coords = grid::shell::coords( id, x, y, r, grid_, radii_ );
         const auto                        n      = coords.normalized();
 
-        // Check if data_rho_ is radial profile or 3-D field.
-        // TALA compressibility requires radial profile, PDA requires full 3-D density.
-        ScalarType rho_val;
-        if constexpr ( std::is_same_v< RhoFieldType, Grid2DDataScalar< ScalarType > > )
-            rho_val = data_rho_( id, r );
-        else
-            rho_val = data_rho_( id, x, y, r );
-
         for ( int d = 0; d < 3; d++ )
         {
             data_f_( id, x, y, r, d ) =
-                prefactor_ * rayleigh_number_ * n( d ) * alpha_( id, r ) * rho_val * data_T_( id, x, y, r );
+                prefactor_ * rayleigh_number_ * n( d ) * alpha_( id, r ) * data_rho_( id, r ) * data_T_( id, x, y, r );
+        }
+    }
+};
+
+struct BuoyancyForceAssemblyPDA
+{
+    Grid3DDataVec< ScalarType, 3 > grid_;
+    Grid2DDataScalar< ScalarType > radii_;
+    Grid4DDataVec< ScalarType, 3 > data_f_;
+    Grid4DDataScalar< ScalarType > data_rho_;
+    ScalarType                     rayleigh_number_pda_;
+    ScalarType                     prefactor_;
+
+    BuoyancyForceAssembly(
+        const Grid3DDataVec< ScalarType, 3 >& grid,
+        const Grid2DDataScalar< ScalarType >& radii,
+        const Grid4DDataVec< ScalarType, 3 >& data_f,
+        const Grid4DDataScalar< ScalarType >& data_rho,
+        const ScalarType                      rayleigh_number_pda,
+        const ScalarType                      prefactor = ScalarType( -1 ) )
+    : grid_( grid )
+    , radii_( radii )
+    , data_f_( data_f )
+    , data_rho_( data_rho )
+    , rayleigh_number_pda_( rayleigh_number_pda )
+    , prefactor_( prefactor )
+    {}
+
+    KOKKOS_INLINE_FUNCTION
+    void operator()( const int id, const int x, const int y, const int r ) const
+    {
+        const dense::Vec< ScalarType, 3 > coords = grid::shell::coords( id, x, y, r, grid_, radii_ );
+        const auto                        n      = coords.normalized();
+
+        for ( int d = 0; d < 3; d++ )
+        {
+            data_f_( id, x, y, r, d ) = prefactor_ * rayleigh_number_ * n( d ) * data_rho_( id, x, y, r );
         }
     }
 };
