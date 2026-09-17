@@ -477,18 +477,18 @@ void compute_nu_h(
                     ScalarT       shear_heating_qp    = 0.0;
                     {
                         shear_heating_qp =
-                            2 * std::pow( 0.5 * grad_ux_q( 1 ) + 0.5 * grad_uy_q( 0 ), 2 ) +
-                            2 * std::pow( 0.5 * grad_ux_q( 2 ) + 0.5 * grad_uz_q( 0 ), 2 ) +
-                            2 * std::pow( 0.5 * grad_uy_q( 2 ) + 0.5 * grad_uz_q( 1 ), 2 ) +
-                            std::pow(
+                            2 * Kokkos::pow( 0.5 * grad_ux_q( 1 ) + 0.5 * grad_uy_q( 0 ), 2 ) +
+                            2 * Kokkos::pow( 0.5 * grad_ux_q( 2 ) + 0.5 * grad_uz_q( 0 ), 2 ) +
+                            2 * Kokkos::pow( 0.5 * grad_uy_q( 2 ) + 0.5 * grad_uz_q( 1 ), 2 ) +
+                            Kokkos::pow(
                                 -0.33333333333333331 * grad_ux_q( 0 ) - 0.33333333333333331 * grad_uy_q( 1 ) +
                                     0.66666666666666674 * grad_uz_q( 2 ),
                                 2 ) +
-                            std::pow(
+                            Kokkos::pow(
                                 -0.33333333333333331 * grad_ux_q( 0 ) + 0.66666666666666674 * grad_uy_q( 1 ) -
                                     0.33333333333333331 * grad_uz_q( 2 ),
                                 2 ) +
-                            std::pow(
+                            Kokkos::pow(
                                 0.66666666666666674 * grad_ux_q( 0 ) - 0.33333333333333331 * grad_uy_q( 1 ) -
                                     0.33333333333333331 * grad_uz_q( 2 ),
                                 2 );

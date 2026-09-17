@@ -181,18 +181,18 @@ class ShearHeatingTerm
                     }
 
                     const auto shear_heating_qp =
-                        2 * std::pow( 0.5 * dux_dy_eval + 0.5 * duy_dx_eval, 2 ) +
-                        2 * std::pow( 0.5 * dux_dz_eval + 0.5 * duz_dx_eval, 2 ) +
-                        2 * std::pow( 0.5 * duy_dz_eval + 0.5 * duz_dy_eval, 2 ) +
-                        std::pow(
+                        2 * Kokkos::pow( 0.5 * dux_dy_eval + 0.5 * duy_dx_eval, 2 ) +
+                        2 * Kokkos::pow( 0.5 * dux_dz_eval + 0.5 * duz_dx_eval, 2 ) +
+                        2 * Kokkos::pow( 0.5 * duy_dz_eval + 0.5 * duz_dy_eval, 2 ) +
+                        Kokkos::pow(
                             -0.33333333333333331 * dux_dx_eval - 0.33333333333333331 * duy_dy_eval +
                                 0.66666666666666674 * duz_dz_eval,
                             2 ) +
-                        std::pow(
+                        Kokkos::pow(
                             -0.33333333333333331 * dux_dx_eval + 0.66666666666666674 * duy_dy_eval -
                                 0.33333333333333331 * duz_dz_eval,
                             2 ) +
-                        std::pow(
+                        Kokkos::pow(
                             0.66666666666666674 * dux_dx_eval - 0.33333333333333331 * duy_dy_eval -
                                 0.33333333333333331 * duz_dz_eval,
                             2 );
