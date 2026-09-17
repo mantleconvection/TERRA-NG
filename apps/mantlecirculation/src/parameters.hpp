@@ -174,6 +174,31 @@ struct InitialTemperatureParameters
     double sph_factor_2   = 0.0;
 };
 
+// PDA parameters
+struct PDAParameters
+{
+    // Mineralogical lookup-table to derive thermodynamic quantities
+    // (density, expansivity, specific heat capacity) directly from (T,p).
+    // Used for PDA compressibility, currently only density is extracted.
+    std::string mintable_path = "";
+
+    double rayleigh_number_pda = 1.0;
+
+    std::string pressure_profile_csv_path  = "";
+    std::string pressure_profile_value_key = "Pressure (Pa)";
+
+    // Lookup-table dimensions
+    // Pressure should be in col 0, temperature in col 1.
+    // It is also assumed that the table varies fastest in temperature.
+    int    table_density_col = 2;     // density column #
+    int    table_nP          = 1401;  // number of pressure steps
+    int    table_nT          = 1001;  // number of temperature steps
+    double table_min_P       = 0.0;   // minimum pressure
+    double table_min_T       = 300.0; // minimum temperature
+    double table_dP          = 1e8;   // pressure increment
+    double table_dT          = 4.0;   // temperature increment
+};
+
 // Work in progress
 enum class CompressibleForm
 {
@@ -234,6 +259,7 @@ struct PhysicsParameters
 
     ViscosityParameters          viscosity_parameters{};
     InitialTemperatureParameters initial_temperature{};
+    PDAParameters                pda_parameters{};
 };
 
 /// Storage/working precision of the velocity-block multigrid V-cycle preconditioner.
@@ -465,6 +491,11 @@ inline void nondimensionalise( Parameters& prm )
                                  std::pow( mesh.mantle_thickness_m, 3 ) * boundary.delta_T_K ) /
                                ( phys.viscosity_parameters.reference_viscosity * phys.thermal_diffusivity_dim );
 
+        // PDA Rayleigh number = ( rho_h * g * L^3 ) / ( eta * kappa )
+        phys.pda_parameters.rayleigh_number_pda =
+            ( phys.reference_density * phys.gravity * std::pow( mesh.mantle_thickness_m, 3 ) ) /
+            ( phys.viscosity_parameters.reference_viscosity * phys.thermal_diffusivity_dim );
+
         // Peclet number = ( U * L ) / kappa -> should be 1
         phys.peclet_number = ( phys.characteristic_velocity * mesh.mantle_thickness_m ) / phys.thermal_diffusivity_dim;
 
@@ -693,7 +724,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->default_val( "tala" )
         ->group( "Physical Parameters" )
         ->description(
-            "Formulation of compressibility, if active: Choose between 'tala', 'pda' (not yet supported) and 'pda-entropy' (not yet supported). See Gassmöller et al. (2020)." );
+            "Formulation of compressibility, if active: Choose between 'tala', 'pda' and 'pda-entropy' (not yet supported). See Gassmöller et al. (2020)." );
 
     add_flag_with_default( app, "--internal-heating-enabled", parameters.physics_parameters.internal_heating )
         ->group( "Physical Parameters" );
@@ -717,6 +748,14 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Radial input profiles" );
     add_option_with_default( app, "--cp-profile-path", parameters.physics_parameters.cp_profile_csv_path )
         ->group( "Radial input profiles" );
+
+    add_option_with_default( app, "--pda-mintable-path", parameters.physics_parameters.pda_parameters.mintable_path )
+        ->group( "PDA Parameters" )
+        ->description( "Path to mineralogical lookup-table." );
+    add_option_with_default(
+        app, "--pda-pressure-profile-csv-path", parameters.physics_parameters.pda_parameters.pressure_profile_csv_path )
+        ->group( "PDA Parameters" )
+        ->description( "Hydrostatic pressure profile for PDA." );
 
     // Viscosity parameters
     add_option_with_default(

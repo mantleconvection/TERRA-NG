@@ -104,42 +104,46 @@ class PDAManager
     , density_prev_2_( "density_prev_2", domain, ownership_mask )
     , drho_dt_( "drho_dt", domain, ownership_mask )
     , lookup_table_( terra::io::read_lookup_table_2d(
-          prm.physics_parameters.pda_mintable_path,
-          2,
-          LookupTableLayout(),
+          prm.physics_parameters.pda_parameters.mintable_path,
+          prm.physics_parameters.pda_parameters.table_density_col,
+          LookupTableLayout( prm ),
           "density_from_table" ) )
     , prm_( prm )
     {
-        // read hydrostatic pressure profile from file
-        // this stays dimensional, since only used for table-lookup
-        auto phys_ = prm_.physics_parameters;
+        auto pda_params = prm_.physics_parameters.pda_parameters;
 
+        // read hydrostatic pressure profile from file
+        // pressure stays dimensional, since only used for table-lookup
         hydrostatic_pressure_ = shell::interpolate_radial_profile_into_subdomains_from_csv(
-            phys_.pda_pressure_profile_csv_path,
-            phys_.radial_profiles_radii_key,
-            phys_.pda_pressure_profile_value_key,
-            coords_radii );
+            pda_params.pressure_profile_csv_path,
+            prm_.physics_parameters.radial_profiles_radii_key,
+            pda_params.pressure_profile_value_key,
+            coords_radii,
+            ScalarType( 1 ) / prm_.mesh_parameters.mantle_thickness_m,
+            ScalarType( 1 ) );
     }
 
     // Evaluate density from (p, T) via lookup table into the owned density field
     void update_density_from_table( const VectorW1Scalar< ScalarType >& temperature )
     {
-        util::logroot << "Updating density (PDA)..." << std::endl;
+        util::logroot << "Updating density (PDA) ..." << std::endl;
 
-        auto        density_grid     = density_.grid_data();
-        const auto  temperature_grid = temperature.grid_data();
-        const auto& lookup_table     = lookup_table_;
+        auto        density_grid      = density_.grid_data();
+        const auto  temperature_grid  = temperature.grid_data();
+        const auto  pressure_grid     = hydrostatic_pressure_;
+        const auto  delta_T_K         = prm_.boundary_parameters.delta_T_K;
+        const auto  reference_density = prm_.physics_parameters.reference_density;
+        const auto& lookup_table      = lookup_table_;
 
         Kokkos::parallel_for(
             "read_density_from_table",
             grid::shell::local_domain_md_range_policy_nodes( domain_ ),
             KOKKOS_LAMBDA( const int id, const int x, const int y, const int r ) {
-                const ScalarType local_density = lookup_table(
-                    hydrostatic_pressure_( id, r ),
-                    temperature_grid( id, x, y, r ) * prm_.boundary_parameters.delta_T_K );
+                const ScalarType local_density =
+                    lookup_table( pressure_grid( id, r ), temperature_grid( id, x, y, r ) * delta_T_K );
 
                 // Nondimensionalise
-                density_grid( id, x, y, r ) = local_density / prm_.physics_parameters.reference_density;
+                density_grid( id, x, y, r ) = local_density / reference_density;
             } );
         Kokkos::fence();
     }
@@ -181,10 +185,10 @@ class PDAManager
         }
     }
 
-    /// Call once, right after the initial (pre-loop) Stokes solve.
+    // Call once, right after the initial (pre-loop) Stokes solve.
     void seed_history() { Kokkos::deep_copy( density_prev_.grid_data(), density_.grid_data() ); }
 
-    /// Call once per timestep, after Picard loop.
+    // Call once per timestep, after Picard loop.
     void shift_history()
     {
         Kokkos::deep_copy( density_prev_2_.grid_data(), density_prev_.grid_data() );
@@ -195,6 +199,7 @@ class PDAManager
     const VectorW1Scalar< ScalarType >& density() const { return density_; }
     VectorW1Scalar< ScalarType >&       density() { return density_; }
     const VectorW1Scalar< ScalarType >& drho_dt() const { return drho_dt_; }
+    VectorW1Scalar< ScalarType >&       drho_dt() { return drho_dt_; }
 
   private:
     grid::shell::DistributedDomain               domain_;
@@ -207,9 +212,18 @@ class PDAManager
     terra::io::ScalarLookupTable2D< ScalarType > lookup_table_;
     Parameters                                   prm_;
 
-    static terra::io::GridLayout2D LookupTableLayout()
+    static terra::io::GridLayout2D LookupTableLayout( const Parameters& prm )
     {
-        return terra::io::GridLayout2D{ 1401, 1001, 0.0, 300.0, 1e8, 4.0, 1001, 1 };
+        // Assuming col[0] = P, col[1] = T and table varies fastest in temperature.
+        return terra::io::GridLayout2D{
+            prm.physics_parameters.pda_parameters.table_nP,
+            prm.physics_parameters.pda_parameters.table_nT,
+            prm.physics_parameters.pda_parameters.table_min_P,
+            prm.physics_parameters.pda_parameters.table_min_T,
+            prm.physics_parameters.pda_parameters.table_dP,
+            prm.physics_parameters.pda_parameters.table_dT,
+            prm.physics_parameters.pda_parameters.table_nT,
+            1 };
     }
 };
 } // namespace terra::mantlecirculation

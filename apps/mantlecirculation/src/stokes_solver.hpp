@@ -813,27 +813,27 @@ class StokesContext
         Kokkos::fence();
     }
 
-    /// Solve  K · u = f(T_for_buoyancy, rho, alpha)  with the configured
-    /// FGMRES + MG/Schur preconditioner.  When `log_convergence` is true,
-    /// the per-step Stokes and coarse-grid PCG tables are printed;
+    /// Solve  K · u = f(T_for_buoyancy, rho, alpha) using the ALA/TALA buoyancy formulation:
+    /// f_u = Ra * rho_bar(r) * alpha_bar(r) * dT * r^
+    /// Solve uses the configured FGMRES + MG/Schur preconditioner.
+    /// When `log_convergence` is true, the per-step Stokes and coarse-grid PCG tables are printed;
     /// in either case the table is cleared at the end of the call.
-    template < typename RhoFieldType >
-    void solve(
+    void solve_tala_or_incompressible(
         const linalg::VectorW1Scalar< ScalarType >&                   T_for_buoyancy,
+        const grid::Grid2DDataScalar< ScalarType >&                   rho_profile,
+        const grid::Grid2DDataScalar< ScalarType >&                   alpha_profile,
         const std::optional< linalg::VectorW1IsoW2W1< ScalarType > >& u_dirichlet,
-        const RhoFieldType&                                           rho,
-        const grid::Grid2DDataScalar< ScalarType >&                   alpha,
         bool                                                          compressible,
-        bool                                                          log_convergence,
-        const std::optional< VectorW1Scalar< ScalarType > >&          drho_dt )
+        bool                                                          log_convergence )
     {
         util::Timer timer_stokes( "stokes" );
 
-        util::logroot << "Setting up Stokes rhs ..." << std::endl;
+        if ( compressible )
+            util::logroot << "Setting up Stokes rhs (TALA) ..." << std::endl;
+        else
+            util::logroot << "Setting up Stokes rhs (incompressible) ..." << std::endl;
 
-        // unwrap to raw Kokkos::View for BuoyancyForceAssembly, if applicable
-        auto rho_grid = extractGridData( rho );
-
+        // Momentum equation rhs
         Kokkos::parallel_for(
             "Stokes rhs interpolation",
             grid::shell::local_domain_md_range_policy_nodes( *domains_[velocity_level_] ),
@@ -842,19 +842,138 @@ class StokesContext
                 coords_radii_[velocity_level_],
                 triangular_prec_tmp_.block_1().grid_data(),
                 T_for_buoyancy.grid_data(),
-                rho_grid,
-                alpha,
+                rho_profile,
+                alpha_profile,
                 prm_.physics_parameters.rayleigh_number,
                 1.0 ) );
 
         linalg::apply( *M_, triangular_prec_tmp_.block_1(), stok_vecs_["f"].block_1() );
 
-        // Strong enforcement of the velocity BCs on the RHS, applied per boundary.
-        // NOTE: get_shell_boundary_flag( bcs_, FLAG ) only returns the FIRST boundary
-        // carrying FLAG, so when both boundaries share a BC type (e.g. no-slip/no-slip
-        // => both DIRICHLET, or free-slip/free-slip => both FREESLIP) the second boundary
-        // would be left completely unenforced. Loop over both boundaries and dispatch on
-        // each one's own flag instead.
+        // Mass equation rhs
+        // Apply TALA RHS to mass equation if needed...
+        if ( compressible )
+        {
+            using MassRHS =
+                fe::wedge::linearforms::shell::InvRhoGradRhoDotU< ScalarType, grid::Grid2DDataScalar< ScalarType > >;
+
+            MassRHS mass_rhs(
+                *domains_[pressure_level_],
+                *domains_[velocity_level_],
+                coords_shell_[pressure_level_],
+                coords_shell_[velocity_level_],
+                coords_radii_[pressure_level_],
+                coords_radii_[velocity_level_],
+                rho_profile,
+                stok_vecs_["u_prev"].block_1() );
+
+            linalg::apply( mass_rhs, stok_vecs_["f"].block_2() );
+        }
+
+        assemble_dirichlet_BCs( u_dirichlet );
+        solve_common( log_convergence );
+    }
+
+    /// Solve K · u = f(rho, drho_dt) using the PDA buoyancy formulation:
+    /// f_u = Ra * rho * r^.
+    /// 'rho' must be the full 3-D density field.
+    void solve_pda(
+        const linalg::VectorW1Scalar< ScalarType >&                   rho,
+        const linalg::VectorW1Scalar< ScalarType >&                   drho_dt,
+        const std::optional< linalg::VectorW1IsoW2W1< ScalarType > >& u_dirichlet,
+        bool                                                          log_convergence )
+    {
+        util::Timer timer_stokes( "stokes" );
+
+        util::logroot << "Setting up Stokes rhs (PDA) ..." << std::endl;
+
+        // Momentum equation rhs
+        Kokkos::parallel_for(
+            "Stokes rhs interpolation (PDA)",
+            grid::shell::local_domain_md_range_policy_nodes( *domains_[velocity_level_] ),
+            BuoyancyForceAssemblyPDA(
+                coords_shell_[velocity_level_],
+                coords_radii_[velocity_level_],
+                triangular_prec_tmp_.block_1().grid_data(),
+                rho.grid_data(),
+                prm_.physics_parameters.pda_parameters.rayleigh_number_pda,
+                -1.0 ) );
+
+        linalg::apply( *M_, triangular_prec_tmp_.block_1(), stok_vecs_["f"].block_1() );
+
+        // Mass equation rhs
+        // Apply both PDA rhs terms to mass equation ... PDA is compressible by default.
+        using MassRHSGradRho =
+            fe::wedge::linearforms::shell::InvRhoGradRhoDotU< ScalarType, linalg::VectorW1Scalar< ScalarType > >;
+
+        MassRHSGradRho mass_rhs_1(
+            *domains_[pressure_level_],
+            *domains_[velocity_level_],
+            coords_shell_[pressure_level_],
+            coords_shell_[velocity_level_],
+            coords_radii_[pressure_level_],
+            coords_radii_[velocity_level_],
+            rho,
+            stok_vecs_["u_prev"].block_1() );
+
+        linalg::apply( mass_rhs_1, stok_vecs_["f"].block_2() );
+
+        // density time derivative term
+        using MassRHSDrhoDt = fe::wedge::linearforms::shell::InvRhoDrhoDt< ScalarType >;
+
+        MassRHSDrhoDt mass_rhs_2(
+            *domains_[pressure_level_],
+            *domains_[velocity_level_],
+            coords_shell_[pressure_level_],
+            coords_shell_[velocity_level_],
+            coords_radii_[pressure_level_],
+            coords_radii_[velocity_level_],
+            rho,
+            drho_dt,
+            linalg::OperatorApplyMode::Add );
+
+        linalg::apply( mass_rhs_2, stok_vecs_["f"].block_2() );
+
+        assemble_dirichlet_BCs( u_dirichlet );
+        solve_common( log_convergence );
+    }
+
+  private:
+    /// Shared tail of both solve() variants (tala/incompressible and pda):
+    /// FMGRES solve, pressure normalization, u_prev update.
+    void solve_common( bool log_convergence )
+    {
+        util::logroot << "Solving Stokes ..." << std::endl;
+
+        if ( use_float_basis_ )
+            ::terra::linalg::solvers::solve( *stokes_fgmres_float_, *K_, stok_vecs_["u"], stok_vecs_["f"] );
+        else
+            ::terra::linalg::solvers::solve( *stokes_fgmres_double_, *K_, stok_vecs_["u"], stok_vecs_["f"] );
+
+        if ( log_convergence )
+        {
+            table_->query_rows_equals( "tag", "stokes_fgmres" ).print_pretty();
+        }
+        table_->clear();
+
+        // "Normalize" pressure (subtract average).
+        auto&            p = stok_vecs_["u"].block_2();
+        const ScalarType avg_pressure_approximation =
+            kernels::common::masked_sum( p.grid_data(), p.mask_data(), grid::NodeOwnershipFlag::OWNED ) /
+            static_cast< ScalarType >( num_dofs_pressure_ );
+        linalg::lincomb( p, { 1.0 }, { p }, -avg_pressure_approximation );
+
+        // Store u_prev for the next timestep or picard step
+        linalg::assign( stok_vecs_["u_prev"], stok_vecs_["u"] );
+    }
+
+    /// Strong enforcement of the velocity BCs on the RHS, applied per boundary.
+    /// NOTE: get_shell_boundary_flag( bcs_, FLAG ) only returns the FIRST boundary
+    /// carrying FLAG, so when both boundaries share a BC type (e.g. no-slip/no-slip
+    /// => both DIRICHLET, or free-slip/free-slip => both FREESLIP) the second boundary
+    /// would be left completely unenforced. Loop over both boundaries and dispatch on
+    /// each one's own flag instead.
+    void assemble_dirichlet_BCs( const std::optional< linalg::VectorW1IsoW2W1< ScalarType > >& u_dirichlet )
+    {
         for ( const auto sbf : { grid::shell::ShellBoundaryFlag::CMB, grid::shell::ShellBoundaryFlag::SURFACE } )
         {
             const auto bcf = grid::shell::get_boundary_condition_flag( bcs_, sbf );
@@ -887,87 +1006,8 @@ class StokesContext
                     sbf );
             }
         }
-
-        // Apply TALA RHS to mass equation if needed...
-        if ( compressible )
-        {
-            using MassRHS = fe::wedge::linearforms::shell::InvRhoGradRhoDotU< ScalarType, RhoFieldType >;
-
-            MassRHS mass_rhs(
-                *domains_[pressure_level_],
-                *domains_[velocity_level_],
-                coords_shell_[pressure_level_],
-                coords_shell_[velocity_level_],
-                coords_radii_[pressure_level_],
-                coords_radii_[velocity_level_],
-                rho,
-                stok_vecs_["u_prev"].block_1() );
-
-            linalg::apply( mass_rhs, stok_vecs_["f"].block_2() );
-
-            // PDA mass RHS
-            // guard against compilation mismatch when rho is not VectorW1Scalar, pda-branch is not needed then.
-            if constexpr ( std::is_same_v< RhoFieldType, VectorW1Scalar< ScalarType > > )
-            {
-                if ( drho_dt.has_value() )
-                {
-                    using MassRHSPDA = fe::wedge::linearforms::shell::InvRhoDrhoDt< ScalarType >;
-
-                    MassRHSPDA mass_rhs_pda(
-                        *domains_[pressure_level_],
-                        *domains_[velocity_level_],
-                        coords_shell_[pressure_level_],
-                        coords_shell_[velocity_level_],
-                        coords_radii_[pressure_level_],
-                        coords_radii_[velocity_level_],
-                        rho,
-                        *drho_dt,
-                        linalg::OperatorApplyMode::Add );
-
-                    linalg::apply( mass_rhs_pda, stok_vecs_["f"].block_2() );
-                }
-            }
-            else
-            {
-                // PDA requires rho to be a full 3-D VectorW1Scalar field. If a
-                // caller ever passes drho_dt with an incompatible RhoFieldType,
-                // that's a logic error at the call site -- throw error rather than
-                // silently skipping the derivative term.
-                if ( drho_dt.has_value() )
-                {
-                    throw std::logic_error(
-                        "stokes.solve(): drho_dt was provided, but RhoFieldType is not VectorW1Scalar, for some reason."
-                        " The PDA mass-RHS term cannot be assembled and would otherwise be silently skipped." );
-                }
-            }
-        }
-
-        util::logroot << "Solving Stokes ..." << std::endl;
-
-        if ( use_float_basis_ )
-            ::terra::linalg::solvers::solve( *stokes_fgmres_float_, *K_, stok_vecs_["u"], stok_vecs_["f"] );
-        else
-            ::terra::linalg::solvers::solve( *stokes_fgmres_double_, *K_, stok_vecs_["u"], stok_vecs_["f"] );
-
-        if ( log_convergence )
-        {
-            table_->query_rows_equals( "tag", "stokes_fgmres" ).print_pretty();
-            //table_->query_rows_equals( "tag", "coarse_grid_pcg" ).print_pretty();
-        }
-        table_->clear();
-
-        // "Normalize" pressure (subtract average).
-        auto&            p = stok_vecs_["u"].block_2();
-        const ScalarType avg_pressure_approximation =
-            kernels::common::masked_sum( p.grid_data(), p.mask_data(), grid::NodeOwnershipFlag::OWNED ) /
-            static_cast< ScalarType >( num_dofs_pressure_ );
-        linalg::lincomb( p, { 1.0 }, { p }, -avg_pressure_approximation );
-
-        // Store u_prev for the next timestep or picard step
-        linalg::assign( stok_vecs_["u_prev"], stok_vecs_["u"] );
     }
 
-  private:
     // Inputs stored BY VALUE so this context owns its dependencies and isn't
     // tied to the lifetime/identity of the mc.cpp locals.  Vectors-of-views
     // are cheap to copy (Kokkos::View handles are refcounted), and the BC
