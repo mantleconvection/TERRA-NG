@@ -844,7 +844,7 @@ class StokesContext
                 T_for_buoyancy.grid_data(),
                 rho_profile,
                 alpha_profile,
-                prm_.physics_parameters.rayleigh_number,
+                prm_.physics_parameters.rayleigh_number / prm_.physics_parameters.peclet_number,
                 1.0 ) );
 
         linalg::apply( *M_, triangular_prec_tmp_.block_1(), stok_vecs_["f"].block_1() );
@@ -895,7 +895,7 @@ class StokesContext
                 coords_radii_[velocity_level_],
                 triangular_prec_tmp_.block_1().grid_data(),
                 rho.grid_data(),
-                prm_.physics_parameters.pda_parameters.rayleigh_number_pda,
+                prm_.physics_parameters.pda_parameters.rayleigh_number_pda / prm_.physics_parameters.peclet_number,
                 -1.0 ) );
 
         linalg::apply( *M_, triangular_prec_tmp_.block_1(), stok_vecs_["f"].block_1() );

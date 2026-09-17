@@ -89,7 +89,7 @@ struct BuoyancyForceAssembly
     Grid4DDataScalar< ScalarType > data_T_;
     Grid2DDataScalar< ScalarType > data_rho_;
     Grid2DDataScalar< ScalarType > alpha_;
-    ScalarType                     rayleigh_number_;
+    ScalarType                     Ra_over_Pe_;
     ScalarType                     prefactor_;
 
     BuoyancyForceAssembly(
@@ -99,7 +99,7 @@ struct BuoyancyForceAssembly
         const Grid4DDataScalar< ScalarType >& data_T,
         const Grid2DDataScalar< ScalarType >& data_rho,
         const Grid2DDataScalar< ScalarType >& alpha,
-        const ScalarType                      rayleigh_number,
+        const ScalarType                      Ra_over_Pe,
         const ScalarType                      prefactor = ScalarType( 1 ) )
     : grid_( grid )
     , radii_( radii )
@@ -107,7 +107,7 @@ struct BuoyancyForceAssembly
     , data_T_( data_T )
     , data_rho_( data_rho )
     , alpha_( alpha )
-    , rayleigh_number_( rayleigh_number )
+    , Ra_over_Pe_( Ra_over_Pe )
     , prefactor_( prefactor )
     {}
 
@@ -120,7 +120,7 @@ struct BuoyancyForceAssembly
         for ( int d = 0; d < 3; d++ )
         {
             data_f_( id, x, y, r, d ) =
-                prefactor_ * rayleigh_number_ * n( d ) * alpha_( id, r ) * data_rho_( id, r ) * data_T_( id, x, y, r );
+                prefactor_ * Ra_over_Pe_ * n( d ) * alpha_( id, r ) * data_rho_( id, r ) * data_T_( id, x, y, r );
         }
     }
 };
@@ -131,7 +131,7 @@ struct BuoyancyForceAssemblyPDA
     Grid2DDataScalar< ScalarType > radii_;
     Grid4DDataVec< ScalarType, 3 > data_f_;
     Grid4DDataScalar< ScalarType > data_rho_;
-    ScalarType                     rayleigh_number_pda_;
+    ScalarType                     Ra_pda_over_Pe_;
     ScalarType                     prefactor_;
 
     BuoyancyForceAssemblyPDA(
@@ -139,13 +139,13 @@ struct BuoyancyForceAssemblyPDA
         const Grid2DDataScalar< ScalarType >& radii,
         const Grid4DDataVec< ScalarType, 3 >& data_f,
         const Grid4DDataScalar< ScalarType >& data_rho,
-        const ScalarType                      rayleigh_number_pda,
+        const ScalarType                      Ra_pda_over_Pe,
         const ScalarType                      prefactor = ScalarType( -1 ) )
     : grid_( grid )
     , radii_( radii )
     , data_f_( data_f )
     , data_rho_( data_rho )
-    , rayleigh_number_pda_( rayleigh_number_pda )
+    , Ra_pda_over_Pe_( Ra_pda_over_Pe )
     , prefactor_( prefactor )
     {}
 
@@ -157,7 +157,7 @@ struct BuoyancyForceAssemblyPDA
 
         for ( int d = 0; d < 3; d++ )
         {
-            data_f_( id, x, y, r, d ) = prefactor_ * rayleigh_number_ * n( d ) * data_rho_( id, x, y, r );
+            data_f_( id, x, y, r, d ) = prefactor_ * Ra_pda_over_Pe_ * n( d ) * data_rho_( id, x, y, r );
         }
     }
 };
