@@ -179,7 +179,7 @@ Result<> run( const Parameters& prm )
     // Optional 3-D density field for PDA
     // Density is needed in Stokes and energy -- so we set it up here
     std::optional< VectorQ1Scalar< ScalarType > > density;
-    // if ( pda_form )
+    if ( pda_form )
     {
         density.emplace( "density", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
     }
@@ -196,14 +196,6 @@ Result<> run( const Parameters& prm )
     Grid2DDataScalar< ScalarType > kappa_profile(
         "kappa_profile", coords_radii[velocity_level].extent( 0 ), coords_radii[velocity_level].extent( 1 ) );
 
-    Grid2DDataScalar< ScalarType > diffusion_coeff_profile(
-        "diffusion_coeff_profile", coords_radii[velocity_level].extent( 0 ), coords_radii[velocity_level].extent( 1 ) );
-    Grid2DDataScalar< ScalarType > adiabatic_heating_coeff_profile(
-        "adiabatic_heating_coeff_profile", coords_radii[velocity_level].extent( 0 ), coords_radii[velocity_level].extent( 1 ) );
-    Grid2DDataScalar< ScalarType > shear_heating_coeff_profile(
-        "shear_heating_coeff_profile", coords_radii[velocity_level].extent( 0 ), coords_radii[velocity_level].extent( 1 ) );    
-    Grid2DDataScalar< ScalarType > internal_heating_coeff_profile(
-        "internal_heating_coeff_profile", coords_radii[velocity_level].extent( 0 ), coords_radii[velocity_level].extent( 1 ) );
     // Finite-volume functions/vectors.
 
     // FV cell-centred temperature field (the FCT prognostic variable).
@@ -248,14 +240,6 @@ Result<> run( const Parameters& prm )
         coords_radii[velocity_level],
         prm );
 
-    Kokkos::parallel_for(
-        "compute diffusion_profile",
-        grid::shell::local_domain_md_range_policy_radial( *domains[velocity_level] ),
-        KOKKOS_LAMBDA( int id, int r ) {
-            diffusion_coeff_profile( id, r ) = kappa_profile( id, r ) / ( rho_profile( id, r ) * cp_profile( id, r ) );
-        } );
-    Kokkos::fence();
-
     // Initialise density Q1 field from radial profile -- before Stokes solver setup
     if ( pda_form )
     {
@@ -265,12 +249,6 @@ Result<> run( const Parameters& prm )
             RadialProfileToQ1{ density->grid_data(), rho_profile } );
         Kokkos::fence();
     }
-
-    Kokkos::parallel_for(
-        "RadialProfileToQ1",
-        grid::shell::local_domain_md_range_policy_nodes( *domains[velocity_level] ),
-        RadialProfileToQ1{ density->grid_data(), rho_profile } );
-    Kokkos::fence();
 
     // Setting up Stokes velocity boundary conditions.
     //
@@ -367,7 +345,7 @@ Result<> run( const Parameters& prm )
     xdmf_output->add( Tdev.grid_data() );              // Temperature deviation
     xdmf_output->add( u.block_1().grid_data() );       // Velocity
     xdmf_output->add( stokes.eta_fine().grid_data() ); // Viscosity
-    // if ( pda_form )
+    if ( pda_form )
     {
         xdmf_output->add( density->grid_data() ); // Density
     }
@@ -480,11 +458,6 @@ Result<> run( const Parameters& prm )
     // We need some global h. Let's, for simplicity (does not need to be too accurate) just choose the smallest h in
     // radial direction.
     const auto h = grid::shell::min_radial_h( domains[velocity_level]->domain_info().radii() );
-
-    const ScalarType gamma =
-        prm.physics_parameters.internal_heating ?
-            static_cast< ScalarType >( prm.physics_parameters.h_number / prm.physics_parameters.cp_profile ) :
-            ScalarType( 0 );
 
     // --- Energy solver (polymorphic dispatch via EnergySolver) ---
     // Construct before the initial XDMF write so that EV's optional

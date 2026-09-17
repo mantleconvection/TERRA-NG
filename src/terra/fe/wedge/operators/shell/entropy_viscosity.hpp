@@ -337,7 +337,6 @@ void compute_nu_h(
     ScalarT                                       dt,
     const EntropyStats< ScalarT >&                stats,
     const EntropyViscosityParameters< ScalarT >&  params,
-    typename CoeffConfigT::DiffusionCoeffT        diffusion_coeff_callback,
     typename CoeffConfigT::InternalHeatingCoeffT  internal_heating_coeff_callback,
     typename CoeffConfigT::AdiabaticHeatingCoeffT adiabatic_heating_coeff_callback,
     typename CoeffConfigT::ShearHeatingCoeffT     shear_heating_coeff_callback )
@@ -459,7 +458,6 @@ void compute_nu_h(
                     const ScalarT u_dot_gradT =
                         u_q( 0 ) * grad_T_q( 0 ) + u_q( 1 ) * grad_T_q( 1 ) + u_q( 2 ) * grad_T_q( 2 );
 
-                    const ScalarT diffusion_coeff = diffusion_coeff_callback( id, xc, yc, rc, wedge, qp[q] );
                     const ScalarT internal_heating_term =
                         internal_heating_coeff_callback( id, xc, yc, rc, wedge, qp[q] );
 
@@ -498,14 +496,18 @@ void compute_nu_h(
                     const ScalarT shear_heating_term = shear_heating_coeff * ( 2.0 * eta_q ) * shear_heating_qp;
 
                     // KHB 2012 residual (page 7, formula above eq. 16):
-                    //   r_E = ∂_t E + (T − T_m)·(u·∇T − κ∇²T − γ).
+                    //   r_E = ∂_t E + (T − T_m)·(u·∇T − ∇·(κ∇T) − γ − Q_ad − Q_sh),
+                    // where γ, Q_ad and Q_sh are the internal, adiabatic and
+                    // shear heating sources of the non-dimensional energy equation.
                     // The (T − T_m) factor multiplies the entire RHS of the
                     // T-PDE residual.  Vanishes on smooth solutions of the
                     // temperature equation.
-                    // Lap_q already encodes −κ∇²T (lumped-mass-projected).
+                    // Lap_q already encodes −∇·(κ∇T) (lumped-mass-projected): the diffusion
+                    // coefficient is applied inside the operator that produced
+                    // lap_data, so it must not be scaled by it again here.
                     const ScalarT r_E_q = Kokkos::abs(
-                        dE_dt + dT * ( u_dot_gradT + diffusion_coeff * Lap_q - internal_heating_term -
-                                       adiabatic_heating_term - shear_heating_term ) );
+                        dE_dt + dT * ( u_dot_gradT + Lap_q - internal_heating_term - adiabatic_heating_term -
+                                       shear_heating_term ) );
 
                     r_E_sq_int += qw[q] * abs_det * r_E_q * r_E_q;
                     u_max_norm = Kokkos::max( u_max_norm, u_q.norm() );

@@ -421,7 +421,6 @@ class EVSolver : public EnergySolver< ScalarType >
     , velocity_( velocity )
     , T_( T )
     , diffusion_coeff_( diffusion_coeff )
-    , surface_diffusion_coeff_( surface_diffusion_coeff )
     , internal_heating_coeff_( internal_heating_coeff )
     , adiabatic_heating_coeff_( adiabatic_heating_coeff )
     , shear_heating_coeff_( shear_heating_coeff )
@@ -508,18 +507,13 @@ class EVSolver : public EnergySolver< ScalarType >
         ShearHeating_ = std::make_unique< ShearHeatingOp >(
             *domain_, coords_shell_, coords_radii_, eta, velocity_, shear_heating_coeff );
 
-        // Global Galerkin Laplacian for κ∇²T projection.  κ is spatially uniform
-        // (a single physics parameter), so we use the constant-coefficient
-        // overload of the ∇·(ν ∇·) operator — no per-wedge Grid5D κ field is
-        // stored — giving the standard ∫ κ ∇φ_i · ∇φ_j with additive halo exchange.
-
-        // std::function< ScalarType() > test_callback = []()
-        // {
-        //     return 1.0;
-        // };
+        // Global Galerkin Laplacian for the ∇·(κ∇T) projection.  κ = kappa/(ρ c_p)
+        // is evaluated per quadrature point by the diffusion coefficient functor,
+        // so no per-wedge Grid5D κ field is stored — giving ∫ κ ∇φ_i · ∇φ_j with
+        // additive halo exchange.
 
         if ( prm_.devel_parameters.extended_diagnostics )
-            log_hbm( "EV: + nu_h_wedge (1 Grid5D per-wedge field; kappa is a scalar)" );
+            log_hbm( "EV: + nu_h_wedge (1 Grid5D per-wedge field; kappa comes from a coefficient functor)" );
         A_kappa_ = std::make_unique< DiffOp >( *domain_, coords_shell_, coords_radii_, diffusion_coeff_ );
 
         // Global lumped mass M_lumped = M · 1, used to invert the global
@@ -909,11 +903,6 @@ class EVSolver : public EnergySolver< ScalarType >
             linalg::invert_entries( diag_ );
         }
 
-        // const ScalarType gamma =
-        //     prm_.physics_parameters.internal_heating ?
-        //         static_cast< ScalarType >( prm_.physics_parameters.h_number / prm_.physics_parameters.cp_profile ) :
-        //         ScalarType( 0 );
-
         for ( int i = 0; i < prm_.energy_solver_parameters.energy_substeps; ++i )
         {
             util::logroot << "Solving energy (EV, substep " << i << ") ..." << std::endl;
@@ -975,7 +964,6 @@ class EVSolver : public EnergySolver< ScalarType >
                     dt,
                     stats,
                     ev_params_,
-                    diffusion_coeff_,
                     internal_heating_coeff_,
                     adiabatic_heating_coeff_,
                     shear_heating_coeff_ );
@@ -992,26 +980,25 @@ class EVSolver : public EnergySolver< ScalarType >
             linalg::apply( *M_, T_, q_ );
             linalg::lincomb( q_, { ScalarType( 1 ), -dt }, { q_, rhs_ev_ } );
 
-            // 4b) Constant internal-heating source: q += dt · M · γ.
-            //     rhs_ev_ is finished with at this point and is reused as a
-            //     scratch γ-vector; tmp_ is also free until the Dirichlet
-            //     enforcement below.
-            // if ( gamma != ScalarType( 0 ) )
+            // 4b) Internal-heating source: q += dt · K_h · 1, where K_h is the
+            //     coefficient-weighted mass operator ∫ (H̃/c_p) φ_i φ_j.  rhs_ev_
+            //     is finished with at this point and is reused as a scratch
+            //     vector of ones; tmp_ is also free until the Dirichlet
+            //     enforcement below.  The coefficient functor returns 0 when
+            //     internal heating is disabled, so no guard is needed here.
             {
-                // linalg::assign( rhs_ev_, gamma );
-                // linalg::apply( *M_, rhs_ev_, tmp_ );
-
                 kernels::common::set_constant( rhs_ev_.grid_data(), 1.0 );
-                // linalg::apply( *M_, rhs_ev_, tmp_ );
                 linalg::apply( *KMassInternalHeating_, rhs_ev_, tmp_ );
                 linalg::lincomb( q_, { ScalarType( 1 ), dt }, { q_, tmp_ } );
             }
 
+            // 4c) Adiabatic heating: q += dt · ∫ -Di·α/c_p (u·r̂) T φ_i.
             {
                 linalg::apply( *AdiabaticHeating_, tmp_ );
                 linalg::lincomb( q_, { ScalarType( 1 ), dt }, { q_, tmp_ } );
             }
 
+            // 4d) Shear heating: q += dt · ∫ Di·Pe/Ra · 1/(ρ c_p) · 2η ε':ε' φ_i.
             {
                 linalg::apply( *ShearHeating_, tmp_ );
                 linalg::lincomb( q_, { ScalarType( 1 ), dt }, { q_, tmp_ } );
@@ -1114,7 +1101,6 @@ class EVSolver : public EnergySolver< ScalarType >
     bool nu_h_locked_for_step_ = false;
 
     typename CoeffType::DiffusionCoeffT diffusion_coeff_;
-    ScalarType                          surface_diffusion_coeff_;
 
     typename CoeffType::InternalHeatingCoeffT  internal_heating_coeff_;
     typename CoeffType::AdiabaticHeatingCoeffT adiabatic_heating_coeff_;

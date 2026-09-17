@@ -309,7 +309,8 @@ int test( const int level )
             T, mask_data, domain, coords_shell, coords_radii, ev_params );
         fe::wedge::operators::shell::compute_nu_h<double, CoeffConfigT>(
             nu_h_wedge, T, T_prev, eta_shear, u, lap_T.grid_data(),
-            domain, coords_shell, coords_radii, dt, stats, ev_params, ZeroCallback(0.0), ZeroCallback(0.0), ZeroCallback(0.0), ZeroCallback(0.0) );
+            domain, coords_shell, coords_radii, dt, stats, ev_params,
+            ZeroCallback( 0.0 ), ZeroCallback( 0.0 ), ZeroCallback( 0.0 ) );
 
         // 3) rhs_ev = ∫ ν_h ∇T · ∇φ_i  (explicit EV stabilization).
         linalg::apply( A_evdiff, T, rhs_ev );

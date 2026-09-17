@@ -2,7 +2,6 @@
 
 #include "../../quadrature/quadrature.hpp"
 #include "communication/shell/communication.hpp"
-#include "communication/shell/communication_plan.hpp"
 #include "dense/vec.hpp"
 #include "fe/wedge/integrands.hpp"
 #include "fe/wedge/kernel_helpers.hpp"
@@ -39,8 +38,6 @@ class ShearHeatingTerm
     communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT > send_buffers_;
     communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT > recv_buffers_;
 
-    terra::communication::shell::ShellBoundaryCommPlan< grid::Grid4DDataScalar< ScalarT > > comm_plan_;
-
     // Kokkos views set in apply_impl() before the parallel launch.
     grid::Grid4DDataScalar< ScalarType >              dst_;
     grid::Grid4DDataScalar< ScalarType >              eta_grid_;
@@ -67,7 +64,6 @@ class ShearHeatingTerm
     , operator_communication_mode_( operator_communication_mode )
     , send_buffers_( domain )
     , recv_buffers_( domain )
-    , comm_plan_( domain )
     {}
 
     void apply_impl( DstVectorType& dst )
@@ -82,7 +78,7 @@ class ShearHeatingTerm
         vel_grid_ = velocity_.grid_data();
 
         Kokkos::parallel_for(
-            "inv_rho_grad_rho_dot_u", grid::shell::local_domain_md_range_policy_cells( domain_ ), *this );
+            "shear_heating_term", grid::shell::local_domain_md_range_policy_cells( domain_ ), *this );
         Kokkos::fence();
 
         if ( operator_communication_mode_ == linalg::OperatorCommunicationMode::CommunicateAdditively )
@@ -90,14 +86,12 @@ class ShearHeatingTerm
             communication::shell::pack_send_and_recv_local_subdomain_boundaries(
                 domain_, dst_, send_buffers_, recv_buffers_ );
             communication::shell::unpack_and_reduce_local_subdomain_boundaries( domain_, dst_, recv_buffers_ );
-
-            // util::Timer timer_comm( "inv_rho_grad_rho_dot_u__comm" );
-            // terra::communication::shell::send_recv_with_plan( comm_plan_, dst_, recv_buffers_ );
         }
     }
 
     /// \brief Kokkos kernel: per-cell contribution to
-    ///        \f$ f_i = \int_E \frac{1}{\rho} \nabla\rho \cdot \mathbf{u} \, \phi_i \, \mathrm{d}x \f$.
+    ///        \f$ f_i = \int_E c \, 2\eta \, \varepsilon'(\mathbf{u}) : \varepsilon'(\mathbf{u}) \, \phi_i \, \mathrm{d}x \f$,
+    ///        with \f$ \varepsilon' = \varepsilon(\mathbf{u}) - \tfrac{1}{3} (\nabla\cdot\mathbf{u}) I \f$.
     KOKKOS_INLINE_FUNCTION void
         operator()( const int local_subdomain_id, const int x_cell, const int y_cell, const int r_cell ) const
     {
@@ -123,10 +117,6 @@ class ShearHeatingTerm
 
             dense::Vec< ScalarT, 6 > eta[num_wedges_per_hex_cell];
 
-            // dense::Vec< ScalarT, 6 > ux[num_wedges_per_hex_cell];
-            // dense::Vec< ScalarT, 6 > uy[num_wedges_per_hex_cell];
-            // dense::Vec< ScalarT, 6 > uz[num_wedges_per_hex_cell];
-
             extract_local_wedge_scalar_coefficients( eta, local_subdomain_id, x_cell, y_cell, r_cell, eta_grid_ );
 
             dense::Vec< ScalarT, 6 > vel_coeffs[VelocityVecDim][num_wedges_per_hex_cell];
@@ -135,10 +125,6 @@ class ShearHeatingTerm
                 extract_local_wedge_vector_coefficients(
                     vel_coeffs[d], local_subdomain_id, x_cell, y_cell, r_cell, d, vel_grid_ );
             }
-
-            // extract_local_wedge_scalar_coefficients( ux, local_subdomain_id, x_cell, y_cell, r_cell, ux_ );
-            // extract_local_wedge_scalar_coefficients( uy, local_subdomain_id, x_cell, y_cell, r_cell, uy_ );
-            // extract_local_wedge_scalar_coefficients( uz, local_subdomain_id, x_cell, y_cell, r_cell, uz_ );
 
             // Compute the local element matrix.
 
@@ -228,7 +214,5 @@ class ShearHeatingTerm
         }
     }
 };
-
-// static_assert( linalg::LinearFormLike< ShearHeatingTerm< double > > );
 
 } // namespace terra::fe::wedge::linearforms::shell

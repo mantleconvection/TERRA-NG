@@ -40,10 +40,10 @@ class WedgeConstantDivKGrad
     grid::Grid3DDataVec< ScalarT, 3 > grid_;
     grid::Grid2DDataScalar< ScalarT > radii_;
 
-    // Optional spatially-constant coefficient. When use_coefficient_nu_ is set the
-    // kernel calls the coefficient_ functor and uses the value returned by the user
-    // bool use_coefficient_nu_ = false; // Now checks this with constexpr
-
+    // Coefficient nu. Either a per-wedge Grid5D field (the default, read
+    // directly) or any callable (id, x, y, r, wedge, qp) -> ScalarT, which is
+    // evaluated at each quadrature point. The kernel picks between the two
+    // with if constexpr, so a uniform coefficient costs no per-wedge field.
     CoefficientF coefficient_nu_;
 
     linalg::OperatorApplyMode         operator_apply_mode_;
@@ -180,7 +180,7 @@ class WedgeConstantDivKGrad
     }
 };
 
-// static_assert( linalg::OperatorLike< WedgeConstantDivKGrad< float > > );
-// static_assert( linalg::OperatorLike< WedgeConstantDivKGrad< double > > );
+static_assert( linalg::OperatorLike< WedgeConstantDivKGrad< float > > );
+static_assert( linalg::OperatorLike< WedgeConstantDivKGrad< double > > );
 
 } // namespace terra::fe::wedge::operators::shell

@@ -235,9 +235,6 @@ int test( const int level, const ScalarType kappa )
     const auto nr_c    = domain.domain_info().subdomain_num_nodes_radially() - 1;
     Grid5DDataScalar< ScalarType > nu_h_wedge(
         "nu_h_wedge", num_sub, nx_c, nx_c, nr_c, fe::wedge::num_wedges_per_hex_cell );
-    // Grid5DDataScalar< ScalarType > kappa_wedge(
-    //     "kappa_wedge", num_sub, nx_c, nx_c, nr_c, fe::wedge::num_wedges_per_hex_cell );
-    // kernels::common::set_constant( kappa_wedge, kappa );
 
     Grid4DDataScalar< ScalarType > kappa_wedge(
         "kappa_wedge", num_sub, nx_c, nx_c, nr_c );
@@ -357,7 +354,8 @@ int test( const int level, const ScalarType kappa )
             T, mask_data, domain, coords_shell, coords_radii, ev_params );
         fe::wedge::operators::shell::compute_nu_h< double, CoeffConfigT >(
             nu_h_wedge, T, T_prev, eta_test_wedge, u, lap_T.grid_data(),
-            domain, coords_shell, coords_radii, dt, stats, ev_params, KappaCallback( kappa_wedge ), ZeroCallback(0.0), ZeroCallback(0.0), ZeroCallback(0.0) );
+            domain, coords_shell, coords_radii, dt, stats, ev_params,
+            ZeroCallback( 0.0 ), ZeroCallback( 0.0 ), ZeroCallback( 0.0 ) );
 
         linalg::apply( A_evdiff, T, rhs_ev );
 

@@ -1,3 +1,8 @@
+#pragma once
+
+#include "dense/vec.hpp"
+#include "fe/wedge/integrands.hpp"
+#include "grid/grid_types.hpp"
 #include "kokkos/kokkos_wrapper.hpp"
 #include "linalg/vector_fv.hpp"
 #include "linalg/vector_q1isoq2_q1.hpp"
@@ -41,7 +46,7 @@ struct DiffusionCoefficient
         const double cp_1 = cp_( local_subdomain_id, r_cell );
         const double cp_2 = cp_( local_subdomain_id, r_cell + 1 );
 
-        const double cp_q = rho_1 + t * ( rho_2 - rho_1 );
+        const double cp_q = cp_1 + t * ( cp_2 - cp_1 );
 
         double cp_val = cp_q;
 
@@ -171,7 +176,7 @@ struct ShearHeatingCoefficient
             const double cp_1 = cp_( local_subdomain_id, r_cell );
             const double cp_2 = cp_( local_subdomain_id, r_cell + 1 );
 
-            const double cp_q = rho_1 + t * ( rho_2 - rho_1 );
+            const double cp_q = cp_1 + t * ( cp_2 - cp_1 );
 
             double cp_val = cp_q;
 

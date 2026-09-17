@@ -193,7 +193,7 @@ class KMass
     }
 };
 
-// static_assert( linalg::OperatorLike< KMass< float > > );
-// static_assert( linalg::OperatorLike< KMass< double > > );
+static_assert( linalg::OperatorLike< KMass< float > > );
+static_assert( linalg::OperatorLike< KMass< double > > );
 
 } // namespace terra::fe::wedge::operators::shell

@@ -2,7 +2,6 @@
 
 #include "../../quadrature/quadrature.hpp"
 #include "communication/shell/communication.hpp"
-#include "communication/shell/communication_plan.hpp"
 #include "dense/vec.hpp"
 #include "fe/wedge/integrands.hpp"
 #include "fe/wedge/kernel_helpers.hpp"
@@ -13,7 +12,7 @@
 
 namespace terra::fe::wedge::linearforms::shell {
 
-/// \brief Linear form for shear heating term in energy equation.
+/// \brief Linear form for the adiabatic heating term in the energy equation.
 
 template < typename ScalarT, typename CoefficientT, int VelocityVecDim = 3 >
 class AdiabaticHeatingTerm
@@ -38,8 +37,6 @@ class AdiabaticHeatingTerm
 
     communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT > send_buffers_;
     communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT > recv_buffers_;
-
-    terra::communication::shell::ShellBoundaryCommPlan< grid::Grid4DDataScalar< ScalarT > > comm_plan_;
 
     // Kokkos views set in apply_impl() before the parallel launch.
     grid::Grid4DDataScalar< ScalarType >              dst_;
@@ -67,7 +64,6 @@ class AdiabaticHeatingTerm
     , operator_communication_mode_( operator_communication_mode )
     , send_buffers_( domain )
     , recv_buffers_( domain )
-    , comm_plan_( domain )
     {}
 
     void apply_impl( DstVectorType& dst )
@@ -82,7 +78,7 @@ class AdiabaticHeatingTerm
         vel_grid_ = velocity_.grid_data();
 
         Kokkos::parallel_for(
-            "inv_rho_grad_rho_dot_u", grid::shell::local_domain_md_range_policy_cells( domain_ ), *this );
+            "adiabatic_heating_term", grid::shell::local_domain_md_range_policy_cells( domain_ ), *this );
         Kokkos::fence();
 
         if ( operator_communication_mode_ == linalg::OperatorCommunicationMode::CommunicateAdditively )
@@ -90,14 +86,11 @@ class AdiabaticHeatingTerm
             communication::shell::pack_send_and_recv_local_subdomain_boundaries(
                 domain_, dst_, send_buffers_, recv_buffers_ );
             communication::shell::unpack_and_reduce_local_subdomain_boundaries( domain_, dst_, recv_buffers_ );
-
-            // util::Timer timer_comm( "inv_rho_grad_rho_dot_u__comm" );
-            // terra::communication::shell::send_recv_with_plan( comm_plan_, dst_, recv_buffers_ );
         }
     }
 
     /// \brief Kokkos kernel: per-cell contribution to
-    ///        \f$ f_i = \int_E \frac{1}{\rho} \nabla\rho \cdot \mathbf{u} \, \phi_i \, \mathrm{d}x \f$.
+    ///        \f$ f_i = -\int_E c \, (\mathbf{u} \cdot \hat{\mathbf{r}}) \, T \, \phi_i \, \mathrm{d}x \f$.
     KOKKOS_INLINE_FUNCTION void
         operator()( const int local_subdomain_id, const int x_cell, const int y_cell, const int r_cell ) const
     {
@@ -119,13 +112,9 @@ class AdiabaticHeatingTerm
 
             // Gather wedge radii.
             const ScalarT r_1 = radii_( local_subdomain_id, r_cell );
-            const ScalarT r_2 = radii_( local_subdomain_id, r_cell + 1 );   
+            const ScalarT r_2 = radii_( local_subdomain_id, r_cell + 1 );
 
             dense::Vec< ScalarT, 6 > T[num_wedges_per_hex_cell];
-
-            // dense::Vec< ScalarT, 6 > ux[num_wedges_per_hex_cell];
-            // dense::Vec< ScalarT, 6 > uy[num_wedges_per_hex_cell];
-            // dense::Vec< ScalarT, 6 > uz[num_wedges_per_hex_cell];
 
             extract_local_wedge_scalar_coefficients(
                 T, local_subdomain_id, x_cell, y_cell, r_cell, T_grid_ );
@@ -136,10 +125,6 @@ class AdiabaticHeatingTerm
                 extract_local_wedge_vector_coefficients(
                     vel_coeffs[d], local_subdomain_id, x_cell, y_cell, r_cell, d, vel_grid_ );
             }
-            
-            // extract_local_wedge_scalar_coefficients( ux, local_subdomain_id, x_cell, y_cell, r_cell, ux_ );
-            // extract_local_wedge_scalar_coefficients( uy, local_subdomain_id, x_cell, y_cell, r_cell, uy_ );
-            // extract_local_wedge_scalar_coefficients( uz, local_subdomain_id, x_cell, y_cell, r_cell, uz_ );
 
             // Compute the local element matrix.
 
@@ -176,10 +161,10 @@ class AdiabaticHeatingTerm
 
                     const auto lat_dir = forward_map_lat(
                         wedge_phy_surf[wedge][0], wedge_phy_surf[wedge][1], wedge_phy_surf[wedge][2], qp(0), qp(1) );
-                    
+
                     const auto r_hat  = lat_dir.normalized();
 
-                    // we need vector pointing in the direction of gravity, 
+                    // we need vector pointing in the direction of gravity,
                     // and hopefully that will not invert for the Earth anytime soon in this Universe.
 
                     const ScalarT adiabatic_heating_qp = (-r_hat.dot(vel_eval) * T_eval);
@@ -201,7 +186,5 @@ class AdiabaticHeatingTerm
         }
     }
 };
-
-// static_assert( linalg::LinearFormLike< ShearHeatingTerm< double > > );
 
 } // namespace terra::fe::wedge::linearforms::shell
