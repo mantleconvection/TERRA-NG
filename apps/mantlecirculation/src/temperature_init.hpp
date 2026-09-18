@@ -110,6 +110,7 @@ void initialize_temperature_fields(
     const Parameters&                                               prm )
 {
     using util::logroot;
+
     const auto& init_temp = prm.physics_parameters.initial_temperature;
 
     if ( init_temp.profile == InitialTemperatureProfile::FROM_FILE )
@@ -130,6 +131,7 @@ void initialize_temperature_fields(
     {
         util::logroot << "Computing conductive reference temperature profile" << std::endl;
 
+        // Broadcast reference temperature profile to Q1 nodes
         Kokkos::parallel_for(
             "ComputeConductiveProfile",
             grid::shell::local_domain_md_range_policy_radial( domain ),
@@ -282,6 +284,7 @@ void initialize_temperature_fields(
 // Fill radially constant otherwise.
 template < typename ScalarType >
 void radial_profile_init(
+    grid::Grid2DDataScalar< ScalarType >&       temperature_profile,
     grid::Grid2DDataScalar< ScalarType >&       rho_profile,
     grid::Grid2DDataScalar< ScalarType >&       alpha_profile,
     grid::Grid2DDataScalar< ScalarType >&       cp_profile,
@@ -289,7 +292,54 @@ void radial_profile_init(
     const grid::Grid2DDataScalar< ScalarType >& coords_radii,
     const Parameters&                           prm )
 {
-    const auto& phys = prm.physics_parameters;
+    const auto& phys      = prm.physics_parameters;
+    const auto& init_temp = prm.physics_parameters.initial_temperature;
+
+    // Reference temperature profile
+    if ( init_temp.profile == InitialTemperatureProfile::FROM_FILE )
+    {
+        util::logroot << "Reading reference temperature from: '" << init_temp.Tref_profile_csv_path << "'" << std::endl;
+
+        // Read and populate reference temperature profile
+        temperature_profile = shell::interpolate_radial_profile_into_subdomains_from_csv(
+            init_temp.Tref_profile_csv_path,
+            phys.radial_profiles_radii_key,
+            init_temp.Tref_profile_value_key,
+            coords_radii,
+            ScalarType( 1 ) / prm.mesh_parameters.mantle_thickness_m,
+            ScalarType( 1 ) / prm.boundary_parameters.delta_T_K );
+    }
+
+    else if ( init_temp.profile == InitialTemperatureProfile::CONDUCTIVE )
+    {
+        util::logroot << "Computing conductive reference temperature profile" << std::endl;
+
+        Kokkos::parallel_for(
+            "ComputeConductiveProfile",
+            grid::shell::local_domain_md_range_policy_radial( domain ),
+            ComputeConductiveProfile{
+                prm.mesh_parameters.radius_min,
+                prm.mesh_parameters.radius_max,
+                prm.boundary_parameters.temperature_min,
+                coords_radii,
+                temperature_profile } );
+    }
+
+    else if ( init_temp.profile == InitialTemperatureProfile::POWER_LAW )
+    {
+        util::logroot << "Computing power-law reference temperature profile" << std::endl;
+
+        Kokkos::parallel_for(
+            "ComputePowerLawProfile",
+            grid::shell::local_domain_md_range_policy_radial( domain ),
+            ComputePowerLawProfile{
+                prm.mesh_parameters.radius_min,
+                prm.mesh_parameters.radius_max,
+                prm.boundary_parameters.temperature_min,
+                prm.boundary_parameters.temperature_max,
+                coords_radii,
+                temperature_profile } );
+    }
 
     // Density
     if ( !phys.density_profile_csv_path.empty() )

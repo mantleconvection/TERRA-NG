@@ -221,7 +221,7 @@ Result<> run( const Parameters& prm )
 
     // Fill radial profile arrays
     radial_profile_init(
-        rho_profile, alpha_profile, cp_profile, *domains[velocity_level], coords_radii[velocity_level], prm );
+        T_ref, rho_profile, alpha_profile, cp_profile, *domains[velocity_level], coords_radii[velocity_level], prm );
 
     // Setting up Stokes velocity boundary conditions.
     //
