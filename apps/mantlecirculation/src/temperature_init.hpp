@@ -131,7 +131,7 @@ void initialize_temperature_fields(
     {
         util::logroot << "Computing conductive reference temperature profile" << std::endl;
 
-        // Broadcast reference temperature profile to Q1 nodes
+        // Compute conductive temperature profile
         Kokkos::parallel_for(
             "ComputeConductiveProfile",
             grid::shell::local_domain_md_range_policy_radial( domain ),
@@ -159,7 +159,7 @@ void initialize_temperature_fields(
                 T_ref } );
     }
 
-    // Broadcast reference profile to W1 nodes
+    // Broadcast reference temperature profile to W1 nodes
     Kokkos::parallel_for(
         "RadialProfileToW1",
         grid::shell::local_domain_md_range_policy_nodes( domain ),
@@ -457,6 +457,7 @@ template < typename ScalarType >
 void load_temperature_checkpoint(
     linalg::VectorW1Vec< ScalarType, 3 >&       u_velocity,
     linalg::VectorW1Scalar< ScalarType >&       T,
+    ScalarType&                                 model_time,
     const grid::shell::DistributedDomain&       domain,
     const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
     const grid::Grid2DDataScalar< ScalarType >& coords_radii,
@@ -519,6 +520,10 @@ void load_temperature_checkpoint(
     {
         Kokkos::abort( success_temp.error().c_str() );
     }
+
+    // Read checkpoint model time
+    if ( prm.io_parameters.continue_simulation )
+        model_time = io::read_xdmf_model_time( prm.io_parameters.checkpoint_dir, prm.io_parameters.checkpoint_step );
 
     // Nondimensionalise checkpoint, if necessary
     if ( metadata.is_dimensional )

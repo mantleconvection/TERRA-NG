@@ -101,8 +101,9 @@ struct XdmfFields
 inline Result<> write_xdmf(
     std::optional< io::XDMFOutput< ScalarType > >& xdmf_output,
     std::optional< io::XDMFOutput< ScalarType > >& xdmf_output_pressure,
-    const int                                      timestep,
-    const bool                                     output_dimensional,
+    int                                            timestep,
+    ScalarType                                     simulated_time_Ma,
+    bool                                           output_dimensional,
     const std::vector< ScalarXdmfField >&          scalar_fields,
     const std::vector< VectorXdmfField >&          vector_fields,
     const std::optional< ScalarXdmfField >&        pressure_field )
@@ -117,7 +118,7 @@ inline Result<> write_xdmf(
         for ( auto& f : vector_fields )
             scale( *f.data, f.scale_factor );
 
-        xdmf_output->write( timestep );
+        xdmf_output->write( timestep, simulated_time_Ma );
 
         // ... and nondimensionalise again, if required
         for ( auto& f : scalar_fields )
@@ -132,7 +133,7 @@ inline Result<> write_xdmf(
         {
             scale( *pressure_field->data, pressure_field->scale_factor );
 
-            xdmf_output_pressure->write( timestep );
+            xdmf_output_pressure->write( timestep, simulated_time_Ma );
 
             if ( pressure_field->restore )
                 scale( *pressure_field->data, ScalarType( 1 ) / pressure_field->scale_factor );

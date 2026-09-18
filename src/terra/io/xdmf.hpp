@@ -2,7 +2,6 @@
 #pragma once
 
 #include <fstream>
-#include <iomanip>
 #include <sstream>
 
 #include "mpi/mpi.hpp"
@@ -207,12 +206,6 @@ class XDMFOutput
         }
     }
 
-    /// @brief Set the write counter and according zero-padding width manually.
-    ///
-    /// This will only affect the step number attached to the file names. The geometry is still written once during the
-    /// first write() call.
-    void set_pad_width( int pad_width ) { pad_width_ = pad_width; }
-
     /// @brief Sets metadata flag whether output is dimensional or not
     void set_is_dimensional( const bool is_dimensional ) { is_dimensional_ = is_dimensional; }
 
@@ -300,7 +293,7 @@ class XDMFOutput
     /// The write() calls will allocate temporary storage on the host if host and device memory are not shared.
     /// Currently, for data grids, some host-side temporary buffers are kept after this method returns (the sizes depend
     /// on the type of data added) to avoid frequent reallocation.
-    void write( int time )
+    void write( int step, double time = 0.0 )
     {
         using util::XML;
 
@@ -312,11 +305,8 @@ class XDMFOutput
         const auto geometry_file_path = directory_path_ + "/" + geometry_file_base;
         const auto topology_file_path = directory_path_ + "/" + topology_file_base;
 
-        // Construct file path and name with zero-padded time/timestep.
-        std::ostringstream oss;
-        oss << std::setw( pad_width_ ) << std::setfill( '0' ) << time;
-        time_str_                 = oss.str();
-        const auto step_file_path = directory_path_ + "/step_" + time_str_ + ".xmf";
+        // Construct file path and name.
+        const auto step_file_path = directory_path_ + "/step_" + std::to_string( step ) + ".xmf";
 
         const int num_subdomains = coords_shell_device_.extent( 0 );
         const int nodes_x        = coords_shell_device_.extent( 1 );
@@ -461,7 +451,8 @@ class XDMFOutput
         auto domain = XML( "Domain" );
         auto grid   = XML( "Grid", { { "Name", "Grid" }, { "GridType", "Uniform" } } );
 
-        grid.add_child( XML( "Time", { { "Value", std::to_string( time ) } } ) );
+        grid.add_child( XML( "Step", { { "Value", std::to_string( step ) } } ) );
+        grid.add_child( XML( "ModelTime", { { "Value", std::to_string( time ) } } ) );
 
         auto geometry =
             XML( "Geometry", { { "Type", "XYZ" } } )
@@ -494,25 +485,25 @@ class XDMFOutput
 
         for ( const auto& [data, output_type] : device_data_views_scalar_float_ )
         {
-            const auto attribute = write_scalar_attribute_file( data, output_type );
+            const auto attribute = write_scalar_attribute_file( data, output_type, step );
             grid.add_child( attribute );
         }
 
         for ( const auto& [data, output_type] : device_data_views_scalar_double_ )
         {
-            const auto attribute = write_scalar_attribute_file( data, output_type );
+            const auto attribute = write_scalar_attribute_file( data, output_type, step );
             grid.add_child( attribute );
         }
 
         for ( const auto& [data, output_type] : device_data_views_vec_float_ )
         {
-            const auto attribute = write_vec_attribute_file( data, output_type );
+            const auto attribute = write_vec_attribute_file( data, output_type, step );
             grid.add_child( attribute );
         }
 
         for ( const auto& [data, output_type] : device_data_views_vec_double_ )
         {
-            const auto attribute = write_vec_attribute_file( data, output_type );
+            const auto attribute = write_vec_attribute_file( data, output_type, step );
             grid.add_child( attribute );
         }
 
@@ -737,9 +728,10 @@ class XDMFOutput
     template < typename ScalarTypeIn >
     util::XML write_scalar_attribute_file(
         const grid::Grid4DDataScalar< ScalarTypeIn >& data,
-        const OutputTypeFloat&                        output_type )
+        const OutputTypeFloat&                        output_type,
+        int                                           step )
     {
-        const auto attribute_file_base = data.label() + "_" + time_str_ + ".bin";
+        const auto attribute_file_base = data.label() + "_" + std::to_string( step ) + ".bin";
         const auto attribute_file_path = directory_path_ + "/" + attribute_file_base;
 
         {
@@ -861,9 +853,10 @@ class XDMFOutput
     template < typename ScalarTypeIn, int VecDim >
     util::XML write_vec_attribute_file(
         const grid::Grid4DDataVec< ScalarTypeIn, VecDim >& data,
-        const OutputTypeFloat&                             output_type )
+        const OutputTypeFloat&                             output_type,
+        int                                                step )
     {
-        const auto attribute_file_base = data.label() + "_" + time_str_ + ".bin";
+        const auto attribute_file_base = data.label() + "_" + std::to_string( step ) + ".bin";
         const auto attribute_file_path = directory_path_ + "/" + attribute_file_base;
 
         {
@@ -1111,10 +1104,8 @@ class XDMFOutput
     std::optional< grid::Grid4DDataVec< double, 3 >::host_mirror_type > host_data_mirror_vec_double_;
     std::optional< grid::Grid4DDataVec< float, 3 >::host_mirror_type >  host_data_mirror_vec_float_;
 
-    std::string time_str_;
-    int         pad_width_            = 0;
-    bool        first_write_happened_ = false;
-    bool        is_dimensional_       = false;
+    bool first_write_happened_ = false;
+    bool is_dimensional_       = false;
 
     int64_t number_of_nodes_offset_      = -1;
     int64_t number_of_elements_offset_   = -1;
@@ -1430,7 +1421,8 @@ template < typename GridDataType >
 
     // Now write from buffer to grid.
 
-    typename GridDataType::host_mirror_type grid_data_host = grid::create_mirror( Kokkos::HostSpace{}, grid_data_device );
+    typename GridDataType::host_mirror_type grid_data_host =
+        grid::create_mirror( Kokkos::HostSpace{}, grid_data_device );
 
     const auto checkpoint_is_float =
         requested_grid_data_file.value().scalar_data_type == 2 && requested_grid_data_file.value().scalar_bytes == 4;
@@ -1528,6 +1520,36 @@ template < typename GridDataType >
     Kokkos::fence();
 
     return { util::Ok{} };
+}
+
+/// @brief Reads back the ModelTime value written into a step's .xmf file.
+///
+/// @param checkpoint_dir directory containing the step_*.xmf files
+/// @param step the timestep number
+/// @return The ModelTime value, or 0.0 if the file, tag, or attribute could not be found.
+[[nodiscard]] inline double read_xdmf_model_time( const std::string& checkpoint_dir, int step )
+{
+    const auto step_file_path = checkpoint_dir + "/step_" + std::to_string( step ) + ".xmf";
+
+    if ( !std::filesystem::exists( step_file_path ) )
+        return 0.0;
+
+    std::ifstream     in( step_file_path );
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+
+    const auto value = util::find_xml_attribute( buffer.str(), "ModelTime", "Value" );
+    if ( !value )
+        return 0.0;
+
+    try
+    {
+        return std::stod( *value );
+    }
+    catch ( const std::exception& )
+    {
+        return 0.0;
+    }
 }
 
 } // namespace terra::io
