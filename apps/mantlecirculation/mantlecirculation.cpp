@@ -193,8 +193,6 @@ Result<> run( const Parameters& prm )
         "alpha_profile", coords_radii[velocity_level].extent( 0 ), coords_radii[velocity_level].extent( 1 ) );
     Grid2DDataScalar< ScalarType > cp_profile(
         "cp_profile", coords_radii[velocity_level].extent( 0 ), coords_radii[velocity_level].extent( 1 ) );
-    Grid2DDataScalar< ScalarType > kappa_profile(
-        "kappa_profile", coords_radii[velocity_level].extent( 0 ), coords_radii[velocity_level].extent( 1 ) );
 
     // Finite-volume functions/vectors.
 
@@ -235,7 +233,6 @@ Result<> run( const Parameters& prm )
         rho_profile,
         alpha_profile,
         cp_profile,
-        kappa_profile,
         *domains[velocity_level],
         coords_radii[velocity_level],
         prm );

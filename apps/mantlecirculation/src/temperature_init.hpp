@@ -302,7 +302,6 @@ void radial_profile_init(
     grid::Grid2DDataScalar< ScalarType >&       rho_profile,
     grid::Grid2DDataScalar< ScalarType >&       alpha_profile,
     grid::Grid2DDataScalar< ScalarType >&       cp_profile,
-    grid::Grid2DDataScalar< ScalarType >&       kappa_profile,
     const grid::shell::DistributedDomain&       domain,
     const grid::Grid2DDataScalar< ScalarType >& coords_radii,
     const Parameters&                           prm )
@@ -375,14 +374,6 @@ void radial_profile_init(
         Kokkos::deep_copy( cp_profile, ScalarType( 1 ) );
     }
 
-    // Kappa
-    // Compute diffusivity profile from k (=1), cp_profile and rho_profile
-    Kokkos::parallel_for(
-        "compute kappa_profile",
-        grid::shell::local_domain_md_range_policy_radial( domain ),
-        KOKKOS_LAMBDA( int id, int r ) {
-            kappa_profile( id, r ) = ScalarType( 1 ) / ( rho_profile( id, r ) * cp_profile( id, r ) );
-        } );
     Kokkos::fence();
 }
 
