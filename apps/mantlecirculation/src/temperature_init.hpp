@@ -415,7 +415,7 @@ void load_temperature_checkpoint(
     using util::logroot;
 
     logroot << "Loading checkpoint from " << prm.io_parameters.checkpoint_dir << " at simulation step "
-            << prm.io_parameters.checkpoint_step << std::endl;
+            << prm.io_parameters.checkpoint_step << "." << std::endl;
 
     // Checking if checkpoint is dimensional or nondimensional
     auto metadata_result = io::read_xdmf_checkpoint_metadata( prm.io_parameters.checkpoint_dir );

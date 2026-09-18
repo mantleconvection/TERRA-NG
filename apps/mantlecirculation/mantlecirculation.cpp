@@ -257,15 +257,60 @@ Result<> run( const Parameters& prm )
 
     logroot << "Setting up energy equation solver ..." << std::endl;
 
-    initialize_temperature_fields(
-        T,
-        T_ref,
-        ( *domains[velocity_level] ),
-        coords_shell[velocity_level],
-        coords_radii[velocity_level],
-        ownership_mask_data[velocity_level],
-        boundary_mask_data[velocity_level],
-        prm );
+    // Loading checkpoint
+    if ( prm.io_parameters.load_checkpoint )
+    {
+        load_temperature_checkpoint(
+            u.block_1(),
+            T,
+            ( *domains[velocity_level] ),
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            prm );
+    }
+
+    else // no checkpoint
+    {
+        initialize_temperature_fields(
+            T,
+            T_ref,
+            ( *domains[velocity_level] ),
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            ownership_mask_data[velocity_level],
+            boundary_mask_data[velocity_level],
+            prm );
+    }
+
+    // Update Tdev
+    subtract_radial_profile( Tdev, T, T_ref, *domains[velocity_level] );
+
+    // Compute temperature-dependent viscosity
+    if ( prm.physics_parameters.viscosity_parameters.law != ViscosityLaw::CONSTANT )
+    {
+        logroot << "Computing initial temperature-dependent viscosity ..." << std::endl;
+        if ( prm.physics_parameters.viscosity_parameters.law == ViscosityLaw::FK_TYPE3 )
+        {
+            stokes.update_viscosity( Tdev );
+        }
+        else
+        {
+            stokes.update_viscosity( T );
+        }
+    }
+
+    // Initialise density W1 field for PDA from initial temperature via lookup-table
+    if ( pda_form )
+    {
+        pda->update_density_from_table( T );
+        // Save density history for first timestep -> density will change after energy solve
+        pda->seed_history();
+    }
+
+    // Reference conductive temperature profile (also used for the Nusselt number).
+    VectorW1Scalar< ScalarType > T_cond( "T_cond", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
+    compute_reference_conductive_profile(
+        T_cond, ( *domains[velocity_level] ), coords_shell[velocity_level], coords_radii[velocity_level], prm );
 
     table->add_row( {
         { "tag", "setup" },
@@ -278,11 +323,6 @@ Result<> run( const Parameters& prm )
 
     table->print_pretty();
     table->clear();
-
-    // Reference conductive temperature profile (also used for the Nusselt number).
-    VectorW1Scalar< ScalarType > T_cond( "T_cond", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
-    compute_reference_conductive_profile(
-        T_cond, ( *domains[velocity_level] ), coords_shell[velocity_level], coords_radii[velocity_level], prm );
 
     // Setting up XDMF output (serves for both checkpointing and visualization).
 
@@ -355,43 +395,6 @@ Result<> run( const Parameters& prm )
 
         return fields;
     };
-
-    // Loading checkpoint
-    if ( prm.io_parameters.load_checkpoint )
-    {
-        load_temperature_checkpoint(
-            u.block_1(),
-            T,
-            ( *domains[velocity_level] ),
-            coords_shell[velocity_level],
-            coords_radii[velocity_level],
-            prm );
-    }
-
-    // Update Tdev
-    subtract_radial_profile( Tdev, T, T_ref, *domains[velocity_level] );
-
-    // Compute temperature-dependent viscosity
-    if ( prm.physics_parameters.viscosity_parameters.law != ViscosityLaw::CONSTANT )
-    {
-        logroot << "Computing initial temperature-dependent viscosity ..." << std::endl;
-        if ( prm.physics_parameters.viscosity_parameters.law == ViscosityLaw::FK_TYPE3 )
-        {
-            stokes.update_viscosity( Tdev );
-        }
-        else
-        {
-            stokes.update_viscosity( T );
-        }
-    }
-
-    // Initialise density W1 field for PDA from initial temperature via lookup-table
-    if ( pda_form )
-    {
-        pda->update_density_from_table( T );
-        // Save density history for first timestep -> density will change after energy solve
-        pda->seed_history();
-    }
 
     // Setting XDMF file padding width according to max_timesteps.
     xdmf_output->set_pad_width(
