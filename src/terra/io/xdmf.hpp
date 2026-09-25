@@ -14,6 +14,27 @@
 
 namespace terra::io {
 
+// Portable large-count collective write. MPI_File_write_all takes an int byte
+// count, which overflows for buffers > ~2 GiB (e.g. MT512 topology ~4 GiB/rank
+// at np16 -> silent 0-byte write). Write in <=1 GiB chunks. write_all is
+// collective, so every rank must issue the same number of calls; loop to the
+// global-max chunk count and let finished ranks contribute zero-byte writes.
+inline void write_all_chunked( MPI_File fh, const char* data, std::size_t nbytes )
+{
+    const std::size_t chunk = ( std::size_t( 1 ) << 30 ); // 1 GiB < INT_MAX
+    std::size_t       local_chunks = ( nbytes + chunk - 1 ) / chunk;
+    unsigned long long lc = static_cast< unsigned long long >( local_chunks ), gc = 0;
+    MPI_Allreduce( &lc, &gc, 1, MPI_UNSIGNED_LONG_LONG, MPI_MAX, MPI_COMM_WORLD );
+    std::size_t off = 0;
+    for ( unsigned long long i = 0; i < gc; ++i )
+    {
+        std::size_t rem = ( off < nbytes ) ? ( nbytes - off ) : std::size_t( 0 );
+        int         cnt = static_cast< int >( rem < chunk ? rem : chunk );
+        MPI_File_write_all( fh, data + off, cnt, MPI_CHAR, MPI_STATUS_IGNORE );
+        off += static_cast< std::size_t >( cnt );
+    }
+}
+
 static constexpr int32_t checkpoint_version = 2;
 
 /// @brief XDMF output that simultaneously serves for visualization with software like Paraview and as a simulation
@@ -407,8 +428,7 @@ class XDMFOutput
                 std::string geom_str = geometry_stream.str();
 
                 // Write data collectively
-                MPI_File_write_all(
-                    fh, geom_str.data(), static_cast< int >( geom_str.size() ), MPI_CHAR, MPI_STATUS_IGNORE );
+                write_all_chunked( fh, geom_str.data(), geom_str.size() );
 
                 // Close the file
                 MPI_File_close( &fh );
@@ -441,8 +461,7 @@ class XDMFOutput
                 std::string topo_str = topology_stream.str();
 
                 // Write data collectively
-                MPI_File_write_all(
-                    fh, topo_str.data(), static_cast< int >( topo_str.size() ), MPI_CHAR, MPI_STATUS_IGNORE );
+                write_all_chunked( fh, topo_str.data(), topo_str.size() );
 
                 // Close the file
                 MPI_File_close( &fh );
@@ -764,8 +783,7 @@ class XDMFOutput
             std::string attr_str = attribute_stream.str();
 
             // Write data collectively
-            MPI_File_write_all(
-                fh, attr_str.data(), static_cast< int >( attr_str.size() ), MPI_CHAR, MPI_STATUS_IGNORE );
+            write_all_chunked( fh, attr_str.data(), attr_str.size() );
 
             // Close the file
             MPI_File_close( &fh );
@@ -889,8 +907,7 @@ class XDMFOutput
             std::string attr_str = attribute_stream.str();
 
             // Write data collectively
-            MPI_File_write_all(
-                fh, attr_str.data(), static_cast< int >( attr_str.size() ), MPI_CHAR, MPI_STATUS_IGNORE );
+            write_all_chunked( fh, attr_str.data(), attr_str.size() );
 
             // Close the file
             MPI_File_close( &fh );
@@ -1073,12 +1090,7 @@ class XDMFOutput
         std::string checkpoint_metadata_str = checkpoint_metadata_stream.str();
 
         // Write data collectively
-        MPI_File_write_all(
-            fh,
-            checkpoint_metadata_str.data(),
-            static_cast< int >( checkpoint_metadata_str.size() ),
-            MPI_CHAR,
-            MPI_STATUS_IGNORE );
+        write_all_chunked( fh, checkpoint_metadata_str.data(), checkpoint_metadata_str.size() );
 
         // Close the file
         MPI_File_close( &fh );
@@ -1350,10 +1362,30 @@ template < typename GridDataType >
     }
 
     // Check if we can also find a binary data file in the checkpoint directory.
+    // The writer zero-pads the step to a runtime width (set_pad_width, e.g. 6 ->
+    // "T_002500.bin"); this reader does not know that width, so try the unpadded
+    // name and every zero-padded width up to 12 and use whichever exists.
+    std::string data_file_path;
+    {
+        std::vector< std::string > candidates;
+        candidates.push_back( checkpoint_directory + "/" + data_label + "_" + std::to_string( step ) + ".bin" );
+        for ( int w = 1; w <= 12; ++w )
+        {
+            std::ostringstream oss;
+            oss << std::setw( w ) << std::setfill( '0' ) << step;
+            candidates.push_back( checkpoint_directory + "/" + data_label + "_" + oss.str() + ".bin" );
+        }
+        for ( const auto& c : candidates )
+        {
+            if ( std::filesystem::exists( c ) )
+            {
+                data_file_path = c;
+                break;
+            }
+        }
+    }
 
-    const auto data_file_path = checkpoint_directory + "/" + data_label + "_" + std::to_string( step ) + ".bin";
-
-    if ( !std::filesystem::exists( data_file_path ) )
+    if ( data_file_path.empty() )
     {
         return { "Could not find checkpoint data file for requested label and step." };
     }

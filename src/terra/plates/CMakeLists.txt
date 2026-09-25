@@ -1,0 +1,18 @@
+target_sources(terra
+    PRIVATE
+    functions_for_geometry.hpp
+    functions_for_plates.hpp
+    functions_for_rotations.hpp
+    plate_rotation_provider.hpp
+    plate_storage.hpp
+    plate_velocity_device.hpp
+        plate_velocity_provider.hpp
+    local_averaging_point_weight_provider.hpp
+    smoothing_strategies.hpp
+    types.hpp
+    conversions.hpp
+    file_io.hpp
+    json.hpp
+    spherical_predicates.hpp
+    plate_stage_data.hpp
+)

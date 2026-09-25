@@ -96,6 +96,22 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
     ScalarT diffusivity_;
     ScalarT dt_;
 
+    // Optional per-wedge artificial (entropy) viscosity, ADDED to diffusivity_ in the
+    // diffusion term when use_nu_h_ is set. Lets the EV solver fold nu_h implicitly
+    // into this fused operator (ASPECT-style) instead of a separate matvec.
+    grid::Grid5DDataScalar< ScalarT > nu_h_wedge_;
+    bool                              use_nu_h_ = false;
+
+    // Optional radial profile of the nondimensional diffusion coefficient,
+    //   kappa_hat(r) = k_hat(r) / ( rho_hat(r) * cp_hat(r) ),
+    // which MULTIPLIES diffusivity_ (the scalar carries 1/Pe and any global scaling).
+    // The profile is 1 everywhere for an incompressible run, so leaving it unset and
+    // setting it to a unit profile give identical results. Evaluated once per cell as
+    // the mean of the two bounding shell values: the physical coefficient varies only
+    // radially and smoothly, and the artificial nu_h is already per-wedge constant.
+    grid::Grid2DDataScalar< ScalarT > kappa_profile_;
+    bool                              use_kappa_profile_ = false;
+
     bool    treat_boundary_;
     bool    diagonal_;
     ScalarT mass_scaling_;
@@ -216,6 +232,15 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
     const ScalarT& dt() const { return dt_; }
 
     void set_supg_enabled( bool on ) { supg_enabled_ = on; }
+    void set_nu_h_field( const grid::Grid5DDataScalar< ScalarT >& nu ) { nu_h_wedge_ = nu; use_nu_h_ = true; }
+    void clear_nu_h_field() { use_nu_h_ = false; }
+    /// Radially varying diffusion coefficient; multiplies the scalar diffusivity.
+    void set_kappa_profile( const grid::Grid2DDataScalar< ScalarT >& kappa )
+    {
+        kappa_profile_     = kappa;
+        use_kappa_profile_ = true;
+    }
+    void clear_kappa_profile() { use_kappa_profile_ = false; }
     bool supg_enabled() const { return supg_enabled_; }
 
     const char* path_name() const { return kernel_path_ == KernelPath::Slow ? "slow" : "fast"; }
@@ -389,6 +414,12 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                         vel_interp[wedge][q]( d ) += vel_coeffs[d][wedge]( i ) * shape_i;
                 }
 
+        // Radial diffusion coefficient for this cell (1 when no profile is set).
+        const ScalarT kappa_cell =
+            use_kappa_profile_ ?
+                ScalarT( 0.5 ) * ( kappa_profile_( s, r_cell ) + kappa_profile_( s, r_cell + 1 ) ) :
+                ScalarT( 1 );
+
         ScalarT streamline_diffusivity[num_wedges_per_hex_cell];
         const auto h = r_2 - r_1;
         for ( int wedge = 0; wedge < num_wedges_per_hex_cell; ++wedge )
@@ -398,7 +429,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
             {
                 const auto&   uq         = vel_interp[wedge][q];
                 const ScalarT vel_norm_q = uq.norm();
-                const ScalarT tau_q      = supg_tau< ScalarT >( vel_norm_q, diffusivity_, h, 1e-08 );
+                const ScalarT tau_q = supg_tau< ScalarT >( vel_norm_q, diffusivity_ * kappa_cell, h, 1e-08 );
                 tau_accum += tau_q * quad_weights[q];
                 waccum    += quad_weights[q];
             }
@@ -428,7 +459,10 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                         const auto grad_j  = J_inv_transposed * grad_shape( j, quad_points[q] );
 
                         const auto mass       = shape_i * shape_j;
-                        const auto diffusion  = diffusivity_ * grad_i.dot( grad_j );
+                        const auto diffusion =
+                            ( diffusivity_ * kappa_cell +
+                              ( use_nu_h_ ? nu_h_wedge_( s, x_cell, y_cell, r_cell, wedge ) : ScalarT( 0 ) ) ) *
+                            grad_i.dot( grad_j );
                         const auto advection  = vel.dot( grad_j ) * shape_i;
                         const auto streamline = streamline_diffusivity[wedge] * vel.dot( grad_j ) * vel.dot( grad_i );
 
@@ -677,6 +711,12 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                 return ( at_cmb && j < 3 ) || ( at_surface && j >= 3 );
             };
 
+            // Radial diffusion coefficient for this cell (1 when no profile is set).
+            const double kappa_cell =
+                use_kappa_profile_ ? 0.5 * ( double( kappa_profile_( local_subdomain_id, r_cell_abs ) ) +
+                                             double( kappa_profile_( local_subdomain_id, r_cell_abs + 1 ) ) ) :
+                                     1.0;
+
             for ( int w = 0; w < num_wedges_per_hex_cell; ++w )
             {
                 // Wedge surface vertices in the lateral plane (shmem lookup).
@@ -688,6 +728,11 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                 const double P0[3] = { coords_sh( v0, 0 ), coords_sh( v0, 1 ), coords_sh( v0, 2 ) };
                 const double P1[3] = { coords_sh( v1, 0 ), coords_sh( v1, 1 ), coords_sh( v1, 2 ) };
                 const double P2[3] = { coords_sh( v2, 0 ), coords_sh( v2, 1 ), coords_sh( v2, 2 ) };
+
+                // Per-wedge effective diffusivity = physical kappa + artificial nu_h
+                // (folded implicitly; nu_h == 0 unless the EV solver set the field).
+                const double diff_coeff = double( diffusivity_ ) * double( kappa_cell )
+                    + ( use_nu_h_ ? double( nu_h_wedge_( local_subdomain_id, x_cell, y_cell, r_cell_abs, w ) ) : 0.0 );
 
                 // Differences, hoisted (used per quad).
                 const double dP1_P0[3] = { P1[0] - P0[0], P1[1] - P0[1], P1[2] - P0[2] };
@@ -720,7 +765,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                         vel_q[q][2] = uz;
 
                         const double vn   = Kokkos::sqrt( ux * ux + uy * uy + uz * uz );
-                        const double tauq = supg_tau< double >( vn, double( diffusivity_ ), h_cell, 1e-08 );
+                        const double tauq = supg_tau< double >( vn, double( diffusivity_ ) * kappa_cell, h_cell, 1e-08 );
                         tau_sum += tauq * QUAD_W;
                         w_sum   += QUAD_W;
                     }
@@ -811,7 +856,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                         // For LumpedMass: exclude the mass term from A_scalar (handled in diagonal acc below).
                         const double mass_in_scalar = LumpedMass ? 0.0 : ( double( mass_scaling_ ) * T_hat );
                         const double A_scalar = mass_in_scalar + double( dt_ ) * u_dot_gT;
-                        const double dkappa   = double( dt_ ) * double( diffusivity_ );
+                        const double dkappa   = double( dt_ ) * diff_coeff;
                         const double dtau     = double( dt_ ) * tau_wedge * u_dot_gT;
                         const double Bx = dkappa * gT0 + dtau * ux;
                         const double By = dkappa * gT1 + dtau * uy;
@@ -851,7 +896,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                                 const double Ti  = T_sh( nid, lvl );
 
                                 const double u_dot_gi = ux * gi0 + uy * gi1 + uz * gi2;
-                                const double diff_ii  = double( diffusivity_ ) * ( gi0 * gi0 + gi1 * gi1 + gi2 * gi2 );
+                                const double diff_ii  = diff_coeff * ( gi0 * gi0 + gi1 * gi1 + gi2 * gi2 );
                                 const double adv_ii   = pi * u_dot_gi;
                                 const double supg_ii  = tau_wedge * u_dot_gi * u_dot_gi;
                                 const double A_ii     = diff_ii + adv_ii + supg_ii;

@@ -1,3 +1,4 @@
 add_subdirectory(benchmarks)
 add_subdirectory(mantlecirculation)
+add_subdirectory(plate_velocities)
 add_subdirectory(tools)

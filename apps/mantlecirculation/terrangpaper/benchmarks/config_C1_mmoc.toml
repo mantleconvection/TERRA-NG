@@ -1,0 +1,59 @@
+## Zhong et al. (2008) spherical-shell benchmark, case C1:
+##   Rayleigh number 1e5, viscosity contrast 1 (isoviscous)
+## Free slip at both boundaries, isothermal Dirichlet temperatures, MT256.
+## Energy equation: MMOC semi-Lagrangian transport at Courant number 2.7.
+##
+## The shell 1.22..2.22 comes from the two radii and the Rayleigh number from the
+## reference viscosity, which is 1.721988e24 at Ra = 1e5 and scales inversely.
+## Mesh and subdomain refinement levels are passed on the command line.
+
+radius-cmb=3527020
+radius-surface=6418020
+temperature-surface=0
+temperature-cmb=3500
+reference-viscosity=1.721988e24
+
+## Widen the viscosity clamp: the A-series reference viscosity sits above the
+## default ceiling, which would silently cut the viscosity law.
+viscosity-min=1e18
+viscosity-max=1e28
+
+## eta(T) = rmu^(1/2 - T), so viscosity-rmu is the top-to-bottom contrast.
+viscosity-law="fk-benchmark"
+viscosity-rmu=1
+
+velocity-bc-cmb="freeslip"
+velocity-bc-surface="freeslip"
+temperature-bc-value-cmb=1.0
+temperature-bc-value-surface=0.0
+
+initial-temperature-profile="conductive"
+initial-temperature-sph-degree=4
+initial-temperature-sph-order=0
+initial-temperature-sph-degree-2=4
+initial-temperature-sph-order-2=4
+initial-temperature-sph-factor-2=0.714286
+perturbation-amplitude=0.01
+
+dt-scaling=2.7
+dt-min=1e-8
+dt-max=1000
+t-end=1e9
+max-timesteps=1000000
+energy-solver="mmoc"
+energy-substeps=1
+picard-iterations=1
+
+stokes-krylov-restart=10
+stokes-krylov-max-iterations=10
+stokes-krylov-relative-tolerance=1e-06
+stokes-krylov-absolute-tolerance=1e-12
+stokes-viscous-pc-num-vcycles=1
+stokes-viscous-pc-cheby-order=2
+stokes-viscous-pc-num-smoothing-steps-prepost=3
+stokes-viscous-pc-num-power-iterations=10
+stokes-viscous-pc-agglom-factors=[]
+stokes-penalty-epsilon=1e-7
+
+outdir-overwrite=1
+output-frequency=100

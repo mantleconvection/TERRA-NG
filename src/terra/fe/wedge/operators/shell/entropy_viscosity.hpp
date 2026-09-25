@@ -343,7 +343,8 @@ void compute_nu_h(
     ScalarT                                                      dt,
     const EntropyStats< ScalarT >&                               stats,
     const EntropyViscosityParameters< ScalarT >&                 params,
-    ScalarT                                                      gamma = ScalarT( 0 ) )
+    ScalarT                                                      gamma = ScalarT( 0 ),
+    const grid::Grid4DDataScalar< ScalarT >&                     source = grid::Grid4DDataScalar< ScalarT >{} )
 {
     const auto T_data = T_n.grid_data();
     const auto T_prev = T_nm1.grid_data();
@@ -358,6 +359,13 @@ void compute_nu_h(
     const ScalarT gamma_    = gamma;
     const auto    grid_lat  = grid_coords;
     const auto    radii_v   = radii;
+
+    // Optional spatially-varying total heat-source field F. When provided
+    // (compressible TALA: F = internal + shear-dissipation + adiabatic), it
+    // replaces the constant gamma in the strong residual, interpolated per
+    // quad point. An empty (default) view leaves the scalar-gamma path intact.
+    const auto    source_v   = source;
+    const bool    use_source = source.extent( 0 ) > 0;
 
     constexpr int num_q = quadrature::quad_felippa_3x2_num_quad_points;
 
@@ -384,11 +392,14 @@ void compute_nu_h(
             dense::Vec< ScalarT, num_nodes_per_wedge > T_w[num_wedges_per_hex_cell];
             dense::Vec< ScalarT, num_nodes_per_wedge > Tp_w[num_wedges_per_hex_cell];
             dense::Vec< ScalarT, num_nodes_per_wedge > Lap_w[num_wedges_per_hex_cell];
+            dense::Vec< ScalarT, num_nodes_per_wedge > Src_w[num_wedges_per_hex_cell];
             dense::Vec< ScalarT, num_nodes_per_wedge > u_w[num_wedges_per_hex_cell][3];
 
             extract_local_wedge_scalar_coefficients( T_w,   id, xc, yc, rc, T_data );
             extract_local_wedge_scalar_coefficients( Tp_w,  id, xc, yc, rc, T_prev );
             extract_local_wedge_scalar_coefficients( Lap_w, id, xc, yc, rc, lap_v );
+            if ( use_source )
+                extract_local_wedge_scalar_coefficients( Src_w, id, xc, yc, rc, source_v );
             for ( int d = 0; d < 3; ++d )
             {
                 dense::Vec< ScalarT, num_nodes_per_wedge > comp[num_wedges_per_hex_cell];
@@ -420,6 +431,7 @@ void compute_nu_h(
                     ScalarT                  T_q   = 0;
                     ScalarT                  Tp_q  = 0;
                     ScalarT                  Lap_q = 0;
+                    ScalarT                  Src_q = 0;
                     dense::Vec< ScalarT, 3 > u_q{};
                     dense::Vec< ScalarT, 3 > grad_T_q{};
 
@@ -432,6 +444,8 @@ void compute_nu_h(
                         T_q   += N_j * T_w[wedge]( j );
                         Tp_q  += N_j * Tp_w[wedge]( j );
                         Lap_q += N_j * Lap_w[wedge]( j );
+                        if ( use_source )
+                            Src_q += N_j * Src_w[wedge]( j );
                         for ( int d = 0; d < 3; ++d )
                         {
                             u_q( d )      += N_j * u_w[wedge][d]( j );
@@ -453,8 +467,12 @@ void compute_nu_h(
                     // T-PDE residual.  Vanishes on smooth solutions of the
                     // temperature equation.
                     // Lap_q already encodes −κ∇²T (lumped-mass-projected).
+                    // F is the total heat source: the constant gamma, or (when a
+                    // source field is supplied) the interpolated internal +
+                    // shear-dissipation + adiabatic heating.
+                    const ScalarT F_q = use_source ? Src_q : gamma_;
                     const ScalarT r_E_q =
-                        Kokkos::abs( dE_dt + dT * ( u_dot_g + Lap_q - gamma_ ) );
+                        Kokkos::abs( dE_dt + dT * ( u_dot_g + Lap_q - F_q ) );
 
                     r_E_sq_int += qw[q] * abs_det * r_E_q * r_E_q;
                     u_max_norm = Kokkos::max( u_max_norm, u_q.norm() );

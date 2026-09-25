@@ -173,7 +173,7 @@ class EpsilonDivDivKerngen
 
     // Rotation null-space penalty (active only for fs/fs)
     bool                                              penalty_active_  = false;
-    ScalarT                                           penalty_epsilon_ = 1e-7;
+    ScalarT                                           penalty_epsilon_ = 1.0; // restored: e4946c1 (May 22) accidentally dropped this 1e7x, breaking fs/fs iso high-Ra (FGMRES rate-1.0 stall)
     grid::Grid4DDataVec< ScalarType, VecDim >         null_modes_[3];
     grid::Grid4DDataScalar< grid::NodeOwnershipFlag > ownership_mask_;
 

@@ -109,7 +109,30 @@ add_terra_test(test_supg_fast_vs_slow 4)
 add_terra_test(test_supg_perf)
 add_terra_test(test_xdmf_writer)
 add_terra_test(test_ev_rotation)
+add_terra_test(test_mmoc_cubic_interpolation)
+add_terra_test(test_mmoc_point_location)
+add_terra_test(test_mmoc_point_location_random)
+add_terra_test(test_mmoc_ghost_exchange)
+add_terra_test(test_mmoc_ghost_exchange 2)
+add_terra_test(test_mmoc_ghost_exchange 4)
+add_terra_test(test_mmoc_rotation)
+add_terra_test(test_mmoc_rotation 2)
+add_terra_test(test_rotating_gaussian_diffusion)
 add_terra_test(test_ev_advection_diffusion)
+
+add_terra_test(test_shear_heating)
+add_terra_test(test_adiabatic_heating_gpu)
+add_terra_test(test_shear_heating_kerngen)
+
+# Needs the plate reconstruction data, which is not in the repository. Point it at the directory
+# holding topologies_0-410Ma.geojson and TomoPAC2.rot via TERRA_PLATE_DATA_DIR (or argv[1]);
+# the tests report 77 (skip) when it is absent.
+add_terra_test(test_plate_velocities)
+add_terra_test(test_plate_velocities_device_vs_host)
+set_tests_properties(test_plate_velocities_np_1 PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(test_plate_velocities_device_vs_host_np_1 PROPERTIES SKIP_RETURN_CODE 77)
+
+add_terra_test(test_epsilon_divdiv_quadrature_matrix)
 
 # Adding target for all the tests.
 get_property(ALL_TERRA_TESTS GLOBAL PROPERTY TERRA_TEST_TARGETS)

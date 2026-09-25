@@ -19,6 +19,9 @@
 // (Ra=7e3, free-slip both shells, Y_3^2 perturbation), same as the contrast
 // test -- only the contrast rmu is swept here instead of fixed at 1e5.
 
+#include <fstream>
+#include <vector>
+
 #include "../src/terra/communication/shell/communication.hpp"
 
 #include "fe/strong_algebraic_dirichlet_enforcement.hpp"
@@ -46,11 +49,6 @@
 #include "terra/linalg/solvers/chebyshev.hpp"
 #include "terra/linalg/solvers/diagonal_solver.hpp"
 
-// Full-Stokes outer solve: w-BFBT Schur preconditioner (from the mc app).
-#include "../apps/mantlecirculation/src/polymorphic_schur_preconditioner.hpp"
-#include "../apps/mantlecirculation/src/wbfbt_pressure_poisson_explicit_kw.hpp"
-#include "../apps/mantlecirculation/src/wbfbt_schur_preconditioner.hpp"
-#include "../apps/mantlecirculation/src/wbfbt_weighted_lumped_velocity_mass.hpp"
 
 #include "terra/dense/mat.hpp"
 #include "terra/grid/grid_types.hpp"
@@ -85,7 +83,6 @@ using linalg::VectorQ1Vec;
 using linalg::solvers::TwoGridGCA;
 using terra::grid::shell::BoundaryConditions;
 
-namespace mc = terra::mantlecirculation;
 
 // Krylov-basis storage precision for the full-Stokes outer FGMRES. DOUBLE = plain
 // FGMRES (basis in solution precision); FLOAT/BF16 = FGMRESLowMem with the basis
@@ -238,6 +235,7 @@ struct RunResult
 RunResult run_ablock_mg( int    min_level,
                          int    max_level,
                          int    cheby_order,
+                         int    cheby_prepost,
                          double perturb_amp,
                          double rmu,
                          int    gca,
@@ -247,7 +245,9 @@ RunResult run_ablock_mg( int    min_level,
                          int    visc_profile,   // 0 = Frank-Kamenetskii (smooth), 1 = sharp radial layer
                          double coarse_tol,     // coarse FGMRES relative tolerance
                          bool   full_stokes,    // false = solve A-block with MG; true = full Stokes outer FGMRES
-                         KrylovPrec krylov_prec ) // Krylov-basis precision for the full-Stokes outer FGMRES
+                         KrylovPrec krylov_prec, // Krylov-basis precision for the full-Stokes outer FGMRES
+                         int    lat_sdr,        // lateral subdomain refinement (distribution over ranks)
+                         int    rad_sdr )       // radial subdomain refinement
 {
     using ScalarType = double;
 
@@ -260,7 +260,7 @@ RunResult run_ablock_mg( int    min_level,
     for ( int level = min_level; level <= max_level; ++level )
     {
         const int idx = level - min_level;
-        domains.push_back( DistributedDomain::create_uniform( level, level, kRm, kRp, 0, 0 ) );
+        domains.push_back( DistributedDomain::create_uniform( level, level, kRm, kRp, lat_sdr, rad_sdr ) );
         coords_shell.push_back( grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domains[idx] ) );
         coords_radii.push_back( grid::shell::subdomain_shell_radii< ScalarType >( domains[idx] ) );
         mask_data.push_back( grid::setup_node_ownership_mask_data( domains[idx] ) );
@@ -307,10 +307,38 @@ RunResult run_ablock_mg( int    min_level,
         {
             // Published radial viscosity profile (min-normalized), interpolated by radius
             // onto this level's nodes.  T-independent.  2 = Stotz 2017 (~12000), 3 = Lin 2022 (~1057).
-            const std::string csv =
-                ( visc_profile == 2 )
-                    ? "/home/hpc/iwia/iwia054h/terraneo/data/radialprofiles/ViscosityProfile_Stotz_et_al_2017.csv"
-                    : "/home/hpc/iwia/iwia054h/terraneo/data/radialprofiles/ViscosityProfile_Lin_et_al_2022.csv";
+            // Path-agnostic lookup: $TERRANG_PROFILE_DIR, then locations relative to
+            // an in-tree build directory, then the repository root.
+            const std::string csv_name = ( visc_profile == 2 ) ? "ViscosityProfile_Stotz_et_al_2017.csv"
+                                                               : "ViscosityProfile_Lin_et_al_2022.csv";
+            std::string       csv;
+            {
+                std::vector< std::string > candidates;
+                if ( const char* env = std::getenv( "TERRANG_PROFILE_DIR" ) )
+                {
+                    candidates.emplace_back( std::string( env ) + "/" + csv_name );
+                }
+                candidates.emplace_back( "../../data/radialprofiles/" + csv_name );
+                candidates.emplace_back( "../data/radialprofiles/" + csv_name );
+                candidates.emplace_back( "data/radialprofiles/" + csv_name );
+                for ( const auto& c : candidates )
+                {
+                    std::ifstream probe( c );
+                    if ( probe.good() )
+                    {
+                        csv = c;
+                        break;
+                    }
+                }
+                if ( csv.empty() )
+                {
+                    util::logroot << "ERROR: could not find " << csv_name
+                                  << "; set TERRANG_PROFILE_DIR to the directory holding the "
+                                     "ViscosityProfile_*.csv files.\n";
+                    Kokkos::abort( "missing viscosity profile CSV" );
+                }
+                util::logroot << "viscosity profile: " << csv << "\n";
+            }
             auto profile = shell::interpolate_radial_profile_into_subdomains_from_csv< ScalarType >(
                 csv, "radius_normalized_1p22_2p22", "viscosity_scaled_by_min", coords_radii[level] );
             geophysics::viscosity::RadialProfileViscosityInterpolator< ScalarType >( profile, 1.0 )
@@ -452,8 +480,7 @@ RunResult run_ablock_mg( int    min_level,
         cheby_tmps.emplace_back( "cheby_tmp_0_" + std::to_string( level ), domains[level], mask_data[level] );
         cheby_tmps.emplace_back( "cheby_tmp_1_" + std::to_string( level ), domains[level], mask_data[level] );
 
-        constexpr int chebyshev_prepost = 3;
-        smoothers.emplace_back( cheby_order, inverse_diagonals[level], cheby_tmps, chebyshev_prepost );
+        smoothers.emplace_back( cheby_order, inverse_diagonals[level], cheby_tmps, cheby_prepost );
     }
 
     // Coarse FGMRES (matches the mc app's coarse solver).
@@ -532,7 +559,7 @@ RunResult run_ablock_mg( int    min_level,
     }
 
     // ---- Full Stokes: outer FGMRES on the saddle point, with the MG (DCA/GCA) as
-    //      the (1,1) preconditioner and a w-BFBT Schur preconditioner. ----
+    //      the (1,1) preconditioner and the scaled pressure mass as Schur preconditioner. ----
     // Pressure mass on the pressure level, scaled by 1/eta (the (2,2) PrecStokes block).
     VectorQ1Scalar< ScalarType > k_pm( "k_pm", domains[pressure_level], mask_data[pressure_level] );
     linalg::assign( k_pm, eta[pressure_level] );
@@ -541,36 +568,17 @@ RunResult run_ablock_mg( int    min_level,
         domains[pressure_level], coords_shell[pressure_level], coords_radii[pressure_level], k_pm.grid_data(), false );
     pmass.set_lumped_diagonal( true );
 
-    auto solver_table = std::make_shared< util::Table >();
 
-    // w-BFBT Schur: explicit K_w (Neumann B/B^T) + lumped C_w(sqrt eta).
-    VectorQ1Scalar< ScalarType > sqrt_eta_velocity(
-        "sqrt_eta_velocity", domains[velocity_level], mask_data[velocity_level] );
-    linalg::assign( sqrt_eta_velocity, eta[velocity_level] );
+    // Schur preconditioner: the inverse lumped diagonal of the 1/eta-scaled pressure mass.
+    VectorQ1Scalar< ScalarType > lumped_diagonal_pmass(
+        "lumped_diagonal_pmass", domains[pressure_level], mask_data[pressure_level] );
     {
-        auto v = sqrt_eta_velocity.grid_data();
-        Kokkos::parallel_for( "sqrt_eta", local_domain_md_range_policy_nodes( domains[velocity_level] ),
-            KOKKOS_LAMBDA( const int sd, const int x, const int y, const int r ) {
-                v( sd, x, y, r ) = Kokkos::sqrt( v( sd, x, y, r ) );
-            } );
-        Kokkos::fence();
+        VectorQ1Scalar< ScalarType > ones( "pmass_ones", domains[pressure_level], mask_data[pressure_level] );
+        linalg::assign( ones, 1.0 );
+        linalg::apply( pmass, ones, lumped_diagonal_pmass );
     }
-    using WBFBTCw = mc::WBFBTWeightedLumpedVelocityMass< ScalarType, 3 >;
-    WBFBTCw c_w( domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level],
-                 mask_data[velocity_level] );
-    c_w.refresh( sqrt_eta_velocity );
-
-    using WBFBTKw = mc::ExplicitKwPressurePoissonSolver< ScalarType, Gradient, Divergence >;
-    auto kw_solver = std::make_shared< WBFBTKw >(
-        K_op_neumann.block_12(), K_op_neumann.block_21(), c_w.inv_diag_velocity(),
-        domains[velocity_level], domains[pressure_level], mask_data[velocity_level], mask_data[pressure_level],
-        /*max_iterations=*/200, /*relative_tol=*/static_cast< ScalarType >( 1e-6 ), solver_table );
-
-    using PrecSchur  = mc::PolymorphicSchurPreconditioner< PressureMass >;
-    using WBFBTSchur = mc::WBFBTSchurPreconditioner< Viscous, Gradient, Divergence, PressureMass >;
-    PrecSchur prec_schur = PrecSchur::make( WBFBTSchur(
-        K_op.block_11(), K_op_neumann.block_12(), K_op_neumann.block_21(), kw_solver, c_w.inv_diag_velocity(),
-        domains[velocity_level], domains[pressure_level], mask_data[velocity_level], mask_data[pressure_level] ) );
+    using PrecSchur = linalg::solvers::DiagonalSolver< PressureMass >;
+    PrecSchur prec_schur( lumped_diagonal_pmass );
 
     using PrecStokes = linalg::solvers::BlockTriangularPreconditioner2x2<
         Stokes, Viscous, PressureMass, Gradient, MG, PrecSchur >;
@@ -578,7 +586,9 @@ RunResult run_ablock_mg( int    min_level,
         "tri_tmp", domains[velocity_level], domains[pressure_level], mask_data[velocity_level], mask_data[pressure_level] );
     PrecStokes prec_stokes( K_op.block_11(), pmass, K_op.block_12(), tri_tmp, mg, prec_schur );
 
-    constexpr int outer_restart = 50;
+    // A run capped below the restart length never restarts, so size the Krylov
+    // basis (2 * restart + 4 block vectors) by the cap instead.
+    const int outer_restart = std::min( 50, max_cycles );
     linalg::solvers::FGMRESOptions< ScalarType > outer_opts;
     outer_opts.restart                     = outer_restart;
     outer_opts.max_iterations              = max_cycles;  // reuse --max-cycles as outer iteration cap
@@ -890,7 +900,8 @@ int main( int argc, char** argv )
 
     int    min_level   = 2;
     int    max_level   = 5;
-    int    cheby_order = 4;
+    int    cheby_order   = 4;
+    int    cheby_prepost = 3;
     int    max_cycles  = 50;
     double perturb_amp = kPerturbDefault;
     int    single_gca  = -1;     // -1 => sweep schemes; otherwise run that gca only
@@ -902,12 +913,15 @@ int main( int argc, char** argv )
     double coarse_tol   = 1e-6;  // coarse FGMRES relative tolerance
     bool   full_stokes  = false; // --solve stokes: outer FGMRES on full saddle point
     KrylovPrec krylov_prec = KrylovPrec::DOUBLE; // --krylov-precision double|single|bf16 (full-Stokes only)
+    int    lat_sdr      = 0;  // lateral subdomain refinement: 10 * 4^lat_sdr * 2^rad_sdr subdomains
+    int    rad_sdr      = 0;  // radial subdomain refinement
     for ( int i = 1; i + 1 < argc; ++i )
     {
         const std::string a = argv[i];
         if ( a == "--min-level" )           min_level   = std::atoi( argv[i + 1] );
         else if ( a == "--max-level" )      max_level   = std::atoi( argv[i + 1] );
         else if ( a == "--cheby-order" )    cheby_order = std::atoi( argv[i + 1] );
+        else if ( a == "--cheby-prepost" )  cheby_prepost = std::atoi( argv[i + 1] );
         else if ( a == "--max-cycles" )     max_cycles  = std::atoi( argv[i + 1] );
         else if ( a == "--perturb-amp" )    perturb_amp = std::atof( argv[i + 1] );
         else if ( a == "--gca" )            single_gca  = std::atoi( argv[i + 1] );
@@ -922,6 +936,8 @@ int main( int argc, char** argv )
                            : ( std::string( argv[i + 1] ) == "stotz" )  ? 2
                            : ( std::string( argv[i + 1] ) == "lin" )    ? 3
                                                                         : 0;
+        else if ( a == "--lat-sdr" )       lat_sdr     = std::atoi( argv[i + 1] );
+        else if ( a == "--rad-sdr" )       rad_sdr     = std::atoi( argv[i + 1] );
         else if ( a == "--coarse-tol" )    coarse_tol  = std::atof( argv[i + 1] );
         else if ( a == "--solve" )         full_stokes = ( std::string( argv[i + 1] ) == "stokes" );
         else if ( a == "--krylov-precision" )
@@ -943,6 +959,16 @@ int main( int argc, char** argv )
         verify_gca_rap( max_level, r, InterpolationMode::Linear );
         return 0;
     }
+    // Every level of the hierarchy carries the same subdomain refinement, so the coarsest
+    // level must still have at least one cell per subdomain along each axis.
+    if ( lat_sdr > min_level || rad_sdr > min_level )
+    {
+        const int needed = std::max( lat_sdr, rad_sdr );
+        util::logroot << "note: raising --min-level from " << min_level << " to " << needed
+                      << " to accommodate lat_sdr=" << lat_sdr << ", rad_sdr=" << rad_sdr << "\n";
+        min_level = needed;
+    }
+
     const char* bc_name = ( bc == BCKind::DIRICHLET ) ? "dirichlet/dirichlet (no-slip)" : "freeslip/freeslip";
 
     // Published radial profiles (Stotz/Lin) are fixed (rmu irrelevant) => single run.
@@ -967,7 +993,7 @@ int main( int argc, char** argv )
             { 1, InterpolationMode::Constant, "GCA(constant)" },
         };
 
-    util::logroot << "=== " << ( full_stokes ? "FULL STOKES outer-FGMRES (w-BFBT Schur) " : "A-block (viscous) MG " )
+    util::logroot << "=== " << ( full_stokes ? "FULL STOKES outer-FGMRES (scaled pressure-mass Schur) " : "A-block (viscous) MG " )
                   << "convergence vs viscosity contrast ===\n"
                   << "    solve = " << ( full_stokes ? "stokes (cycles = outer FGMRES iters)" : "ablock (cycles = MG V-cycles)" )
                   << ( full_stokes ? std::string( ", krylov-basis = " ) + krylov_prec_name( krylov_prec ) : std::string() )
@@ -978,7 +1004,8 @@ int main( int argc, char** argv )
                        : visc_profile == 1 ? "low-viscosity band (r=2.0, width 0.1)"
                                            : "Frank-Kamenetskii (smooth)" )
                   << ", levels " << min_level << ".." << max_level
-                  << ", cheby_order=" << cheby_order
+                  << ", lat_sdr=" << lat_sdr << ", rad_sdr=" << rad_sdr
+                  << ", cheby_order=" << cheby_order << ", cheby_prepost=" << cheby_prepost
                   << ", max_cycles=" << max_cycles
                   << ", coarse_tol=" << coarse_tol
                   << ", perturb_amp=" << perturb_amp << "\n";
@@ -992,8 +1019,8 @@ int main( int argc, char** argv )
             util::logroot << "\n--- rmu = " << rmu << ", " << s.name << " ---\n";
 
             const auto res =
-                run_ablock_mg( min_level, max_level, cheby_order, perturb_amp, rmu, s.gca, max_cycles, bc, s.interp,
-                               visc_profile, coarse_tol, full_stokes, krylov_prec );
+                run_ablock_mg( min_level, max_level, cheby_order, cheby_prepost, perturb_amp, rmu, s.gca, max_cycles, bc, s.interp,
+                               visc_profile, coarse_tol, full_stokes, krylov_prec, lat_sdr, rad_sdr );
 
             summary->add_row(
                 { { "rmu", rmu },

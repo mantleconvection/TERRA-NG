@@ -2758,10 +2758,14 @@ inline Grid4DDataScalar< ValueType >
         distributed_domain.domain_info().subdomain_num_nodes_radially( level ) );
 }
 
-inline Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >
+inline Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >
     local_domain_md_range_policy_nodes( const DistributedDomain& distributed_domain )
 {
-    return Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+    // Coalescing fix: grid data is LayoutRight, so the stride-1 index is the last (radial)
+    // one. The SYCL default MDRange iterate is Left (see Kokkos_SYCL_MDRangePolicy.hpp),
+    // which maps the *shortest* index (sd) to the fast work-item axis and transposes access.
+    // Force Right/Right so radial is innermost (coalesced) and the auto-tile becomes {2,2,2,16}.
+    return Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
         { 0, 0, 0, 0 },
         { static_cast< long long >( distributed_domain.subdomains().size() ),
           distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally(),
@@ -2790,10 +2794,12 @@ inline Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >
           distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() - 1 } );
 }
 
-inline Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >
+inline Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >
     local_domain_md_range_policy_cells( const DistributedDomain& distributed_domain )
 {
-    return Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+    // Coalescing fix (see local_domain_md_range_policy_nodes): force Right/Right so the
+    // stride-1 radial index is innermost on LayoutRight grids, instead of the SYCL default Left.
+    return Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
         { 0, 0, 0, 0 },
         { static_cast< long long >( distributed_domain.subdomains().size() ),
           distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() - 1,

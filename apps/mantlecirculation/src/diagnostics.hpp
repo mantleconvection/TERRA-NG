@@ -7,114 +7,11 @@
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "kokkos/kokkos_wrapper.hpp"
-#include "linalg/vector_fv.hpp"
 #include "linalg/vector_q1isoq2_q1.hpp"
 #include "mpi/mpi.hpp"
 #include "util/logging.hpp"
 
 namespace terra::mantlecirculation {
-
-/// @brief Compute the Nusselt number from the FV temperature field.
-///
-/// Uses the boundary-cell values and the Dirichlet BC to compute the radial gradient
-/// at the boundary face.  The spherical-shell average gradient is then normalized by
-/// the conductive reference.
-///
-/// Nu = < ∂T/∂r >_surface / < ∂T_ref/∂r >_surface
-///
-/// where the average is weighted by the surface area element 4π r².
-inline ScalarType compute_nusselt_fv(
-    const grid::shell::DistributedDomain&                             domain,
-    const linalg::VectorFVScalar< ScalarType >&                       T_fct,
-    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >&   boundary_mask,
-    const ScalarType                                                  T_bc_surface,
-    const ScalarType                                                  T_bc_cmb,
-    const ScalarType                                                  r_min,
-    const ScalarType                                                  r_max,
-    const bool                                                        at_surface )
-{
-    // The FV grid has ghost layers: indices run from 0..n+1 in each direction.
-    // Interior cells (no ghost) are at indices 1..n.
-    // Boundary cells at the surface are at radial index n (the outermost interior layer).
-    // Boundary cells at the CMB are at radial index 1 (the innermost interior layer).
-
-    const auto fv_grid = T_fct.grid_data();
-    const int nsd = fv_grid.extent( 0 );
-    const int nx_fv = fv_grid.extent( 1 );
-    const int ny_fv = fv_grid.extent( 2 );
-    const int nr_fv = fv_grid.extent( 3 );
-
-    // Q1 node-layer index of the boundary (for filtering subdomains that actually touch it).
-    const int  nr_node           = domain.domain_info().subdomain_num_nodes_radially();
-    const int  r_boundary_node   = at_surface ? ( nr_node - 1 ) : 0;
-    const auto expected_flag     = at_surface ? grid::shell::ShellBoundaryFlag::SURFACE
-                                              : grid::shell::ShellBoundaryFlag::CMB;
-
-    // The FV Dirichlet BC sets the outermost interior cell to T_bc.
-    // The actual evolved temperature is in the cell BELOW the boundary cell.
-    // For surface: boundary cell = nr_fv-2 (set to T_bc), first free cell = nr_fv-3.
-    // For CMB: boundary cell = 1 (set to T_bc), first free cell = 2.
-    const int r_cell_fv = at_surface ? ( nr_fv - 3 ) : 2;
-
-    // The face radius is exactly at the boundary.
-    const ScalarType r_face = at_surface ? r_max : r_min;
-
-    // For a uniform radial mesh with nr_interior cells, the cell width is (r_max - r_min) / nr_interior.
-    const int nr_interior = nr_fv - 2; // subtract 2 ghost layers
-    const ScalarType dr_cell = ( r_max - r_min ) / nr_interior;
-    // The cell center of the first free cell (the one we're reading).
-    const ScalarType r_center = at_surface ? ( r_face - ScalarType( 1.5 ) * dr_cell ) : ( r_face + ScalarType( 1.5 ) * dr_cell );
-    const ScalarType T_bc = at_surface ? T_bc_surface : T_bc_cmb;
-    const ScalarType normal_sign = at_surface ? ScalarType( 1 ) : ScalarType( -1 );
-
-    // Compute the area-weighted average of ∂T/∂r at the boundary.
-    // Since all lateral cells have approximately equal area on the sphere,
-    // a simple average over all boundary cells gives the shell-averaged gradient.
-
-    ScalarType local_sum_gradT = 0;
-    int local_count = 0;
-
-    Kokkos::parallel_reduce(
-        "nusselt_fv_surface",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 1, 1 }, { nsd, nx_fv - 1, ny_fv - 1 } ),
-        KOKKOS_LAMBDA( const int sd, const int x, const int y, ScalarType& sum ) {
-            // Skip subdomains that do not actually own the boundary at hand.
-            if ( boundary_mask( sd, 1, 1, r_boundary_node ) != expected_flag )
-                return;
-            const ScalarType T_cell = fv_grid( sd, x, y, r_cell_fv );
-            const ScalarType dTdr = normal_sign * ( T_bc - T_cell ) / ( r_face - r_center );
-            sum += dTdr;
-        },
-        Kokkos::Sum< ScalarType >( local_sum_gradT ) );
-    Kokkos::fence();
-
-    Kokkos::parallel_reduce(
-        "nusselt_fv_count",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 1, 1 }, { nsd, nx_fv - 1, ny_fv - 1 } ),
-        KOKKOS_LAMBDA( const int sd, const int x, const int y, int& cnt ) {
-            if ( boundary_mask( sd, 1, 1, r_boundary_node ) != expected_flag )
-                return;
-            cnt += 1;
-        },
-        local_count );
-    Kokkos::fence();
-
-    ScalarType global_sum_gradT = 0;
-    int global_count = 0;
-    MPI_Allreduce( &local_sum_gradT, &global_sum_gradT, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
-    MPI_Allreduce( &local_count, &global_count, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD );
-
-    const ScalarType avg_gradT = global_sum_gradT / global_count;
-
-    // Conductive profile gradient at the boundary.
-    // T_ref(r) = (r_min * r_max / r - r_min) / (r_max - r_min)
-    // ∂T_ref/∂r = -r_min * r_max / (r² * (r_max - r_min))
-    const ScalarType D = r_max - r_min;
-    const ScalarType avg_gradTref = -r_min * r_max / ( r_face * r_face * D );
-    const ScalarType avg_gradTref_outward = normal_sign * avg_gradTref;
-
-    return Kokkos::abs( avg_gradT ) / Kokkos::abs( avg_gradTref_outward );
-}
 
 /// @brief Compute ∫_Γ ∇T · n̂ dΓ on the surface or CMB boundary.
 inline ScalarType compute_boundary_heat_flux_integral(

@@ -14,7 +14,7 @@ set(CMAKE_VERBOSE_MAKEFILE OFF)
 # Find Kokkos
 # find_package(Kokkos REQUIRED)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -munsafe-fp-atomics -ffast-math -Rpass-analysis=kernel-resource-usage")
 endif ()
@@ -35,6 +35,12 @@ if (MPI_FOUND)
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${MPI_CXX_LINK_FLAGS}")
 endif ()
 
+
+option(TERRA_ENABLE_PYTHON "Build terra::ml::NeuralSolver against an embedded CPython" OFF)
+if (TERRA_ENABLE_PYTHON)
+    find_package(Python3 REQUIRED COMPONENTS Development.Embed)
+    message(STATUS "terra::ml: embedding Python from ${Python3_LIBRARIES}")
+endif ()
 set(EIGEN_DIR extern/eigen-3.4.0 CACHE PATH "eigen path")
 include_directories(SYSTEM ${EIGEN_DIR})
 link_directories(${EIGEN_DIR})
