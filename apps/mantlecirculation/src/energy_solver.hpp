@@ -25,8 +25,6 @@
 #include "linalg/vector_fv.hpp"
 #include "linalg/vector_q1.hpp"
 #include "parameters.hpp"
-// #include "terra/fe/wedge/linearforms/shell/adiabatic_heating_term.hpp"
-// #include "terra/fe/wedge/linearforms/shell/shear_heating_term.hpp"
 #include "fe/wedge/linearforms/shell/energy_source_terms.hpp"
 #include "util/logging.hpp"
 #include "util/table.hpp"

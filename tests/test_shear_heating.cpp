@@ -1,7 +1,7 @@
 #include "../src/terra/communication/shell/communication.hpp"
 #include "fe/strong_algebraic_dirichlet_enforcement.hpp"
 #include "fe/wedge/integrands.hpp"
-#include "fe/wedge/linearforms/shell/shear_heating_term.hpp"
+#include "fe/wedge/linearforms/shell/energy_source_terms.hpp"
 #include "linalg/solvers/pcg.hpp"
 #include "linalg/solvers/richardson.hpp"
 #include "terra/dense/mat.hpp"
