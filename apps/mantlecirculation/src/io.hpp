@@ -1,7 +1,6 @@
 
 #pragma once
 
-#include <fstream>
 #include <vector>
 
 #include "grid/grid_types.hpp"
@@ -163,20 +162,11 @@ inline Result<> compute_and_write_radial_profiles(
         field_scale,
         radial_label );
 
-    // Zero padding
-    std::ostringstream sst;
-    sst << std::setfill( '0' )
-        << std::setw(
-               std::to_string(
-                   prm.time_stepping_parameters.timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 )
-                   .size() )
-        << timestep;
-
     if ( mpi::rank() == 0 )
     {
         std::ofstream out(
             prm.io_parameters.outdir + "/" + prm.io_parameters.radial_profiles_out_dir + "/radial_profiles_" +
-            scalar_function.grid_data().label() + "_" + sst.str() + ".csv" );
+            scalar_function.grid_data().label() + "_" + std::to_string( timestep ) + ".csv" );
         profiles.print_csv( out );
     }
 
