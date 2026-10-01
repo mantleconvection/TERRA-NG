@@ -25,8 +25,9 @@
 #include "linalg/vector_fv.hpp"
 #include "linalg/vector_q1.hpp"
 #include "parameters.hpp"
-#include "terra/fe/wedge/linearforms/shell/adiabatic_heating_term.hpp"
-#include "terra/fe/wedge/linearforms/shell/shear_heating_term.hpp"
+// #include "terra/fe/wedge/linearforms/shell/adiabatic_heating_term.hpp"
+// #include "terra/fe/wedge/linearforms/shell/shear_heating_term.hpp"
+#include "fe/wedge/linearforms/shell/energy_source_terms.hpp"
 #include "util/logging.hpp"
 #include "util/table.hpp"
 #include "util/timer.hpp"
@@ -374,7 +375,7 @@ class SUPGSolver : public EnergySolver< ScalarType >
 template < typename ScalarType, typename CoeffType >
 class EVSolver : public EnergySolver< ScalarType >
 {
-    using AD_EV    = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPGKerngen< ScalarType >;
+    using AD_EV    = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPGKerngen< ScalarType, typename CoeffType::DiffusionCoeffT >;
     using TempMass = fe::wedge::operators::shell::Mass< ScalarType >;
     using KMassType =
         terra::fe::wedge::operators::shell::KMass< ScalarType, typename CoeffType::InternalHeatingCoeffT >;
@@ -468,7 +469,8 @@ class EVSolver : public EnergySolver< ScalarType >
             coords_radii_,
             boundary_mask_,
             velocity_,
-            surface_diffusion_coeff,
+            // surface_diffusion_coeff,
+            diffusion_coeff_,
             ScalarType( 0 ),
             /*treat_boundary=*/true );
         A_->set_supg_enabled( false );
@@ -479,7 +481,8 @@ class EVSolver : public EnergySolver< ScalarType >
             coords_radii_,
             boundary_mask_,
             velocity_,
-            surface_diffusion_coeff,
+            // surface_diffusion_coeff,
+            diffusion_coeff_,
             ScalarType( 0 ),
             /*treat_boundary=*/false );
         A_neumann_->set_supg_enabled( false );
@@ -490,7 +493,8 @@ class EVSolver : public EnergySolver< ScalarType >
             coords_radii_,
             boundary_mask_,
             velocity_,
-            surface_diffusion_coeff,
+            // surface_diffusion_coeff,
+            diffusion_coeff_,
             ScalarType( 0 ),
             /*treat_boundary=*/false,
             /*diagonal=*/true );
@@ -1200,8 +1204,10 @@ class FCTSolver : public EnergySolver< ScalarType >
                     util::Timer timer_fct_source_step( "fct_explicit_step_updating_source_term" );
                     if ( prm_.physics_parameters.internal_heating )
                     {
+                        ScalarType cp_profile = 1.0; // The whole FCT solver is anyway deprecated
+
                         linalg::assign(
-                            T_source_, prm_.physics_parameters.h_number / prm_.physics_parameters.cp_profile );
+                            T_source_, prm_.physics_parameters.h_number / cp_profile );
                     }
                     timer_fct_source_step.stop();
 

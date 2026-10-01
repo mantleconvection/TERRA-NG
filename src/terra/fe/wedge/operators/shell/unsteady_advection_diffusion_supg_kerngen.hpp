@@ -69,7 +69,7 @@ namespace terra::fe::wedge::operators::shell {
 // NB: `supg_tau` is defined in the legacy header; we #include it to reuse.
 // Re-declaration here would collide, so we rely on include order / placement.
 
-template < typename ScalarT, int VelocityVecDim = 3 >
+template < typename ScalarT, typename CoefficientT = double, int VelocityVecDim = 3 >
 class UnsteadyAdvectionDiffusionSUPGKerngen
 {
   public:
@@ -93,7 +93,8 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
 
     linalg::VectorQ1Vec< ScalarT, VelocityVecDim > velocity_;
 
-    ScalarT diffusivity_;
+    CoefficientT diffusivity_;
+    
     ScalarT dt_;
 
     bool    treat_boundary_;
@@ -149,7 +150,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
         const grid::Grid2DDataScalar< ScalarT >&                        radii,
         const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
         const linalg::VectorQ1Vec< ScalarT, VelocityVecDim >&           velocity,
-        const ScalarT                                                   diffusivity,
+        const CoefficientT                                              diffusivity,
         const ScalarT                                                   dt,
         bool                                                            treat_boundary,
         bool                                                            diagonal     = false,
@@ -398,7 +399,19 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
             {
                 const auto&   uq         = vel_interp[wedge][q];
                 const ScalarT vel_norm_q = uq.norm();
-                const ScalarT tau_q      = supg_tau< ScalarT >( vel_norm_q, diffusivity_, h, 1e-08 );
+                
+                ScalarT diffusivity_coeff = 0.0;
+                
+                if constexpr ( std::is_same_v< CoefficientT, double > )
+                {
+                    diffusivity_coeff = diffusivity_;
+                }
+                else
+                {
+                    diffusivity_coeff = diffusivity_( s, x_cell, y_cell, r_cell, wedge, quad_points[q] );
+                }
+
+                const ScalarT tau_q      = supg_tau< ScalarT >( vel_norm_q, diffusivity_coeff, h, 1e-08 );
                 tau_accum += tau_q * quad_weights[q];
                 waccum    += quad_weights[q];
             }
@@ -418,6 +431,17 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                 const auto J_inv_transposed = J.inv().transposed();
                 const auto vel              = vel_interp[wedge][q];
 
+                ScalarT diffusivity_coeff = 0.0;
+                
+                if constexpr ( std::is_same_v< CoefficientT, double > )
+                {
+                    diffusivity_coeff = diffusivity_;
+                }
+                else
+                {
+                    diffusivity_coeff = diffusivity_( s, x_cell, y_cell, r_cell, wedge, quad_points[q] );
+                }
+
                 for ( int i = 0; i < num_nodes_per_wedge; ++i )
                 {
                     const auto shape_i = shape( i, quad_points[q] );
@@ -428,7 +452,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                         const auto grad_j  = J_inv_transposed * grad_shape( j, quad_points[q] );
 
                         const auto mass       = shape_i * shape_j;
-                        const auto diffusion  = diffusivity_ * grad_i.dot( grad_j );
+                        const auto diffusion  = diffusivity_coeff * grad_i.dot( grad_j );
                         const auto advection  = vel.dot( grad_j ) * shape_i;
                         const auto streamline = streamline_diffusivity[wedge] * vel.dot( grad_j ) * vel.dot( grad_i );
 
@@ -702,6 +726,18 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                     for ( int q = 0; q < NQ; ++q )
                     {
                         double ux = 0.0, uy = 0.0, uz = 0.0;
+
+                        ScalarT diffusivity_coeff = 0.0;
+                
+                        if constexpr ( std::is_same_v< CoefficientT, double > )
+                        {
+                            diffusivity_coeff = diffusivity_;
+                        }
+                        else
+                        {
+                            diffusivity_coeff = diffusivity_( local_subdomain_id, x_cell, y_cell, r_cell, w, dense::Vec< double, 3 >{ BARY[q][0], BARY[q][1], BARY[q][2] });
+                        }
+
 #pragma unroll
                         for ( int j = 0; j < num_nodes_per_wedge; ++j )
                         {
@@ -720,7 +756,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                         vel_q[q][2] = uz;
 
                         const double vn   = Kokkos::sqrt( ux * ux + uy * uy + uz * uz );
-                        const double tauq = supg_tau< double >( vn, double( diffusivity_ ), h_cell, 1e-08 );
+                        const double tauq = supg_tau< double >( vn, double( diffusivity_coeff ), h_cell, 1e-08 );
                         tau_sum += tauq * QUAD_W;
                         w_sum   += QUAD_W;
                     }
@@ -737,6 +773,17 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                     // Main fused loop over quad points.
                     for ( int q = 0; q < NQ; ++q )
                     {
+                        ScalarT diffusivity_coeff = 0.0;
+                
+                        if constexpr ( std::is_same_v< CoefficientT, double > )
+                        {
+                            diffusivity_coeff = diffusivity_;
+                        }
+                        else
+                        {
+                            diffusivity_coeff = diffusivity_( local_subdomain_id, x_cell, y_cell, r_cell, w, dense::Vec< double, 3 >{ BARY[q][0], BARY[q][1], BARY[q][2] });
+                        }
+
                         // Assemble J at this quad point.
                         //   J_*_0 = r(zeta_q) * dP1_P0
                         //   J_*_1 = r(zeta_q) * dP2_P0
@@ -811,7 +858,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                         // For LumpedMass: exclude the mass term from A_scalar (handled in diagonal acc below).
                         const double mass_in_scalar = LumpedMass ? 0.0 : ( double( mass_scaling_ ) * T_hat );
                         const double A_scalar = mass_in_scalar + double( dt_ ) * u_dot_gT;
-                        const double dkappa   = double( dt_ ) * double( diffusivity_ );
+                        const double dkappa   = double( dt_ ) * double( diffusivity_coeff );
                         const double dtau     = double( dt_ ) * tau_wedge * u_dot_gT;
                         const double Bx = dkappa * gT0 + dtau * ux;
                         const double By = dkappa * gT1 + dtau * uy;
@@ -851,7 +898,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                                 const double Ti  = T_sh( nid, lvl );
 
                                 const double u_dot_gi = ux * gi0 + uy * gi1 + uz * gi2;
-                                const double diff_ii  = double( diffusivity_ ) * ( gi0 * gi0 + gi1 * gi1 + gi2 * gi2 );
+                                const double diff_ii  = double( diffusivity_coeff ) * ( gi0 * gi0 + gi1 * gi1 + gi2 * gi2 );
                                 const double adv_ii   = pi * u_dot_gi;
                                 const double supg_ii  = tau_wedge * u_dot_gi * u_dot_gi;
                                 const double A_ii     = diff_ii + adv_ii + supg_ii;
