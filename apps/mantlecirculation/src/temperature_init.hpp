@@ -373,8 +373,6 @@ void radial_profile_init(
     {
         Kokkos::deep_copy( cp_profile, ScalarType( 1 ) );
     }
-
-    Kokkos::fence();
 }
 
 template < typename ScalarType >
