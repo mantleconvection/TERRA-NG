@@ -1,3 +1,20 @@
+/// \file test_shear_heating.cpp
+///
+/// \brief Verifies the shear (viscous dissipation) heating linear form, ShearHeatingTerm, against a closed-form
+///        integral over the spherical shell.
+///
+/// What is tested
+/// --------------
+/// ShearHeatingTerm assembles the vector
+///
+///     f_i = \int_shell c * 2 eta * eps' : eps' * phi_i dx,    eps' = eps(u) - 1/3 (div u) I,
+///
+/// where eps(u) = 1/2 (grad u + grad u^T) and c is a user-supplied coefficient (here c = 1).
+///
+/// The test checks the operator application by comparing the computed integration value
+/// (global scalar) against an analytical value.
+///
+
 #include "../src/terra/communication/shell/communication.hpp"
 #include "fe/strong_algebraic_dirichlet_enforcement.hpp"
 #include "fe/wedge/integrands.hpp"
