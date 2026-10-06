@@ -4,15 +4,15 @@
 $ module load mpi.ompi
 $ module load nvidia-hpc
 
-$ mkdir terraneo-build
+$ mkdir TERRA-NG_build
 
-$ ll
-terraneo/               # <== the cloned source code
-terraneo-build/
+$ ls -alF
+TERRA-NG/               # <== the cloned source code
+TERRA-NG_build/
 
-$ cd terraneo-build
+$ cd TERRA-NG_build
 
-$ cmake ../terraneo/ -DKokkos_ENABLE_CUDA=ON
+$ cmake ../TERRA-NG -DKokkos_ENABLE_CUDA=ON
 
 # Build tests
 $ cd tests

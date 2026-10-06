@@ -306,7 +306,7 @@ This is a single scalar per pressure DOF, cheap to apply, and implemented as
 
 ## Boundary conditions
 
-For a general description of boundary condition enforcement in terraneo see the
+For a general description of boundary condition enforcement in TERRA-NG see the
 [Boundary Conditions](#boundary-conditions) chapter.
 
 Velocity boundary conditions are specified via the `BoundaryConditions` struct, which
