@@ -29,10 +29,10 @@ auto-loaded  default-version  {variant=value}
 
 Assuming an out-of-source build:
 ```
-$ ll
-terraneo/         # << src  
-terraneo-build/   # << build
-$ cd terraneo-build
+$ ls -alF
+TERRA-NG/         # << src  
+TERRA-NG_build/   # << build
+$ cd TERRA-NG_build
 ```
 
 Run CMake like this:
@@ -42,7 +42,7 @@ $ export CC=$(which icx)
 $ export CXX=$(which icpx)
 $ export FC=$(which ifx)
 
-$ cmake ../terraneo -DKokkos_ARCH_INTEL_PVC=ON -DKokkos_ARCH_SPR=ON -DKokkos_ENABLE_OPENMP=OFF -DKokkos_ENABLE_SERIAL=ON -DKokkos_ENABLE_SYCL=ON -DKokkos_ENABLE_SYCL_RELOCATABLE_DEVICE_CODE=ON -DCMAKE_CXX_COMPILER=$(which mpiicpx)
+$ cmake ../TERRA-NG -DKokkos_ARCH_INTEL_PVC=ON -DKokkos_ARCH_SPR=ON -DKokkos_ENABLE_OPENMP=OFF -DKokkos_ENABLE_SERIAL=ON -DKokkos_ENABLE_SYCL=ON -DKokkos_ENABLE_SYCL_RELOCATABLE_DEVICE_CODE=ON -DCMAKE_CXX_COMPILER=$(which mpiicpx)
 ```
 Note that some options are likely not strictly necessary (maybe do not need CMAKE_C_COMPILER).
 

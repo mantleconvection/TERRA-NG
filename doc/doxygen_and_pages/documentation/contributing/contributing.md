@@ -67,15 +67,15 @@ This makes your own copy of the project.
 
 Open a terminal:
 ```
-git clone https://github.com/<your-username>/terraneo.git
-cd terraneo
+git clone https://github.com/<your-username>/TERRA-NG.git
+cd TERRA-NG
 ```
 
 #### 3. Set the original repo as “upstream” (one-time setup)
 
 This lets you pull updates from the main project:
 ```
-git remote add upstream https://github.com/mantleconvection/terraneo.git
+git remote add upstream https://github.com/mantleconvection/TERRA-NG.git
 ```
 You only do this once.
 

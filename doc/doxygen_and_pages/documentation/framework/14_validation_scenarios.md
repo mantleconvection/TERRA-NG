@@ -3,7 +3,7 @@
 
 ## Overview
 
-This document presents validation results for the TerraNeo mantle convection code against community benchmark cases from Zhong et al. (2008) and Ratcliff et al. (1996), using published reference data from Ilangovan et al. (2026) (HYTEG, [doi:10.5194/gmd-19-1455-2026](https://gmd.copernicus.org/articles/19/1455/2026/gmd-19-1455-2026.pdf)), Euen et al. (2023), and other codes (ASPECT, CitcomS).
+This document presents validation results for the TERRA-NG mantle convection code against community benchmark cases from Zhong et al. (2008) and Ratcliff et al. (1996), using published reference data from Ilangovan et al. (2026) (HYTEG, [doi:10.5194/gmd-19-1455-2026](https://gmd.copernicus.org/articles/19/1455/2026/gmd-19-1455-2026.pdf)), Euen et al. (2023), and other codes (ASPECT, CitcomS).
 
 Three benchmark cases are considered on the thick spherical shell with $r_\text{min} = 1.22$, $r_\text{max} = 2.22$ (aspect ratio $\approx 0.55$, matching Earth's mantle geometry).
 
