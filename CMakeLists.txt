@@ -11,6 +11,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Enable verbose makefile output
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 
+# Make sure the serial backend is always build
+set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Always enable Serial backend" FORCE)
+
 # Find Kokkos
 # find_package(Kokkos REQUIRED)
 
