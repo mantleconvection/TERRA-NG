@@ -471,7 +471,7 @@ inline void nondimensionalise( Parameters& prm )
         time.dt_max              = time.dt_max_Ma;
         time.dt_min              = time.dt_min_Ma;
 
-        std::clamp(
+        phys.viscosity_parameters.reference_viscosity = std::clamp(
             phys.viscosity_parameters.reference_viscosity,
             phys.viscosity_parameters.min_viscosity,
             phys.viscosity_parameters.max_viscosity );
