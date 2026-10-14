@@ -10,6 +10,9 @@ env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: Release
 
+  # For GCC and Clang
+  COMPILER_FLAGS: -Werror -Wno-deprecated-declarations
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -24,7 +27,7 @@ jobs:
 
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory.
-      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_CXX_FLAGS_INIT="${{ env.COMPILER_FLAGS }}" -DKokkos_ENABLE_OPENMP=ON
 
     - name: Build
       # Build your program with the given configuration
