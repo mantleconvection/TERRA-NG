@@ -268,6 +268,8 @@ class Redistribute
             }
         }
 
+// Seems to not be used anywhere, but I cowardly refuse to simply delete it
+#if 0
         // Sort messages by peer and subdomain index so pack/unpack order matches on both sides.
         auto by_peer_and_subdomain = []( const Message& a, const Message& b ) {
             if ( a.send_rank != b.send_rank ) return a.send_rank < b.send_rank;
@@ -277,6 +279,7 @@ class Redistribute
             const int bi = b.local_subdomain_on_fine >= 0 ? b.local_subdomain_on_fine : b.local_subdomain_on_coarse;
             return ai < bi;
         };
+#endif
 
         // For sends, we pack per recv_rank. For recvs, we unpack per send_rank.
         // To make the two sides match, both sides must order by the SAME primary key

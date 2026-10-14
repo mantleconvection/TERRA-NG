@@ -17,16 +17,16 @@
 /// \endcode
 ///
 /// Reference wedge:
-///
-/// \f[
-/// \begin{align}
-///   0 \leq X \\
-///   0 \leq Y \\
-///   X + Y \leq 1 \\
-///   -1 \leq Z \leq 1
-/// \end{align}
-/// \f]
-///
+/*!
+    \f[
+    \begin{align}
+      0 \leq X \\
+      0 \leq Y \\
+      X + Y \leq 1 \\
+      -1 \leq Z \leq 1
+    \end{align}
+    \f]
+*/
 namespace terra::fe::wedge::quadrature {
 
 constexpr int quad_felippa_1x1_num_quad_points = 1;

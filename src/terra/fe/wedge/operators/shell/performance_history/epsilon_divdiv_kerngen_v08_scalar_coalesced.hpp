@@ -911,11 +911,6 @@ class EpsilonDivDivKerngenV08ScalarCoalesced
             { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 0, 1 }, { 0, 1, 1 } },
             { { 1, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 1, 1 }, { 0, 1, 1 }, { 1, 0, 1 } } };
 
-        static constexpr int WEDGE_TO_UNIQUE[2][6] = {
-            { 0, 1, 2, 3, 4, 5 },
-            { 6, 2, 1, 7, 5, 4 }
-        };
-
         constexpr double ONE_THIRD      = 1.0 / 3.0;
         constexpr double ONE_SIXTH      = 1.0 / 6.0;
         constexpr double NEG_TWO_THIRDS = -0.66666666666666663;

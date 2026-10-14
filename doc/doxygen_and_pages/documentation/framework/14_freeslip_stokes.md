@@ -40,7 +40,7 @@ kernel cost.
 
 ## Convergence results
 
-**zs/zs (Dirichlet / Dirichlet)** — \ref test_epsilon_divdiv_stokes_assess.cpp:
+**zs/zs (Dirichlet / Dirichlet)** — \ref test_epsilon_divdiv_stokes_assess.cpp :
 
 | Level | vel error | pre error | vel ratio | pre ratio |
 |-------|-----------|-----------|-----------|-----------|
@@ -49,7 +49,7 @@ kernel cost.
 | 5 | 2.09e-6 | 4.07e-5 | 3.81 | 3.77 |
 | 6 | 5.35e-7 | 1.10e-5 | 3.90 | 3.69 |
 
-**fs/zs (free-slip at CMB / Dirichlet at surface)** — \ref test_epsilon_divdiv_stokes_assess_freeslip.cpp:
+**fs/zs (free-slip at CMB / Dirichlet at surface)** — \ref test_epsilon_divdiv_stokes_assess_freeslip.cpp :
 
 | Level | vel error | pre error | vel ratio | pre ratio |
 |-------|-----------|-----------|-----------|-----------|
@@ -58,7 +58,7 @@ kernel cost.
 | 5 | 2.32e-6 | 3.27e-5 | 3.82 | 3.76 |
 | 6 | 5.95e-7 | 9.08e-6 | 3.90 | 3.60 |
 
-**fs/fs (free-slip at CMB / free-slip at surface)** — \ref test_epsilon_divdiv_stokes_assess_freeslip_freeslip.cpp:
+**fs/fs (free-slip at CMB / free-slip at surface)** — \ref test_epsilon_divdiv_stokes_assess_freeslip_freeslip.cpp :
 
 | Level | vel error | pre error | vel ratio | pre ratio |
 |-------|-----------|-----------|-----------|-----------|

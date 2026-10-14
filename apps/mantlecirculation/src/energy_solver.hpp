@@ -413,13 +413,9 @@ class EVSolver : public EnergySolver< ScalarType >
     , coords_radii_( coords_radii )
     , boundary_mask_( boundary_mask )
     , ownership_mask_( ownership_mask )
-    , eta_( eta )
     , velocity_( velocity )
     , T_( T )
-    , diffusion_coeff_( diffusion_coeff )
-    , internal_heating_coeff_( internal_heating_coeff )
-    , adiabatic_heating_coeff_( adiabatic_heating_coeff )
-    , shear_heating_coeff_( shear_heating_coeff )
+    , eta_( eta )
     , h_( h )
     , prm_( prm )
     , table_( std::move( table ) )
@@ -429,6 +425,10 @@ class EVSolver : public EnergySolver< ScalarType >
     , T_prev_( "T_prev", *domain_, ownership_mask_ )
     , lap_T_( "ev_lap_T", *domain_, ownership_mask_ )
     , M_lumped_( "ev_M_lumped", *domain_, ownership_mask_ )
+    , diffusion_coeff_( diffusion_coeff )
+    , internal_heating_coeff_( internal_heating_coeff )
+    , adiabatic_heating_coeff_( adiabatic_heating_coeff )
+    , shear_heating_coeff_( shear_heating_coeff )
     {
         // lap_T_, rhs_ev_, g_ have strictly sequential, non-overlapping lifetimes
         // within step() (lap_T_ done at the lumped-mass divide, then rhs_ev_ for the

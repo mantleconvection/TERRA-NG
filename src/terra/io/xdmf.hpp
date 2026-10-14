@@ -64,10 +64,10 @@ static constexpr int32_t checkpoint_version = 2;
 /// \ref read_xdmf_checkpoint_metadata() to just inspect the structure of the checkpoint).
 ///
 /// Note that the checkpoint can only be read using the same domain partitioning (i.e., the 'topology' of the
-/// \ref DistributedDomain used when the checkpoint was written must be identical) - BUT the number of MPI processes
-/// does not need to match (nor does the distribution of subdomains to ranks need to match). So you can technically
-/// (if the amount of main memory permits) read a checkpoint from a large parallel simulation with only one or a few
-/// processes (possibly useful for post-processing).
+/// \ref terra::grid::shell::DistributedDomain "DistributedDomain" used when the checkpoint was written must be identical)
+///  - BUT the number of MPI processes does not need to match (nor does the distribution of subdomains to ranks need to match).
+/// So you can technically (if the amount of main memory permits) read a checkpoint from a large parallel simulation with
+/// only one or a few processes (possibly useful for post-processing).
 ///
 /// ## Picking the last step during checkpoint recovery
 ///
@@ -179,9 +179,10 @@ class XDMFOutput
     /// @param directory_path Path to a directory that the data shall be written to. If the directory does not exist,
     ///                       it will be created during the first write() call. If it does already exist, data will be
     ///                       overwritten.
-    /// @param distributed_domain \ref DistributedDomain instance.
-    /// @param coords_shell_device Lateral spherical shell grid coordinates (see \ref subdomain_unit_sphere_single_shell_coords()).
-    /// @param coords_radii_device Spherical shell radii (see \ref subdomain_shell_radii()).
+    /// @param distributed_domain \ref terra::grid::shell::DistributedDomain "DistributedDomain" instance.
+    /// @param coords_shell_device Lateral spherical shell grid coordinates (see \ref terra::grid::shell::subdomain_unit_sphere_single_shell_coords()
+    ///        "subdomain_unit_sphere_single_shell_coords()").
+    /// @param coords_radii_device Spherical shell radii (see \ref terra::grid::shell::subdomain_shell_radii() "subdomain_shell_radii()").
     /// @param output_type_points Floating point data type to use for mesh coordinate output.
     /// @param output_type_connectivity Integer data type to use for mesh connectivity output.
     XDMFOutput(
@@ -1305,8 +1306,8 @@ struct CheckpointMetadata
 /// @param checkpoint_directory path to the directory containing the XDMF data
 /// @param data_label the Kokkos::View label of the grid data that shall be read in
 /// @param step the "timestep" to read
-/// @param distributed_domain \ref DistributedDomain instance that has the same topology as the one used when writing
-///                           the checkpoint
+/// @param distributed_domain \ref terra::grid::shell::DistributedDomain "DistributedDomain" instance that has the same
+///        topology as the one used when writing the checkpoint
 /// @param grid_data_device [out] properly sized Kokkos::View (can live on a device) to write the checkpoint to
 template < typename GridDataType >
 [[nodiscard]] util::Result<> read_xdmf_checkpoint_grid(

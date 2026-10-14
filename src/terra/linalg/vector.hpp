@@ -286,7 +286,7 @@ ScalarOf< Vector > norm_2_scaled( const Vector& y, const ScalarOf< Vector >& sca
 }
 
 /// @brief Check if a vector contains negative entries.
-/// Returns true if any entry of \f& y \f$ is negative.
+/// Returns true if any entry of \f$ y \f$ is negative.
 /// @param y Input vector.
 /// @return True if negative value is present, false otherwise.
 template < VectorLike Vector >

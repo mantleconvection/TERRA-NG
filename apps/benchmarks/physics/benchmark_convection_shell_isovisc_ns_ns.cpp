@@ -303,6 +303,12 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
     const auto num_dofs_pressure =
         kernels::common::count_masked< long >( ownership_mask_data[num_levels - 2], grid::NodeOwnershipFlag::OWNED );
 
+    // Specify boundary conditions for Stokes
+    grid::shell::BoundaryConditions bcs = {
+      { grid::shell::ShellBoundaryFlag::CMB    , grid::shell::BoundaryConditionFlag::DIRICHLET },
+      { grid::shell::ShellBoundaryFlag::SURFACE, grid::shell::BoundaryConditionFlag::DIRICHLET }
+    };
+
     // Set up operators.
 
     using Stokes      = fe::wedge::operators::shell::Stokes< ScalarType >;
@@ -318,7 +324,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
         coords_shell[velocity_level],
         coords_radii[velocity_level],
         boundary_mask_data[velocity_level],
-        true,
+        bcs,
         false );
 
     ViscousMass M( domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level], false );
@@ -335,7 +341,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
     for ( int level = 0; level < num_levels; level++ )
     {
         A_diag.emplace_back(
-            domains[level], coords_shell[level], coords_radii[level], boundary_mask_data[level], true, true );
+            domains[level], coords_shell[level], coords_radii[level], boundary_mask_data[level], bcs, true );
 
         inverse_diagonals.emplace_back(
             "inverse_diagonal_" + std::to_string( level ), domains[level], ownership_mask_data[level] );
@@ -350,7 +356,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
         if ( level < num_levels - 1 )
         {
             A_c.emplace_back(
-                domains[level], coords_shell[level], coords_radii[level], boundary_mask_data[level], true, false );
+                domains[level], coords_shell[level], coords_radii[level], boundary_mask_data[level], bcs, false );
             P.emplace_back( linalg::OperatorApplyMode::Add );
             R.emplace_back( domains[level] );
         }

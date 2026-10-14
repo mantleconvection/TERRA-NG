@@ -490,19 +490,9 @@ class EpsilonDivDivKerngenV01Initial
                                     E_grad_test[1][dimj]     = scalar_grad[node_idx][1];
                                     E_grad_test[2][dimj]     = scalar_grad[node_idx][2];
 
-                                    double grad_u_diag[3][3]     = { 0 };
                                     double tmpcse_symgrad_test_0 = 0.5 * E_grad_test[0][1] + 0.5 * E_grad_test[1][0];
                                     double tmpcse_symgrad_test_1 = 0.5 * E_grad_test[0][2] + 0.5 * E_grad_test[2][0];
                                     double tmpcse_symgrad_test_2 = 0.5 * E_grad_test[1][2] + 0.5 * E_grad_test[2][1];
-                                    grad_u_diag[0][0] = 1.0 * E_grad_test[0][0] * src_local_hex[dimj][w][node_idx];
-                                    grad_u_diag[0][1] = tmpcse_symgrad_test_0 * src_local_hex[dimj][w][node_idx];
-                                    grad_u_diag[0][2] = tmpcse_symgrad_test_1 * src_local_hex[dimj][w][node_idx];
-                                    grad_u_diag[1][0] = tmpcse_symgrad_test_0 * src_local_hex[dimj][w][node_idx];
-                                    grad_u_diag[1][1] = 1.0 * E_grad_test[1][1] * src_local_hex[dimj][w][node_idx];
-                                    grad_u_diag[1][2] = tmpcse_symgrad_test_2 * src_local_hex[dimj][w][node_idx];
-                                    grad_u_diag[2][0] = tmpcse_symgrad_test_1 * src_local_hex[dimj][w][node_idx];
-                                    grad_u_diag[2][1] = tmpcse_symgrad_test_2 * src_local_hex[dimj][w][node_idx];
-                                    grad_u_diag[2][2] = 1.0 * E_grad_test[2][2] * src_local_hex[dimj][w][node_idx];
                                     double tmpcse_pairing_0 = 4 * src_local_hex[dimj][w][node_idx];
                                     double tmpcse_pairing_1 = 2.0 * src_local_hex[dimj][w][node_idx];
                                     dst_array[dimi][w][node_idx] =

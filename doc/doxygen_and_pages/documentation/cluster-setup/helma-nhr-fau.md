@@ -1,4 +1,4 @@
-# Helma @ NHR@FAU {#helma-nhr-fau}
+# Helma @ NHR\@FAU {#helma-nhr-fau}
 
 Access form: https://hpc.fau.de/access-to-helma/
 

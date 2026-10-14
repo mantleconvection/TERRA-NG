@@ -9,45 +9,46 @@
 
 namespace terra::linalg::solvers {
 
-/// @brief Chebyshev accelerated Jacobi iterative solver for linear systems.
-///
-/// Computes (given an order \f$p \geq 1, \ p \in \mathbb{N}\f$)
-/// \f[
-///   x^{k+1} = x^k + \alpha_k \, D^{-1}(b - A x^k) + \beta_k \, d^k, \quad
-///   d^0 = 0
-/// \f]
-/// for \f$k = 0\f$ up to \f$k+1 = p\f$, where \f$D = \mathrm{diag}(A)\f$, and the coefficients \f$ \alpha_k \f$ and
-/// \f$ \beta_k \f$ are computed recursively from
-/// \f[
-///   \begin{aligned}
-///   \rho_0 &= \frac{\delta}{\theta}, \quad \\
-///   \rho_{k+1} &= (2(\theta/\delta) - \rho_k)^{-1}, \quad  \\
-///   \alpha_0 &= \theta^{-1}, \\
-///   \alpha_k &= \frac{2 \, \rho_{k+1}}{\delta}, \quad  \\
-///   \beta_0 &= 0, \\
-///   \beta_k &= \rho_{k+1} \rho_k, \\
-///   d_0 &= 0, \\
-///   d_k &= x^{k+1} - x^{k} = \alpha_k D^{-1}(b - A x^k) + \beta_k d_{k-1}
-///   \end{aligned}
-/// \f]
-/// with \f$ \theta = (\lambda_{\max} + \lambda_{\min})/2 \f$ and \f$ \delta = (\lambda_{\max} - \lambda_{\min})/2\f$ ,
-/// and \f$ \lambda_{\min}, \lambda_{\max} \f$ the eigenvalue bounds of \f$ D^{-1}A \f$.
-///
-/// The max eigenvalue \f$\lambda_{\max}\f$ is estimated before the first solve (or if requested via
-/// `refresh_max_eigenvalue_estimate_in_next_solve()`) applying a specified number of power iterations. A safety margin
-/// is added to hopefully ensure that the estimate is not too far off. The minimum eigenvalue is the obtained by scaling
-/// the maximum eigenvalue.
-///
-/// Each iteration executes \f$p\f$ matrix-vector products (plus some vector-vector operations).
-/// Setting the order \f$p = 1\f$ recovers the standard weighted Jacobi relaxation.
-/// If unsure, try low-order settings with \f$p = 2\f$ or \f$p = 3\f$.
-///
-/// The number of iterations repeats the entire process. For instance, setting the iterations \f$\text{it} = 10\f$ will
-/// perform \f$\text{it} \times p\f$ updates.
-///
-/// Satisfies the SolverLike concept (see solver.hpp).
-///
-/// @tparam OperatorT Operator type (must satisfy OperatorLike).
+/*! @brief Chebyshev accelerated Jacobi iterative solver for linear systems.
+   
+    Computes (given an order \f$p \geq 1, \ p \in \mathbb{N}\f$)
+    \f[
+      x^{k+1} = x^k + \alpha_k \, D^{-1}(b - A x^k) + \beta_k \, d^k, \quad
+      d^0 = 0
+    \f]
+    for \f$k = 0\f$ up to \f$k+1 = p\f$, where \f$D = \mathrm{diag}(A)\f$, and the coefficients \f$ \alpha_k \f$ and
+    \f$ \beta_k \f$ are computed recursively from
+    \f[
+      \begin{aligned}
+      \rho_0 &= \frac{\delta}{\theta}, \quad \\
+      \rho_{k+1} &= (2(\theta/\delta) - \rho_k)^{-1}, \quad  \\
+      \alpha_0 &= \theta^{-1}, \\
+      \alpha_k &= \frac{2 \, \rho_{k+1}}{\delta}, \quad  \\
+      \beta_0 &= 0, \\
+      \beta_k &= \rho_{k+1} \rho_k, \\
+      d_0 &= 0, \\
+      d_k &= x^{k+1} - x^{k} = \alpha_k D^{-1}(b - A x^k) + \beta_k d_{k-1}
+      \end{aligned}
+    \f]
+    with \f$ \theta = (\lambda_{\max} + \lambda_{\min})/2 \f$ and \f$ \delta = (\lambda_{\max} - \lambda_{\min})/2\f$ ,
+    and \f$ \lambda_{\min}, \lambda_{\max} \f$ the eigenvalue bounds of \f$ D^{-1}A \f$.
+   
+    The max eigenvalue \f$\lambda_{\max}\f$ is estimated before the first solve (or if requested via
+    `refresh_max_eigenvalue_estimate_in_next_solve()`) applying a specified number of power iterations. A safety margin
+    is added to hopefully ensure that the estimate is not too far off. The minimum eigenvalue is the obtained by scaling
+    the maximum eigenvalue.
+   
+    Each iteration executes \f$p\f$ matrix-vector products (plus some vector-vector operations).
+    Setting the order \f$p = 1\f$ recovers the standard weighted Jacobi relaxation.
+    If unsure, try low-order settings with \f$p = 2\f$ or \f$p = 3\f$.
+   
+    The number of iterations repeats the entire process. For instance, setting the iterations \f$\text{it} = 10\f$ will
+    perform \f$\text{it} \times p\f$ updates.
+   
+    Satisfies the SolverLike concept (see solver.hpp).
+   
+    @tparam OperatorT Operator type (must satisfy OperatorLike).
+*/
 template < OperatorLike OperatorT >
 class Chebyshev
 {

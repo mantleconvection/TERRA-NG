@@ -552,7 +552,6 @@ int main( int argc, char** argv )
             const int   L_lower = min_level + Li;
             const int   L_upper = min_level + Li + 1;
             const auto& LL_lower_on_lower = ld_on_own_comm[Li];
-            const auto& LL_upper_on_upper = ld_on_own_comm[Li + 1];
             const auto& LL_lower_on_upper = ld_on_upper_comm[Li];
             const auto& k_lower           = k_per_level[Li];
 

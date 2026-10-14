@@ -175,9 +175,6 @@ class Laplace0S0
         const ScalarT r_1 = radii_( local_subdomain_id, r_cell );
         const ScalarT r_2 = radii_( local_subdomain_id, r_cell + 1 );
 
-        const ScalarT grad_r     = grad_forward_map_rad( r_1, r_2 );
-        const ScalarT grad_r_inv = 1.0 / grad_r;
-
         // Compute the local element matrix.
         ScalarType src_local_hex[8] = { 0 };
         ScalarType dst_local_hex[8] = { 0 };

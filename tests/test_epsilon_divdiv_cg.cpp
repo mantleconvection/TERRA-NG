@@ -269,15 +269,6 @@ double test( int level, int level_subdomains, const std::shared_ptr< util::Table
     //using Epsilon = fe::wedge::operators::shell::EpsilonDivDivKerngen< ScalarType, 3 >;
     using Epsilon = fe::wedge::operators::shell::EpsilonDivDivSimple< ScalarType, 3 >;
 
-    BoundaryConditions bcs = {
-        { CMB, DIRICHLET },
-        { SURFACE, DIRICHLET },
-    };
-    BoundaryConditions bcs_neumann = {
-        { CMB, NEUMANN },
-        { SURFACE, NEUMANN },
-    };
-
     Epsilon A( domain, subdomain_shell_coords, subdomain_radii, boundary_mask_data, k.grid_data(), true, false );
     Epsilon A_neumann(
         domain, subdomain_shell_coords, subdomain_radii, boundary_mask_data, k.grid_data(), false, false );

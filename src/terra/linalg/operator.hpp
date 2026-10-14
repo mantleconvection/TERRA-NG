@@ -17,12 +17,14 @@ namespace terra::linalg {
 ///
 /// The modes are, for instance, useful for block matrices like the Stokes operator.
 /// If you want to execute, e.g., \f$ y \gets Au + B^T p \f$ then you could execute this as follows:
-/// \f[
-///     \begin{aligned}
-///     y &\gets Au && \qquad \text{replace and skip communication} \\
-///     y &\gets y + B^Tp && \qquad \text{add and communicate additively} \\
-///     \end{aligned}
-/// \f]
+/*!
+    \f[
+        \begin{aligned}
+        y &\gets Au && \qquad \text{replace and skip communication} \\
+        y &\gets y + B^Tp && \qquad \text{add and communicate additively} \\
+        \end{aligned}
+    \f]
+*/
 /// Note that if communication is not skipped in the first step in this example, the subdomain boundary data will be
 /// wrong.
 ///

@@ -218,7 +218,8 @@ constexpr int grid_data_vec_dim()
     return -1;
 }
 
-/// @brief Enum for encoding the boundary type tuples (in \ref BoundaryVertex, \ref BoundaryEdge, \ref BoundaryFace).
+/// @brief Enum for encoding the boundary type tuples (in \ref terra::grid::BoundaryVertex "BoundaryVertex",
+/// \ref terra::grid::BoundaryEdge "BoundaryEdge", \ref terra::grid::BoundaryFace "BoundaryFace").
 enum class BoundaryPosition : int
 {
     /// start (`== 0`)

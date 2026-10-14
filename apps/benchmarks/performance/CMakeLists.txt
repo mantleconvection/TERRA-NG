@@ -15,3 +15,8 @@ add_terra_performance_benchmark(benchmark_baseline)
 add_terra_performance_benchmark(benchmark_operators)
 add_terra_performance_benchmark(benchmark_communication)
 add_terra_performance_benchmark(benchmark_laplace)
+
+if( CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU" )
+  target_compile_options( benchmark_operators PRIVATE -w )
+endif()
+

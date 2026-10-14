@@ -152,8 +152,6 @@ int main( int argc, char** argv )
 
     using ScalarType = double;
 
-    using Mass = fe::wedge::operators::shell::Mass< ScalarType >;
-
     const uint_t level = 5u;
 
     const auto rMin = 0.5;

@@ -463,19 +463,9 @@ for (w = 0; w < 2; w += 1) {
                E_grad_test[1][dim_diagBC] = scalar_grad[node_idx][1];
                E_grad_test[2][dim_diagBC] = scalar_grad[node_idx][2];
 
-               double grad_u_diag[3][3] = {0};
                double tmpcse_symgrad_test_0 = 0.5*E_grad_test[0][1] + 0.5*E_grad_test[1][0];
                double tmpcse_symgrad_test_1 = 0.5*E_grad_test[0][2] + 0.5*E_grad_test[2][0];
                double tmpcse_symgrad_test_2 = 0.5*E_grad_test[1][2] + 0.5*E_grad_test[2][1];
-               grad_u_diag[0][0] = 1.0*E_grad_test[0][0]*src_local_hex[dim_diagBC][w][node_idx];
-               grad_u_diag[0][1] = tmpcse_symgrad_test_0*src_local_hex[dim_diagBC][w][node_idx];
-               grad_u_diag[0][2] = tmpcse_symgrad_test_1*src_local_hex[dim_diagBC][w][node_idx];
-               grad_u_diag[1][0] = tmpcse_symgrad_test_0*src_local_hex[dim_diagBC][w][node_idx];
-               grad_u_diag[1][1] = 1.0*E_grad_test[1][1]*src_local_hex[dim_diagBC][w][node_idx];
-               grad_u_diag[1][2] = tmpcse_symgrad_test_2*src_local_hex[dim_diagBC][w][node_idx];
-               grad_u_diag[2][0] = tmpcse_symgrad_test_1*src_local_hex[dim_diagBC][w][node_idx];
-               grad_u_diag[2][1] = tmpcse_symgrad_test_2*src_local_hex[dim_diagBC][w][node_idx];
-               grad_u_diag[2][2] = 1.0*E_grad_test[2][2]*src_local_hex[dim_diagBC][w][node_idx];
                double tmpcse_pairing_0 = 4*src_local_hex[dim_diagBC][w][node_idx];
                double tmpcse_pairing_1 = 2.0*src_local_hex[dim_diagBC][w][node_idx];
                dst_array[dim_diagBC][w][node_idx] = k_eval*(tmpcse_pairing_0*pow(tmpcse_symgrad_test_0, 2) + tmpcse_pairing_0*pow(tmpcse_symgrad_test_1, 2) + tmpcse_pairing_0*pow(tmpcse_symgrad_test_2, 2) + tmpcse_pairing_1*pow(E_grad_test[0][0], 2) + tmpcse_pairing_1*pow(E_grad_test[1][1], 2) + tmpcse_pairing_1*pow(E_grad_test[2][2], 2) - 0.66666666666666663*pow(E_grad_test[dim_diagBC][dim_diagBC], 2)*src_local_hex[dim_diagBC][w][node_idx])*fabs(J_det)*qw_array[q] + dst_array[dim_diagBC][w][node_idx];

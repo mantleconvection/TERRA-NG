@@ -51,9 +51,6 @@ class EpsilonDivDivKerngenV03TeamsPrecomp
     linalg::OperatorCommunicationMode operator_communication_mode_;
     linalg::OperatorStoredMatrixMode  operator_stored_matrix_mode_;
 
-    communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT, VecDim > send_buffers_;
-    communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT, VecDim > recv_buffers_;
-
     grid::Grid4DDataVec< ScalarType, VecDim > src_;
     grid::Grid4DDataVec< ScalarType, VecDim > dst_;
 
@@ -77,6 +74,9 @@ class EpsilonDivDivKerngenV03TeamsPrecomp
     int blocks_per_column_;
     int blocks_;
 
+    communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT, VecDim > send_buffers_;
+    communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarT, VecDim > recv_buffers_;
+
   public:
     EpsilonDivDivKerngenV03TeamsPrecomp(
         const grid::shell::DistributedDomain&                           domain,
@@ -93,8 +93,8 @@ class EpsilonDivDivKerngenV03TeamsPrecomp
     : domain_( domain )
     , grid_( grid )
     , radii_( radii )
-    , mask_( mask )
     , k_( k )
+    , mask_( mask )
     , treat_boundary_( true )
     , diagonal_( diagonal )
     , operator_apply_mode_( operator_apply_mode )
@@ -239,8 +239,6 @@ class EpsilonDivDivKerngenV03TeamsPrecomp
         }
 
         util::Timer timer_kernel( "epsilon_divdiv_kernel" );
-        const auto  num_cells =
-            src_.extent( 0 ) * ( src_.extent( 1 ) - 1 ) * ( src_.extent( 2 ) - 1 ) * ( src_.extent( 3 ) - 1 );
 
         constexpr int        size_g1    = num_wedges_per_hex_cell * 1 * 9 * sizeof( ScalarT );
         constexpr int        size_g2    = num_wedges_per_hex_cell * 1 * sizeof( ScalarT );
@@ -410,38 +408,6 @@ class EpsilonDivDivKerngenV03TeamsPrecomp
         }
         else
         {
-            double wedge_surf_phy_coords[2][3][3];
-            double quad_surface_coords[2][2][3];
-            quad_surface_coords[0][0][0]   = grid_( local_subdomain_id, x_cell, y_cell, 0 );
-            quad_surface_coords[0][0][1]   = grid_( local_subdomain_id, x_cell, y_cell, 1 );
-            quad_surface_coords[0][0][2]   = grid_( local_subdomain_id, x_cell, y_cell, 2 );
-            quad_surface_coords[0][1][0]   = grid_( local_subdomain_id, x_cell, y_cell + 1, 0 );
-            quad_surface_coords[0][1][1]   = grid_( local_subdomain_id, x_cell, y_cell + 1, 1 );
-            quad_surface_coords[0][1][2]   = grid_( local_subdomain_id, x_cell, y_cell + 1, 2 );
-            quad_surface_coords[1][0][0]   = grid_( local_subdomain_id, x_cell + 1, y_cell, 0 );
-            quad_surface_coords[1][0][1]   = grid_( local_subdomain_id, x_cell + 1, y_cell, 1 );
-            quad_surface_coords[1][0][2]   = grid_( local_subdomain_id, x_cell + 1, y_cell, 2 );
-            quad_surface_coords[1][1][0]   = grid_( local_subdomain_id, x_cell + 1, y_cell + 1, 0 );
-            quad_surface_coords[1][1][1]   = grid_( local_subdomain_id, x_cell + 1, y_cell + 1, 1 );
-            quad_surface_coords[1][1][2]   = grid_( local_subdomain_id, x_cell + 1, y_cell + 1, 2 );
-            wedge_surf_phy_coords[0][0][0] = quad_surface_coords[0][0][0];
-            wedge_surf_phy_coords[0][0][1] = quad_surface_coords[0][0][1];
-            wedge_surf_phy_coords[0][0][2] = quad_surface_coords[0][0][2];
-            wedge_surf_phy_coords[0][1][0] = quad_surface_coords[1][0][0];
-            wedge_surf_phy_coords[0][1][1] = quad_surface_coords[1][0][1];
-            wedge_surf_phy_coords[0][1][2] = quad_surface_coords[1][0][2];
-            wedge_surf_phy_coords[0][2][0] = quad_surface_coords[0][1][0];
-            wedge_surf_phy_coords[0][2][1] = quad_surface_coords[0][1][1];
-            wedge_surf_phy_coords[0][2][2] = quad_surface_coords[0][1][2];
-            wedge_surf_phy_coords[1][0][0] = quad_surface_coords[1][1][0];
-            wedge_surf_phy_coords[1][0][1] = quad_surface_coords[1][1][1];
-            wedge_surf_phy_coords[1][0][2] = quad_surface_coords[1][1][2];
-            wedge_surf_phy_coords[1][1][0] = quad_surface_coords[0][1][0];
-            wedge_surf_phy_coords[1][1][1] = quad_surface_coords[0][1][1];
-            wedge_surf_phy_coords[1][1][2] = quad_surface_coords[0][1][2];
-            wedge_surf_phy_coords[1][2][0] = quad_surface_coords[1][0][0];
-            wedge_surf_phy_coords[1][2][1] = quad_surface_coords[1][0][1];
-            wedge_surf_phy_coords[1][2][2] = quad_surface_coords[1][0][2];
             double r_0                     = radii_( local_subdomain_id, r_cell );
             double r_1                     = radii_( local_subdomain_id, r_cell + 1 );
             double src_local_hex[3][2][6];
@@ -483,7 +449,6 @@ class EpsilonDivDivKerngenV03TeamsPrecomp
             int at_cmb_boundary     = has_flag( local_subdomain_id, x_cell, y_cell, r_cell, CMB );
             int at_surface_boundary = has_flag( local_subdomain_id, x_cell, y_cell, r_cell + 1, SURFACE );
             int cmb_shift = ( ( treat_boundary_ && diagonal_ == false && at_cmb_boundary != 0 ) ? ( 3 ) : ( 0 ) );
-            int max_rad   = radii_.extent( 1 ) - 1;
             int surface_shift =
                 ( ( treat_boundary_ && diagonal_ == false && at_surface_boundary != 0 ) ? ( 3 ) : ( 0 ) );
             double dst_array[3][2][6] = { 0 };
@@ -681,19 +646,9 @@ class EpsilonDivDivKerngenV03TeamsPrecomp
                                 E_grad_test[1][dim_diagBC] = scalar_grad[node_idx][1];
                                 E_grad_test[2][dim_diagBC] = scalar_grad[node_idx][2];
 
-                                double grad_u_diag[3][3]     = { 0 };
                                 double tmpcse_symgrad_test_0 = 0.5 * E_grad_test[0][1] + 0.5 * E_grad_test[1][0];
                                 double tmpcse_symgrad_test_1 = 0.5 * E_grad_test[0][2] + 0.5 * E_grad_test[2][0];
                                 double tmpcse_symgrad_test_2 = 0.5 * E_grad_test[1][2] + 0.5 * E_grad_test[2][1];
-                                grad_u_diag[0][0] = 1.0 * E_grad_test[0][0] * src_local_hex[dim_diagBC][w][node_idx];
-                                grad_u_diag[0][1] = tmpcse_symgrad_test_0 * src_local_hex[dim_diagBC][w][node_idx];
-                                grad_u_diag[0][2] = tmpcse_symgrad_test_1 * src_local_hex[dim_diagBC][w][node_idx];
-                                grad_u_diag[1][0] = tmpcse_symgrad_test_0 * src_local_hex[dim_diagBC][w][node_idx];
-                                grad_u_diag[1][1] = 1.0 * E_grad_test[1][1] * src_local_hex[dim_diagBC][w][node_idx];
-                                grad_u_diag[1][2] = tmpcse_symgrad_test_2 * src_local_hex[dim_diagBC][w][node_idx];
-                                grad_u_diag[2][0] = tmpcse_symgrad_test_1 * src_local_hex[dim_diagBC][w][node_idx];
-                                grad_u_diag[2][1] = tmpcse_symgrad_test_2 * src_local_hex[dim_diagBC][w][node_idx];
-                                grad_u_diag[2][2] = 1.0 * E_grad_test[2][2] * src_local_hex[dim_diagBC][w][node_idx];
                                 double tmpcse_pairing_0 = 4 * src_local_hex[dim_diagBC][w][node_idx];
                                 double tmpcse_pairing_1 = 2.0 * src_local_hex[dim_diagBC][w][node_idx];
                                 dst_array[dim_diagBC][w][node_idx] =

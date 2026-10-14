@@ -295,7 +295,6 @@ class Laplace1S2
                 const ScalarT r          = forward_map_rad< ScalarT >( r_1, r_2, zeta );
                 const ScalarT r_inv      = 1.0 / r;
                 const ScalarT abs_det    = r * r * grad_r * shmem_g3[wedge * N_q + q];
-                const ScalarT factors[3] = { r_inv, r_inv, grad_r_inv };
 
                 // 2. Compute physical gradients for all nodes at this quadrature point.
                 dense::Vec< ScalarType, 3 > grad_phy[num_nodes_per_wedge];

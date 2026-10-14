@@ -86,9 +86,9 @@ struct SolutionVelocityInterpolator
     : grid_( grid )
     , radii_( radii )
     , data_u_( data_u )
+    , only_boundary_( only_boundary )
     , r_min_( r_min )
     , alpha_( alpha )
-    , only_boundary_( only_boundary )
     {}
 
     KOKKOS_INLINE_FUNCTION
@@ -96,33 +96,15 @@ struct SolutionVelocityInterpolator
     {
         const dense::Vec< double, 3 > coords = grid::shell::coords( local_subdomain_id, x, y, r, grid_, radii_ );
 
-        const double radius = coords.norm();
-
         const double cx = coords( 0 );
         const double cy = coords( 1 );
         const double cz = coords( 2 );
-
-        const double g = 1 + alpha_ * ( radius - r_min_ ) * ( radius - r_min_ );
 
         if ( !only_boundary_ || ( r == 0 || r == radii_.extent( 1 ) - 1 ) )
         {
             data_u_( local_subdomain_id, x, y, r, 0 ) = -4 * Kokkos::cos( 4 * cz );
             data_u_( local_subdomain_id, x, y, r, 1 ) = 8 * Kokkos::cos( 8 * cx );
             data_u_( local_subdomain_id, x, y, r, 2 ) = -2 * Kokkos::cos( 2 * cy );
-
-           /* 
-            data_u_( local_subdomain_id, x, y, r, 0 ) =
-                -cy *
-                ( Kokkos::pow(
-                      Kokkos::sqrt( Kokkos::pow( cx, 2 ) + Kokkos::pow( cy, 2 ) + Kokkos::pow( cz, 2 ) ) - 0.5, 2 ) +
-                  1 );
-            data_u_( local_subdomain_id, x, y, r, 1 ) =
-                cx *
-                ( Kokkos::pow(
-                      Kokkos::sqrt( Kokkos::pow( cx, 2 ) + Kokkos::pow( cy, 2 ) + Kokkos::pow( cz, 2 ) ) - 0.5, 2 ) +
-                  1 );
-            data_u_( local_subdomain_id, x, y, r, 2 ) = 0.0;
-            */
         }
     }
 };
@@ -188,11 +170,6 @@ struct RHSVelocityInterpolator
     void operator()( const int local_subdomain_id, const int x, const int y, const int r ) const
     {
         const dense::Vec< double, 3 > coords = grid::shell::coords( local_subdomain_id, x, y, r, grid_, radii_ );
-
-        const double cx = coords( 0 );
-        const double cy = coords( 1 );
-        const double cz = coords( 2 );
-
         
         const double x0 = 4 * coords( 2 );
 
@@ -284,8 +261,6 @@ struct KInterpolator
     KOKKOS_INLINE_FUNCTION
     void operator()( const int local_subdomain_id, const int x, const int y, const int r ) const
     {
-        const dense::Vec< double, 3 > coords = grid::shell::coords( local_subdomain_id, x, y, r, grid_, radii_ );
-
         data_( local_subdomain_id, x, y, r ) = 1.0;
     }
 };

@@ -47,7 +47,7 @@ class VectorQ1IsoQ2Q1
     {}
 
     /// @brief Linear combination implementation for Block2VectorLike concept.
-    /// Computes: \( \text{block}_1 = c_0 + \sum_i c_i x_i.\text{block}_1 \), \( \text{block}_2 = c_0 + \sum_i c_i x_i.\text{block}_2 \)
+    /// Computes: \f$ \text{block}_1 = c_0 + \sum_i c_i x_i.\text{block}_1 \f$, \f$ \text{block}_2 = c_0 + \sum_i c_i x_i.\text{block}_2 \f$
     /// @param c Coefficients.
     /// @param x Input block vectors.
     /// @param c0 Scalar to add.
@@ -68,7 +68,7 @@ class VectorQ1IsoQ2Q1
     }
 
     /// @brief Dot product implementation for Block2VectorLike concept.
-    /// Computes: \( \text{block}_1 \cdot x.\text{block}_1 + \text{block}_2 \cdot x.\text{block}_2 \)
+    /// Computes: \f$ \text{block}_1 \cdot x.\text{block}_1 + \text{block}_2 \cdot x.\text{block}_2 \f$
     /// @param x Other block vector.
     /// @return Dot product value.
     ScalarType dot_impl( const VectorQ1IsoQ2Q1& x ) const
@@ -77,7 +77,7 @@ class VectorQ1IsoQ2Q1
     }
 
     /// @brief Invert entries implementation for Block2VectorLike concept.
-    /// Computes: \( \text{block}_1 = 1 / \text{block}_1 \), \( \text{block}_2 = 1 / \text{block}_2 \)
+    /// Computes: \f$ \text{block}_1 = 1 / \text{block}_1 \f$, \f$ \text{block}_2 = 1 / \text{block}_2 \f$
     void invert_entries_impl()
     {
         block_1().invert_entries_impl();
@@ -85,7 +85,7 @@ class VectorQ1IsoQ2Q1
     }
 
     /// @brief Elementwise scaling implementation for Block2VectorLike concept.
-    /// Computes: \( \text{block}_1 = \text{block}_1 \cdot x.\text{block}_1 \), \( \text{block}_2 = \text{block}_2 \cdot x.\text{block}_2 \)
+    /// Computes: \f$ \text{block}_1 = \text{block}_1 \cdot x.\text{block}_1 \f$, \f$ \text{block}_2 = \text{block}_2 \cdot x.\text{block}_2 \f$
     /// @param x Scaling block vector.
     void scale_with_vector_impl( const VectorQ1IsoQ2Q1& x )
     {
@@ -102,12 +102,12 @@ class VectorQ1IsoQ2Q1
     }
 
     /// @brief Min entry implementation for Block2VectorLike concept.
-    /// Computes: \( \min( \min_i \text{block}_1, \min_j \text{block}_2 ) \)
+    /// Computes: \f$ \min( \min_i \text{block}_1, \min_j \text{block}_2 ) \f$
     /// @return Minimum value across both blocks.
     ScalarType min_entry_impl() const { return std::min( block_1().min_entry_impl(), block_2().min_entry_impl() ); }
 
     /// @brief Min absolute entry implementation for Block2VectorLike concept.
-    /// Computes: \( \min( \min_i |\text{block}_1|, \min_j |\text{block}_2| ) \)
+    /// Computes: \f$ \min( \min_i |\text{block}_1|, \min_j |\text{block}_2| ) \f$
     /// @return Minimum absolute value across both blocks.
     ScalarType min_abs_entry_impl() const
     {
@@ -115,12 +115,12 @@ class VectorQ1IsoQ2Q1
     }
 
     /// @brief Max entry implementation for Block2VectorLike concept.
-    /// Computes: \( \max( \max_i \text{block}_1, \max_j \text{block}_2 ) \)
+    /// Computes: \f$ \max( \max_i \text{block}_1, \max_j \text{block}_2 ) \f$
     /// @return Maximum value across both blocks.
     ScalarType max_entry_impl() const { return std::max( block_1().max_entry_impl(), block_2().max_entry_impl() ); }
 
     /// @brief Max absolute entry implementation for Block2VectorLike concept.
-    /// Computes: \( \max( \max_i |\text{block}_1|, \max_j |\text{block}_2| ) \)
+    /// Computes: \f$ \max( \max_i |\text{block}_1|, \max_j |\text{block}_2| ) \f$
     /// @return Maximum absolute value across both blocks.
     ScalarType max_abs_entry_impl() const
     {

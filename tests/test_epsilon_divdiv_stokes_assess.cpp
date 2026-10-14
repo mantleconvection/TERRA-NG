@@ -1,7 +1,8 @@
+/// \file test_epsilon_divdiv_stokes_assess.cpp
+///
+/// \brief Stokes convergence test using analytical spherical-harmonic solutions from the
+/// "assess" package (Analytical Solutions for the Stokes Equations in Spherical Shells).
 
-// Stokes convergence test using analytical spherical-harmonic solutions from the
-// "assess" package (Analytical Solutions for the Stokes Equations in Spherical Shells).
-//
 // Solution: SphericalStokesSolutionSmoothZeroSlip(l=2, m=2, k=2, Rp=1.0, Rm=0.5, nu=1.0, g=1.0)
 //   - Dirichlet (zero-slip) BCs on both CMB and surface
 //   - Constant viscosity nu = 1

@@ -4,84 +4,85 @@
 #include "terra/dense/mat.hpp"
 #include "terra/dense/vec.hpp"
 
-/// @namespace terra::fe::wedge
-/// @brief Features for wedge elements.
-///
-/// \section geometry Geometry
-///
-///   \f$ \xi, \eta \in [0, 1] \f$ (lateral reference coords)
-///
-///   \f$ \zeta \in [-1, 1] \f$   (radial reference coords)
-///
-///   \f$ 0 \leq \xi + \eta \leq 1 \f$
-///
-/// \section enumeration Node enumeration
-///
-///   \code
-///
-///   r_node_idx = r_cell_idx + 1 (outer):
-///
-///   5
-///   |\
-///   | \
-///   3--4
-///   \endcode
-///
-///   \code
-///
-///   r_node_idx = r_cell_idx (inner):
-///
-///   2
-///   |\
-///   | \
-///   0--1
-///   \endcode
-///
-/// \section shape Shape functions
-///
-/// Lateral:
-///
-///   \f[
-///   \begin{align}
-///     N^\mathrm{lat}_0 = N^\mathrm{lat}_3 &= 1 - \xi - \eta \\
-///     N^\mathrm{lat}_1 = N^\mathrm{lat}_4 &= \xi \\
-///     N^\mathrm{lat}_2 = N^\mathrm{lat}_5 &= \eta
-///   \end{align}
-///   \f]
-///
-/// Radial:
-///
-///   \f[
-///   \begin{align}
-///     N^\mathrm{rad}_0 = N^\mathrm{rad}_1 = N^\mathrm{rad}_2 &= \frac{1}{2} ( 1 - \zeta ) \\
-///     N^\mathrm{rad}_3 = N^\mathrm{rad}_4 = N^\mathrm{rad}_5 &= \frac{1}{2} ( 1 + \zeta ) \\
-///   \end{align}
-///   \f]
-///
-/// Full:
-///
-///   \f[
-///   N_i = N^\mathrm{lat}_i * N^\mathrm{rad}_i
-///   \f]
-///
-///
-/// \section phy Physical coordinates
-///
-///   \code
-///   r_1, r_2                     radii of bottom and top (r_1 < r_2)
-///   p1_phy, p2_phy, p3_phy       coords of triangle on unit sphere
-///   \endcode
+/*! @namespace terra::fe::wedge
+    @brief Features for wedge elements.
+   
+    \section geometry Geometry
+   
+      \f$ \xi, \eta \in [0, 1] \f$ (lateral reference coords)
+   
+      \f$ \zeta \in [-1, 1] \f$   (radial reference coords)
+   
+      \f$ 0 \leq \xi + \eta \leq 1 \f$
+   
+    \section enumeration Node enumeration
+   
+      \code
+   
+      r_node_idx = r_cell_idx + 1 (outer):
+   
+      5
+      |\
+      | \
+      3--4
+      \endcode
+   
+      \code
+   
+      r_node_idx = r_cell_idx (inner):
+   
+      2
+      |\
+      | \
+      0--1
+      \endcode
+   
+    \section shape Shape functions
+   
+    Lateral:
+   
+      \f[
+      \begin{align}
+        N^\mathrm{lat}_0 = N^\mathrm{lat}_3 &= 1 - \xi - \eta \\
+        N^\mathrm{lat}_1 = N^\mathrm{lat}_4 &= \xi \\
+        N^\mathrm{lat}_2 = N^\mathrm{lat}_5 &= \eta
+      \end{align}
+      \f]
+  
+    Radial:
+   
+      \f[
+      \begin{align}
+        N^\mathrm{rad}_0 = N^\mathrm{rad}_1 = N^\mathrm{rad}_2 &= \frac{1}{2} ( 1 - \zeta ) \\
+        N^\mathrm{rad}_3 = N^\mathrm{rad}_4 = N^\mathrm{rad}_5 &= \frac{1}{2} ( 1 + \zeta ) \\
+      \end{align}
+      \f]
+  
+    Full:
+   
+      \f[
+      N_i = N^\mathrm{lat}_i * N^\mathrm{rad}_i
+      \f]
+   
+   
+    \section phy Physical coordinates
+   
+      \code
+      r_1, r_2                     radii of bottom and top (r_1 < r_2)
+      p1_phy, p2_phy, p3_phy       coords of triangle on unit sphere
+      \endcode
+*/
 namespace terra::fe::wedge {
 
 /// @brief Radial shape function.
-///
-///   \f[
-///   \begin{align}
-///     N^\mathrm{rad}_0 = N^\mathrm{rad}_1 = N^\mathrm{rad}_2 &= \frac{1}{2} ( 1 - \zeta ) \\
-///     N^\mathrm{rad}_3 = N^\mathrm{rad}_4 = N^\mathrm{rad}_5 &= \frac{1}{2} ( 1 + \zeta ) \\
-///   \end{align}
-///   \f]
-///
+/*!
+      \f[
+      \begin{align}
+        N^\mathrm{rad}_0 = N^\mathrm{rad}_1 = N^\mathrm{rad}_2 &= \frac{1}{2} ( 1 - \zeta ) \\
+        N^\mathrm{rad}_3 = N^\mathrm{rad}_4 = N^\mathrm{rad}_5 &= \frac{1}{2} ( 1 + \zeta ) \\
+      \end{align}
+      \f]
+*/
 template < std::floating_point T >
 KOKKOS_INLINE_FUNCTION constexpr T shape_rad( const int node_idx, const T zeta )
 {
@@ -90,14 +91,14 @@ KOKKOS_INLINE_FUNCTION constexpr T shape_rad( const int node_idx, const T zeta )
 }
 
 /// @brief Radial shape function.
-///
-///   \f[
-///   \begin{align}
-///     N^\mathrm{rad}_0 = N^\mathrm{rad}_1 = N^\mathrm{rad}_2 &= \frac{1}{2} ( 1 - \zeta ) \\
-///     N^\mathrm{rad}_3 = N^\mathrm{rad}_4 = N^\mathrm{rad}_5 &= \frac{1}{2} ( 1 + \zeta ) \\
-///   \end{align}
-///   \f]
-///
+/*!
+      \f[
+      \begin{align}
+        N^\mathrm{rad}_0 = N^\mathrm{rad}_1 = N^\mathrm{rad}_2 &= \frac{1}{2} ( 1 - \zeta ) \\
+        N^\mathrm{rad}_3 = N^\mathrm{rad}_4 = N^\mathrm{rad}_5 &= \frac{1}{2} ( 1 + \zeta ) \\
+      \end{align}
+      \f]
+*/   
 template < std::floating_point T >
 KOKKOS_INLINE_FUNCTION constexpr T shape_rad( const int node_idx, const dense::Vec< T, 3 >& xi_eta_zeta )
 {
@@ -105,15 +106,15 @@ KOKKOS_INLINE_FUNCTION constexpr T shape_rad( const int node_idx, const dense::V
 }
 
 /// @brief Lateral shape function.
-///
-///   \f[
-///   \begin{align}
-///     N^\mathrm{lat}_0 = N^\mathrm{lat}_3 &= 1 - \xi - \eta \\
-///     N^\mathrm{lat}_1 = N^\mathrm{lat}_4 &= \xi \\
-///     N^\mathrm{lat}_2 = N^\mathrm{lat}_5 &= \eta
-///   \end{align}
-///   \f]
-///
+/*!
+      \f[
+      \begin{align}
+        N^\mathrm{lat}_0 = N^\mathrm{lat}_3 &= 1 - \xi - \eta \\
+        N^\mathrm{lat}_1 = N^\mathrm{lat}_4 &= \xi \\
+        N^\mathrm{lat}_2 = N^\mathrm{lat}_5 &= \eta
+      \end{align}
+      \f]
+*/
 template < std::floating_point T >
 KOKKOS_INLINE_FUNCTION constexpr T shape_lat( const int node_idx, const T xi, const T eta )
 {
@@ -122,15 +123,15 @@ KOKKOS_INLINE_FUNCTION constexpr T shape_lat( const int node_idx, const T xi, co
 }
 
 /// @brief Lateral shape function.
-///
-///   \f[
-///   \begin{align}
-///     N^\mathrm{lat}_0 = N^\mathrm{lat}_3 &= 1 - \xi - \eta \\
-///     N^\mathrm{lat}_1 = N^\mathrm{lat}_4 &= \xi \\
-///     N^\mathrm{lat}_2 = N^\mathrm{lat}_5 &= \eta
-///   \end{align}
-///   \f]
-///
+/*!
+      \f[
+      \begin{align}
+        N^\mathrm{lat}_0 = N^\mathrm{lat}_3 &= 1 - \xi - \eta \\
+        N^\mathrm{lat}_1 = N^\mathrm{lat}_4 &= \xi \\
+        N^\mathrm{lat}_2 = N^\mathrm{lat}_5 &= \eta
+      \end{align}
+      \f]
+*/
 template < std::floating_point T >
 KOKKOS_INLINE_FUNCTION constexpr T shape_lat( const int node_idx, const dense::Vec< T, 3 >& xi_eta_zeta )
 {
@@ -208,21 +209,22 @@ KOKKOS_INLINE_FUNCTION constexpr T grad_shape_lat_eta( const int node_idx )
 }
 
 /// @brief Gradient of the full shape function:
-///
-/// \f[
-/// \nabla N_j =
-/// \begin{bmatrix}
-///     \frac{\partial}{\partial \xi} N_j \\
-///     \frac{\partial}{\partial \eta} N_j \\
-///     \frac{\partial}{\partial \zeta} N_j
-/// \end{bmatrix}
-/// =
-/// \begin{bmatrix}
-///     N^\mathrm{rad}_j \frac{\partial}{\partial \xi} N^\mathrm{lat}_j \\
-///     N^\mathrm{rad}_j \frac{\partial}{\partial \eta} N^\mathrm{lat}_j \\
-///     N^\mathrm{lat}_j \frac{\partial}{\partial \zeta} N^\mathrm{rad}_j
-/// \end{bmatrix}
-/// \f]
+/*!
+    \f[
+    \nabla N_j =
+    \begin{bmatrix}
+        \frac{\partial}{\partial \xi} N_j \\
+        \frac{\partial}{\partial \eta} N_j \\
+        \frac{\partial}{\partial \zeta} N_j
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        N^\mathrm{rad}_j \frac{\partial}{\partial \xi} N^\mathrm{lat}_j \\
+        N^\mathrm{rad}_j \frac{\partial}{\partial \eta} N^\mathrm{lat}_j \\
+        N^\mathrm{lat}_j \frac{\partial}{\partial \zeta} N^\mathrm{rad}_j
+    \end{bmatrix}
+    \f]
+*/
 template < std::floating_point T >
 KOKKOS_INLINE_FUNCTION constexpr dense::Vec< T, 3 >
     grad_shape( const int node_idx, const T xi, const T eta, const T zeta )
@@ -235,21 +237,22 @@ KOKKOS_INLINE_FUNCTION constexpr dense::Vec< T, 3 >
 }
 
 /// @brief Gradient of the full shape function:
-///
-/// \f[
-/// \nabla N_j =
-/// \begin{bmatrix}
-///     \frac{\partial}{\partial \xi} N_j \\
-///     \frac{\partial}{\partial \eta} N_j \\
-///     \frac{\partial}{\partial \zeta} N_j
-/// \end{bmatrix}
-/// =
-/// \begin{bmatrix}
-///     N^\mathrm{rad}_j \frac{\partial}{\partial \xi} N^\mathrm{lat}_j \\
-///     N^\mathrm{rad}_j \frac{\partial}{\partial \eta} N^\mathrm{lat}_j \\
-///     N^\mathrm{lat}_j \frac{\partial}{\partial \zeta} N^\mathrm{rad}_j
-/// \end{bmatrix}
-/// \f]
+/*!
+    \f[
+    \nabla N_j =
+    \begin{bmatrix}
+        \frac{\partial}{\partial \xi} N_j \\
+        \frac{\partial}{\partial \eta} N_j \\
+        \frac{\partial}{\partial \zeta} N_j
+    \end{bmatrix}
+    =
+    \begin{bmatrix}
+        N^\mathrm{rad}_j \frac{\partial}{\partial \xi} N^\mathrm{lat}_j \\
+        N^\mathrm{rad}_j \frac{\partial}{\partial \eta} N^\mathrm{lat}_j \\
+        N^\mathrm{lat}_j \frac{\partial}{\partial \zeta} N^\mathrm{rad}_j
+    \end{bmatrix}
+    \f]
+*/
 template < std::floating_point T >
 KOKKOS_INLINE_FUNCTION constexpr dense::Vec< T, 3 >
     grad_shape( const int node_idx, const dense::Vec< T, 3 >& xi_eta_zeta )
