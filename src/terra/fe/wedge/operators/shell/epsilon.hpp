@@ -144,8 +144,8 @@ class Epsilon
                 if ( diagonal_ and dimi != dimj )
                     continue;
 
-                ScalarType src_local_hex[8] = { { 0 } };
-                ScalarType dst_local_hex[8] = { { 0 } };
+                ScalarType src_local_hex[8] = { 0 };
+                ScalarType dst_local_hex[8] = { 0 };
 
                 constexpr int hex_offset_x[8] = { 0, 1, 0, 1, 0, 1, 0, 1 };
                 constexpr int hex_offset_y[8] = { 0, 0, 1, 1, 0, 0, 1, 1 };
