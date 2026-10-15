@@ -293,7 +293,7 @@ class XDMFOutput
     /// The write() calls will allocate temporary storage on the host if host and device memory are not shared.
     /// Currently, for data grids, some host-side temporary buffers are kept after this method returns (the sizes depend
     /// on the type of data added) to avoid frequent reallocation.
-    void write( int step, double time = 0.0 )
+    void write( int step, double time = 0.0, bool output_in_Ma = false )
     {
         using util::XML;
 
@@ -306,7 +306,16 @@ class XDMFOutput
         const auto topology_file_path = directory_path_ + "/" + topology_file_base;
 
         // Construct file path and name.
-        const auto step_file_path = directory_path_ + "/step_" + std::to_string( step ) + ".xmf";
+        std::string out_str;
+        if ( output_in_Ma )
+        {
+            out_str = std::to_string( static_cast< int >( time ) );
+        }
+        else
+        {
+            out_str = std::to_string( step );
+        }
+        const auto step_file_path = directory_path_ + "/step_" + out_str + ".xmf";
 
         const int num_subdomains = coords_shell_device_.extent( 0 );
         const int nodes_x        = coords_shell_device_.extent( 1 );
@@ -485,25 +494,25 @@ class XDMFOutput
 
         for ( const auto& [data, output_type] : device_data_views_scalar_float_ )
         {
-            const auto attribute = write_scalar_attribute_file( data, output_type, step );
+            const auto attribute = write_scalar_attribute_file( data, output_type, out_str );
             grid.add_child( attribute );
         }
 
         for ( const auto& [data, output_type] : device_data_views_scalar_double_ )
         {
-            const auto attribute = write_scalar_attribute_file( data, output_type, step );
+            const auto attribute = write_scalar_attribute_file( data, output_type, out_str );
             grid.add_child( attribute );
         }
 
         for ( const auto& [data, output_type] : device_data_views_vec_float_ )
         {
-            const auto attribute = write_vec_attribute_file( data, output_type, step );
+            const auto attribute = write_vec_attribute_file( data, output_type, out_str );
             grid.add_child( attribute );
         }
 
         for ( const auto& [data, output_type] : device_data_views_vec_double_ )
         {
-            const auto attribute = write_vec_attribute_file( data, output_type, step );
+            const auto attribute = write_vec_attribute_file( data, output_type, out_str );
             grid.add_child( attribute );
         }
 
@@ -729,9 +738,9 @@ class XDMFOutput
     util::XML write_scalar_attribute_file(
         const grid::Grid4DDataScalar< ScalarTypeIn >& data,
         const OutputTypeFloat&                        output_type,
-        int                                           step )
+        std::string                                   out_str )
     {
-        const auto attribute_file_base = data.label() + "_" + std::to_string( step ) + ".bin";
+        const auto attribute_file_base = data.label() + "_" + out_str + ".bin";
         const auto attribute_file_path = directory_path_ + "/" + attribute_file_base;
 
         {
@@ -854,9 +863,9 @@ class XDMFOutput
     util::XML write_vec_attribute_file(
         const grid::Grid4DDataVec< ScalarTypeIn, VecDim >& data,
         const OutputTypeFloat&                             output_type,
-        int                                                step )
+        std::string                                        out_str )
     {
-        const auto attribute_file_base = data.label() + "_" + std::to_string( step ) + ".bin";
+        const auto attribute_file_base = data.label() + "_" + out_str + ".bin";
         const auto attribute_file_path = directory_path_ + "/" + attribute_file_base;
 
         {
@@ -1522,34 +1531,32 @@ template < typename GridDataType >
     return { util::Ok{} };
 }
 
-/// @brief Reads back the ModelTime value written into a step's .xmf file.
+/// @brief Reads back the "Step" and "ModelTime" value written into a step's .xmf file.
 ///
 /// @param checkpoint_dir directory containing the step_*.xmf files
-/// @param step the timestep number
-/// @return The ModelTime value, or 0.0 if the file, tag, or attribute could not be found.
-[[nodiscard]] inline double read_xdmf_model_time( const std::string& checkpoint_dir, int step )
+/// @param key the checkpoint file key (timestep or time)
+/// @param timestep the Step value
+/// @param model_time the ModelTime value
+inline void read_xdmf_step_and_time( const std::string& checkpoint_dir, int key, int& timestep, double& model_time )
 {
-    const auto step_file_path = checkpoint_dir + "/step_" + std::to_string( step ) + ".xmf";
+    const auto path = checkpoint_dir + "/step_" + std::to_string( key ) + ".xmf";
 
-    if ( !std::filesystem::exists( step_file_path ) )
-        return 0.0;
+    std::ifstream in( path );
+    if ( !in )
+        throw std::runtime_error( "Cannot open checkpoint file " + path );
 
-    std::ifstream     in( step_file_path );
     std::stringstream buffer;
     buffer << in.rdbuf();
+    const auto content = buffer.str();
 
-    const auto value = util::find_xml_attribute( buffer.str(), "ModelTime", "Value" );
-    if ( !value )
-        return 0.0;
+    const auto step_str = util::find_xml_attribute( content, "Step", "Value" );
+    if ( !step_str )
+        throw std::runtime_error( "Missing Step in " + path );
 
-    try
-    {
-        return std::stod( *value );
-    }
-    catch ( const std::exception& )
-    {
-        return 0.0;
-    }
+    timestep = std::stoi( *step_str );
+
+    if ( const auto time_str = util::find_xml_attribute( content, "ModelTime", "Value" ) )
+        model_time = std::stod( *time_str ); // untouched if absent
 }
 
 } // namespace terra::io

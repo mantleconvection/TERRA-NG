@@ -258,12 +258,14 @@ Result<> run( const Parameters& prm )
     logroot << "Setting up energy equation solver ..." << std::endl;
 
     // Loading checkpoint
+    int        timestep_from_checkpoint   = 0;
     ScalarType model_time_from_checkpoint = ScalarType( 0 );
     if ( prm.io_parameters.load_checkpoint )
     {
         load_temperature_checkpoint(
             u.block_1(),
             T,
+            timestep_from_checkpoint,
             model_time_from_checkpoint,
             ( *domains[velocity_level] ),
             coords_shell[velocity_level],
@@ -448,7 +450,8 @@ Result<> run( const Parameters& prm )
     // If we start from a checkpoint but it is not supposed to be a continuation of the simulation
     // (continue_simulation == false), determine initial velocities through stokes solve.
     // Else, use the velocities read from checkpoint and skip stokes solve.
-    if ( !prm.io_parameters.load_checkpoint || !prm.io_parameters.continue_simulation )
+    const bool is_continue = prm.io_parameters.load_checkpoint && prm.io_parameters.continue_simulation;
+    if ( !is_continue )
     {
         // ----- Initial Stokes solve -----
         logroot << "\n--------- Initial Stokes solve -----------------\n" << std::endl;
@@ -474,12 +477,17 @@ Result<> run( const Parameters& prm )
             log_hbm( "after first Stokes solve (peak)" );
     }
 
+    int        timestep_initial  = 0;
     ScalarType simulated_time    = ScalarType( 0 );
     ScalarType simulated_time_Ma = ScalarType( 0 );
-    if ( prm.io_parameters.load_checkpoint && prm.io_parameters.continue_simulation )
+    ScalarType last_output_time  = ScalarType( 0 ); // Needed if we want to write out every x Ma.
+
+    if ( is_continue )
     {
+        timestep_initial  = timestep_from_checkpoint;
         simulated_time_Ma = model_time_from_checkpoint;
         simulated_time    = simulated_time_Ma / prm.physics_parameters.calc_time_Ma;
+        last_output_time  = std::floor( simulated_time_Ma );
     }
 
     // We need some global h. Let's, for simplicity (does not need to be too accurate) just choose the smallest h in
@@ -567,7 +575,12 @@ Result<> run( const Parameters& prm )
         xdmf_output->add( nu_h_view->grid_data() );
     }
 
-    if ( !prm.io_parameters.no_xdmf )
+    // Do not write initial XDMF in case continue_simulation and outdir and
+    // checkpoint_dir are the same, we do not want to overwrite the checkpoint
+    // that is read in.
+    const bool same_dir = std::filesystem::weakly_canonical( prm.io_parameters.checkpoint_dir ) ==
+                          std::filesystem::weakly_canonical( prm.io_parameters.outdir );
+    if ( !prm.io_parameters.no_xdmf && !( is_continue && same_dir ) )
     {
         logroot << "Writing initial XDMF ..." << std::endl;
 
@@ -576,8 +589,9 @@ Result<> run( const Parameters& prm )
         write_xdmf(
             xdmf_output,
             xdmf_output_pressure,
-            prm.time_stepping_parameters.timestep_initial,
+            timestep_initial,
             simulated_time_Ma,
+            prm.io_parameters.output_per_Ma,
             prm.devel_parameters.output_dimensional,
             fields.scalar_fields,
             fields.vector_fields,
@@ -607,26 +621,15 @@ Result<> run( const Parameters& prm )
         } );
         radial_label = "depth";
     }
-
-    if ( !prm.io_parameters.no_radial_profiles )
+    
+    // Same logic as initial xdmf write-out.
+    if ( !prm.io_parameters.no_radial_profiles && !( is_continue && same_dir ) )
     {
         logroot << "Writing initial radial profiles ..." << std::endl;
         compute_and_write_radial_profiles(
-            T,
-            subdomain_shell_idx,
-            radial_coords,
-            prm,
-            prm.time_stepping_parameters.timestep_initial,
-            T_scale,
-            radial_label );
+            T, subdomain_shell_idx, radial_coords, prm, timestep_initial, T_scale, radial_label );
         compute_and_write_radial_profiles(
-            stokes.eta_fine(),
-            subdomain_shell_idx,
-            radial_coords,
-            prm,
-            prm.time_stepping_parameters.timestep_initial,
-            eta_scale,
-            radial_label );
+            stokes.eta_fine(), subdomain_shell_idx, radial_coords, prm, timestep_initial, eta_scale, radial_label );
         compute_and_write_velocity_radial_profiles(
             u.block_1(),
             coords_shell[velocity_level],
@@ -635,7 +638,7 @@ Result<> run( const Parameters& prm )
             radial_coords,
             ownership_mask_data[velocity_level],
             prm,
-            prm.time_stepping_parameters.timestep_initial,
+            timestep_initial,
             u_scale,
             radial_label );
 
@@ -645,11 +648,7 @@ Result<> run( const Parameters& prm )
         if ( auto* hw_view = energy->h_w_diag_view() )
         {
             compute_and_write_radial_profiles(
-                *hw_view,
-                subdomain_shell_idx,
-                domains[velocity_level]->domain_info().radii(),
-                prm,
-                prm.time_stepping_parameters.timestep_initial );
+                *hw_view, subdomain_shell_idx, domains[velocity_level]->domain_info().radii(), prm, timestep_initial );
         }
     }
 
@@ -694,9 +693,7 @@ Result<> run( const Parameters& prm )
     
     ScalarType dt_prev = ScalarType( 0 ); // needed for pda
 
-    for ( int timestep = prm.time_stepping_parameters.timestep_initial + 1;
-          timestep < prm.time_stepping_parameters.max_timesteps;
-          timestep++ )
+    for ( int timestep = timestep_initial + 1; timestep < prm.time_stepping_parameters.max_timesteps; timestep++ )
     {
         logroot << "\n### Timestep " << timestep << " ###" << std::endl;
         util::Timer timer_timestep( "timestep" );
@@ -798,8 +795,7 @@ Result<> run( const Parameters& prm )
             {
                 // Update density from tables (pda) -- and compute time-derivative
                 pda->update_density_from_table( T );
-                pda->compute_density_time_derivative(
-                    timestep - prm.time_stepping_parameters.timestep_initial, dt, dt_prev );
+                pda->compute_density_time_derivative( timestep - timestep_initial, dt, dt_prev );
 
                 stokes.solve_pda(
                     pda->density(),
@@ -834,7 +830,19 @@ Result<> run( const Parameters& prm )
 
         table->add_row( {} );
 
-        const bool write_output = ( timestep % prm.io_parameters.output_frequency == 0 );
+        bool write_output = false;
+        if ( prm.io_parameters.output_per_Ma )
+        {
+            if ( std::floor( simulated_time_Ma ) - last_output_time >= prm.io_parameters.output_frequency )
+            {
+                write_output     = true;
+                last_output_time = std::floor( simulated_time_Ma );
+            }
+        }
+        else
+        {
+            write_output = ( timestep % prm.io_parameters.output_frequency == 0 );
+        }
 
         if ( write_output && !prm.io_parameters.no_xdmf )
         {
@@ -846,6 +854,7 @@ Result<> run( const Parameters& prm )
                 xdmf_output_pressure,
                 timestep,
                 simulated_time_Ma,
+                prm.io_parameters.output_per_Ma,
                 prm.devel_parameters.output_dimensional,
                 fields.scalar_fields,
                 fields.vector_fields,

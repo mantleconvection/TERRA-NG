@@ -457,7 +457,8 @@ template < typename ScalarType >
 void load_temperature_checkpoint(
     linalg::VectorW1Vec< ScalarType, 3 >&       u_velocity,
     linalg::VectorW1Scalar< ScalarType >&       T,
-    ScalarType&                                 model_time,
+    int&                                        return_timestep,
+    ScalarType&                                 return_model_time,
     const grid::shell::DistributedDomain&       domain,
     const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
     const grid::Grid2DDataScalar< ScalarType >& coords_radii,
@@ -465,11 +466,25 @@ void load_temperature_checkpoint(
 {
     using util::logroot;
 
-    logroot << "Loading checkpoint from " << prm.io_parameters.checkpoint_dir << " at simulation step "
-            << prm.io_parameters.checkpoint_step << "." << std::endl;
+    // Append xdmf-subdirectory to checkpoint_dir name
+    std::string checkpoint_dir = prm.io_parameters.checkpoint_dir + "/xdmf";
+
+    // This assumes consistency regarding param "output_per_Ma" between the
+    // checkpoint and the current simulation. Otherwise, the wording of the log
+    // message will be inaccurate, no further consequences.
+    if ( prm.io_parameters.output_per_Ma )
+    {
+        logroot << "Loading checkpoint from " << checkpoint_dir << " at model age " << prm.io_parameters.checkpoint_step
+                << " Ma." << std::endl;
+    }
+    else
+    {
+        logroot << "Loading checkpoint from " << checkpoint_dir << " at simulation step "
+                << prm.io_parameters.checkpoint_step << "." << std::endl;
+    }
 
     // Checking if checkpoint is dimensional or nondimensional
-    auto metadata_result = io::read_xdmf_checkpoint_metadata( prm.io_parameters.checkpoint_dir );
+    auto metadata_result = io::read_xdmf_checkpoint_metadata( checkpoint_dir );
     if ( metadata_result.is_err() )
     {
         Kokkos::abort( metadata_result.error().c_str() );
@@ -500,30 +515,24 @@ void load_temperature_checkpoint(
     }
 
     auto success_vel = io::read_xdmf_checkpoint_grid(
-        prm.io_parameters.checkpoint_dir,
-        std::string( "u_u" ),
-        prm.io_parameters.checkpoint_step,
-        domain,
-        u_velocity.grid_data() );
+        checkpoint_dir, std::string( "u_u" ), prm.io_parameters.checkpoint_step, domain, u_velocity.grid_data() );
     if ( success_vel.is_err() )
     {
         Kokkos::abort( success_vel.error().c_str() );
     }
 
     auto success_temp = io::read_xdmf_checkpoint_grid(
-        prm.io_parameters.checkpoint_dir,
-        std::string( "T" ),
-        prm.io_parameters.checkpoint_step,
-        domain,
-        T.grid_data() );
+        checkpoint_dir, std::string( "T" ), prm.io_parameters.checkpoint_step, domain, T.grid_data() );
     if ( success_temp.is_err() )
     {
         Kokkos::abort( success_temp.error().c_str() );
     }
 
-    // Read checkpoint model time
+    // Read checkpoint model time and timestep. We read both, because
+    // prm.io_parameters.checkpoint_step might be either model_time or timestep.
     if ( prm.io_parameters.continue_simulation )
-        model_time = io::read_xdmf_model_time( prm.io_parameters.checkpoint_dir, prm.io_parameters.checkpoint_step );
+        io::read_xdmf_step_and_time(
+            checkpoint_dir, prm.io_parameters.checkpoint_step, return_timestep, return_model_time );
 
     // Nondimensionalise checkpoint, if necessary
     if ( metadata.is_dimensional )
