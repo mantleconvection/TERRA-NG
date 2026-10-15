@@ -693,7 +693,7 @@ Result<> run( const Parameters& prm )
     
     ScalarType dt_prev = ScalarType( 0 ); // needed for pda
 
-    for ( int timestep = timestep_initial + 1; timestep < prm.time_stepping_parameters.max_timesteps; timestep++ )
+    for ( int timestep = timestep_initial + 1; timestep <= prm.time_stepping_parameters.max_timesteps; timestep++ )
     {
         logroot << "\n### Timestep " << timestep << " ###" << std::endl;
         util::Timer timer_timestep( "timestep" );
