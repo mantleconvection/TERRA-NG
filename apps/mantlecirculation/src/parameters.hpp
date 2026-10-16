@@ -921,6 +921,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     };
     add_option_with_default( app, "--stokes-mg-precision", parameters.stokes_solver_parameters.mg_precision )
         ->transform( CLI::CheckedTransformer( mg_precision_map, CLI::ignore_case ) )
+        ->default_val( "double" )
         ->group( "Stokes Solver" );
     add_option_with_default(
         app, "--stokes-viscous-pc-num-vcycles", parameters.stokes_solver_parameters.viscous_pc_num_vcycles )
