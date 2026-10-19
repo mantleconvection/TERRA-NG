@@ -43,7 +43,7 @@ endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
 
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND Kokkos_ENABLE_HIP )
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -munsafe-fp-atomics -ffast-math -Rpass-analysis=kernel-resource-usage")
 endif ()
 
