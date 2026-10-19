@@ -247,7 +247,7 @@ class SUPGSolver : public EnergySolver< ScalarType >
 
         solver_ = std::make_unique< FGMRESType >(
             tmp_gmres_,
-            linalg::solvers::FGMRESOptions{
+            linalg::solvers::FGMRESOptions< ScalarType >{
                 .restart                     = prm_.energy_solver_parameters.krylov_restart,
                 .relative_residual_tolerance = prm_.energy_solver_parameters.krylov_relative_tolerance,
                 .absolute_residual_tolerance = prm_.energy_solver_parameters.krylov_absolute_tolerance,

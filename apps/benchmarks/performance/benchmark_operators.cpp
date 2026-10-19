@@ -354,7 +354,7 @@ BenchmarkData
     }
     else if ( benchmark == BenchmarkType::EpsDivDivKerngenDouble )
     {
-        EpsilonDivDivKerngen A(
+        EpsilonDivDivKerngen< double > A(
             domain,
             coords_shell_double,
             coords_radii_double,
