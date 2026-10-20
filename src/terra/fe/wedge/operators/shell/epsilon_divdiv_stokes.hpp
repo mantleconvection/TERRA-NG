@@ -83,6 +83,17 @@ class EpsDivDivStokes
             linalg::OperatorApplyMode::Replace, linalg::OperatorCommunicationMode::CommunicateAdditively );
     }
 
+    /// Use the given free-slip normals (lateral fields) in all three blocks, so that A, Bᵀ and B
+    /// enforce the same tangential constraint. Default: unit-sphere coords (r̂).
+    void set_freeslip_normals(
+        const grid::Grid3DDataVec< ScalarType, 3 >& normals_cmb,
+        const grid::Grid3DDataVec< ScalarType, 3 >& normals_surface )
+    {
+        A_.set_freeslip_normals( normals_cmb, normals_surface );
+        B_T_.set_freeslip_normals( normals_cmb, normals_surface );
+        B_.set_freeslip_normals( normals_cmb, normals_surface );
+    }
+
     const Block11Type& block_11() const { return A_; }
 
     const Block12Type& block_12() const

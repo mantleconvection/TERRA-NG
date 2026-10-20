@@ -111,6 +111,8 @@ class EpsilonDivDivKerngen
     // Domain and geometry / coefficients
     grid::shell::DistributedDomain                           domain_;
     grid::Grid3DDataVec< CoordScalarT, 3 >                   grid_;  ///< Lateral shell geometry (unit sphere coords)
+    grid::Grid3DDataVec< CoordScalarT, 3 > normals_cmb_;     ///< Free-slip normals at the CMB (default: grid_ = r̂)
+    grid::Grid3DDataVec< CoordScalarT, 3 > normals_surface_; ///< Free-slip normals at the surface (default: grid_)
     grid::Grid2DDataScalar< CoordScalarT >                   radii_; ///< Radial coordinates per local subdomain
     grid::Grid4DDataScalar< ScalarType >                     k_;     ///< Scalar coefficient field
     grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag > mask_;  ///< Boundary flags per cell/node
@@ -224,6 +226,8 @@ class EpsilonDivDivKerngen
         linalg::OperatorStoredMatrixMode operator_stored_matrix_mode = linalg::OperatorStoredMatrixMode::Off )
     : domain_( domain )
     , grid_( grid )
+    , normals_cmb_( grid )
+    , normals_surface_( grid )
     , radii_( radii )
     , k_( k )
     , mask_( mask )
@@ -498,6 +502,15 @@ class EpsilonDivDivKerngen
     const grid::shell::DistributedDomain&       get_domain() const { return domain_; }
     grid::Grid2DDataScalar< CoordScalarT >      get_radii() const { return radii_; }
     grid::Grid3DDataVec< CoordScalarT, 3 >      get_grid() { return grid_; }
+
+    /// Override the free-slip normals (lateral fields, normalised on use). Default: unit-sphere coords (r̂).
+    void set_freeslip_normals(
+        const grid::Grid3DDataVec< CoordScalarT, 3 >& normals_cmb,
+        const grid::Grid3DDataVec< CoordScalarT, 3 >& normals_surface )
+    {
+        normals_cmb_     = normals_cmb;
+        normals_surface_ = normals_surface;
+    }
 
     KOKKOS_INLINE_FUNCTION
     bool has_flag(
@@ -870,8 +883,8 @@ class EpsilonDivDivKerngen
         const int n    = lat_tile_ + 1;
         const int nxy  = n * n;
 
-        // DOUBLE tiles: coords_sh(nxy,3) + normals_sh(nxy,3) + r_sh(nlev).
-        const size_t ndouble = size_t( nxy ) * 3 + size_t( nxy ) * 3 + size_t( nlev );
+        // DOUBLE tiles: coords_sh(nxy,3) + normals_{cmb,surf}_sh(nxy,3) + r_sh(nlev).
+        const size_t ndouble = size_t( nxy ) * 3 + 2 * size_t( nxy ) * 3 + size_t( nlev );
         // CompT tiles: src_sh(nxy,3,nlev) + k_sh(nxy,nlev).
         const size_t ncomp = size_t( nxy ) * 3 * nlev + size_t( nxy ) * nlev;
 
@@ -1179,15 +1192,16 @@ class EpsilonDivDivKerngen
 
                     for ( int boundary_node_idx = 0; boundary_node_idx < 3; boundary_node_idx++ )
                     {
-                        // coords() returns CoordScalarT (geometry precision); the
+                        // Normal in CoordScalarT (geometry precision); the
                         // resulting rotation is cast down when written into R (ScalarT).
-                        dense::Vec< CoordScalarT, 3 > normal = grid::shell::coords(
-                            local_subdomain_id,
-                            x_cell + layer_hex_offset_x[wedge][boundary_node_idx],
-                            y_cell + layer_hex_offset_y[wedge][boundary_node_idx],
-                            r_cell + ( at_cmb ? 0 : 1 ),
-                            grid_,
-                            radii_ );
+                        const auto&                   normals = at_cmb ? normals_cmb_ : normals_surface_;
+                        dense::Vec< CoordScalarT, 3 > normal;
+                        for ( int d = 0; d < 3; ++d )
+                            normal( d ) = normals(
+                                local_subdomain_id,
+                                x_cell + layer_hex_offset_x[wedge][boundary_node_idx],
+                                y_cell + layer_hex_offset_y[wedge][boundary_node_idx],
+                                d );
 
                         auto R_i = trafo_mat_cartesian_to_normal_tangential( normal );
 
@@ -1696,8 +1710,10 @@ class EpsilonDivDivKerngen
         ScratchCoords coords_sh( shmem, nxy, 3 );
         shmem += nxy * 3;
 
-        // Normalized normals in shared memory — avoids 12 persistent register-doubles.
-        ScratchCoords normals_sh( shmem, nxy, 3 );
+        // Normalized free-slip normals (CMB, surface) in shared memory — avoids 12 persistent register-doubles.
+        ScratchCoords normals_cmb_sh( shmem, nxy, 3 );
+        shmem += nxy * 3;
+        ScratchCoords normals_surf_sh( shmem, nxy, 3 );
         shmem += nxy * 3;
 
         auto r_sh =
@@ -1729,23 +1745,27 @@ class EpsilonDivDivKerngen
                 coords_sh( n, 1 ) = cy;
                 coords_sh( n, 2 ) = cz;
 
-                const double n2 = cx * cx + cy * cy + cz * cz;
-                if ( n2 > 0.0 )
-                {
-                    const double invn  = 1.0 / Kokkos::sqrt( n2 );
-                    normals_sh( n, 0 ) = cx * invn;
-                    normals_sh( n, 1 ) = cy * invn;
-                    normals_sh( n, 2 ) = cz * invn;
-                }
-                else
-                {
-                    normals_sh( n, 0 ) = normals_sh( n, 1 ) = normals_sh( n, 2 ) = 0.0;
-                }
+                double ax = normals_cmb_( local_subdomain_id, xi, yi, 0 );
+                double ay = normals_cmb_( local_subdomain_id, xi, yi, 1 );
+                double az = normals_cmb_( local_subdomain_id, xi, yi, 2 );
+                normalize3( ax, ay, az );
+                normals_cmb_sh( n, 0 ) = ax;
+                normals_cmb_sh( n, 1 ) = ay;
+                normals_cmb_sh( n, 2 ) = az;
+
+                double bx = normals_surface_( local_subdomain_id, xi, yi, 0 );
+                double by = normals_surface_( local_subdomain_id, xi, yi, 1 );
+                double bz = normals_surface_( local_subdomain_id, xi, yi, 2 );
+                normalize3( bx, by, bz );
+                normals_surf_sh( n, 0 ) = bx;
+                normals_surf_sh( n, 1 ) = by;
+                normals_surf_sh( n, 2 ) = bz;
             }
             else
             {
                 coords_sh( n, 0 ) = coords_sh( n, 1 ) = coords_sh( n, 2 ) = 0.0;
-                normals_sh( n, 0 ) = normals_sh( n, 1 ) = normals_sh( n, 2 ) = 0.0;
+                normals_cmb_sh( n, 0 ) = normals_cmb_sh( n, 1 ) = normals_cmb_sh( n, 2 ) = 0.0;
+                normals_surf_sh( n, 0 ) = normals_surf_sh( n, 1 ) = normals_surf_sh( n, 2 ) = 0.0;
             }
         } );
 
@@ -1967,9 +1987,9 @@ class EpsilonDivDivKerngen
                         // Inline tangential projection for freeslip boundary nodes.
                         if ( cmb_freeslip && n < 3 )
                         {
-                            const CompT nx  = static_cast< CompT >( normals_sh( nid, 0 ) );
-                            const CompT ny  = static_cast< CompT >( normals_sh( nid, 1 ) );
-                            const CompT nz  = static_cast< CompT >( normals_sh( nid, 2 ) );
+                            const CompT nx  = static_cast< CompT >( normals_cmb_sh( nid, 0 ) );
+                            const CompT ny  = static_cast< CompT >( normals_cmb_sh( nid, 1 ) );
+                            const CompT nz  = static_cast< CompT >( normals_cmb_sh( nid, 2 ) );
                             const CompT dot = nx * s0 + ny * s1 + nz * s2;
                             s0 -= dot * nx;
                             s1 -= dot * ny;
@@ -1977,9 +1997,9 @@ class EpsilonDivDivKerngen
                         }
                         if ( surf_freeslip && n >= 3 )
                         {
-                            const CompT nx  = static_cast< CompT >( normals_sh( nid, 0 ) );
-                            const CompT ny  = static_cast< CompT >( normals_sh( nid, 1 ) );
-                            const CompT nz  = static_cast< CompT >( normals_sh( nid, 2 ) );
+                            const CompT nx  = static_cast< CompT >( normals_surf_sh( nid, 0 ) );
+                            const CompT ny  = static_cast< CompT >( normals_surf_sh( nid, 1 ) );
+                            const CompT nz  = static_cast< CompT >( normals_surf_sh( nid, 2 ) );
                             const CompT dot = nx * s0 + ny * s1 + nz * s2;
                             s0 -= dot * nx;
                             s1 -= dot * ny;
@@ -2022,9 +2042,9 @@ class EpsilonDivDivKerngen
                         {
                             const int   corner = CMB_NODE_TO_CORNER[w][n];
                             const int   cn     = corner_node[corner];
-                            const CompT nxu    = static_cast< CompT >( normals_sh( cn, 0 ) );
-                            const CompT nyu    = static_cast< CompT >( normals_sh( cn, 1 ) );
-                            const CompT nzu    = static_cast< CompT >( normals_sh( cn, 2 ) );
+                            const CompT nxu    = static_cast< CompT >( normals_cmb_sh( cn, 0 ) );
+                            const CompT nyu    = static_cast< CompT >( normals_cmb_sh( cn, 1 ) );
+                            const CompT nzu    = static_cast< CompT >( normals_cmb_sh( cn, 2 ) );
                             const CompT gg     = g0 * g0 + g1 * g1 + g2 * g2;
                             const CompT ng     = nxu * g0 + nyu * g1 + nzu * g2;
                             Ann_acc_cmb[corner] += kwJc * ( gg + THIRD_C * ng * ng );
@@ -2033,9 +2053,9 @@ class EpsilonDivDivKerngen
                         {
                             const int   corner = CMB_NODE_TO_CORNER[w][n - 3];
                             const int   cn     = corner_node[corner];
-                            const CompT nxu    = static_cast< CompT >( normals_sh( cn, 0 ) );
-                            const CompT nyu    = static_cast< CompT >( normals_sh( cn, 1 ) );
-                            const CompT nzu    = static_cast< CompT >( normals_sh( cn, 2 ) );
+                            const CompT nxu    = static_cast< CompT >( normals_surf_sh( cn, 0 ) );
+                            const CompT nyu    = static_cast< CompT >( normals_surf_sh( cn, 1 ) );
+                            const CompT nzu    = static_cast< CompT >( normals_surf_sh( cn, 2 ) );
                             const CompT gg     = g0 * g0 + g1 * g1 + g2 * g2;
                             const CompT ng     = nxu * g0 + nyu * g1 + nzu * g2;
                             Ann_acc_surf[corner] += kwJc * ( gg + THIRD_C * ng * ng );
@@ -2084,9 +2104,10 @@ class EpsilonDivDivKerngen
                         auto apply_rotated_diag = [&]( const int ni, const int node_idx, const int src_lvl ) {
                             const int    corner = FS_CORNER_MAP[w][ni];
                             const int    cn     = corner_node[corner];
-                            const double nxu    = normals_sh( cn, 0 );
-                            const double nyu    = normals_sh( cn, 1 );
-                            const double nzu    = normals_sh( cn, 2 );
+                            const auto&  normals = ( node_idx >= 3 ) ? normals_surf_sh : normals_cmb_sh;
+                            const double nxu    = normals( cn, 0 );
+                            const double nyu    = normals( cn, 1 );
+                            const double nzu    = normals( cn, 2 );
                             const int    u      = WEDGE_TO_UNIQUE[w][node_idx];
 
                             const double gx = dN_ref[node_idx][0];
@@ -2145,9 +2166,9 @@ class EpsilonDivDivKerngen
             {
                 for ( int c = 0; c < 4; ++c )
                 {
-                    const double nx  = normals_sh( corner_node[c], 0 );
-                    const double ny  = normals_sh( corner_node[c], 1 );
-                    const double nz  = normals_sh( corner_node[c], 2 );
+                    const double nx  = normals_cmb_sh( corner_node[c], 0 );
+                    const double ny  = normals_cmb_sh( corner_node[c], 1 );
+                    const double nz  = normals_cmb_sh( corner_node[c], 2 );
                     const int    u   = CMB_CORNER_TO_UNIQUE[c];
                     const double dot = nx * dst8[0][u] + ny * dst8[1][u] + nz * dst8[2][u];
                     dst8[0][u] -= dot * nx;
@@ -2159,9 +2180,9 @@ class EpsilonDivDivKerngen
             {
                 for ( int c = 0; c < 4; ++c )
                 {
-                    const double nx  = normals_sh( corner_node[c], 0 );
-                    const double ny  = normals_sh( corner_node[c], 1 );
-                    const double nz  = normals_sh( corner_node[c], 2 );
+                    const double nx  = normals_surf_sh( corner_node[c], 0 );
+                    const double ny  = normals_surf_sh( corner_node[c], 1 );
+                    const double nz  = normals_surf_sh( corner_node[c], 2 );
                     const int    u   = SURF_CORNER_TO_UNIQUE[c];
                     const double dot = nx * dst8[0][u] + ny * dst8[1][u] + nz * dst8[2][u];
                     dst8[0][u] -= dot * nx;
@@ -2177,9 +2198,9 @@ class EpsilonDivDivKerngen
                 for ( int c = 0; c < 4; ++c )
                 {
                     const int    cn      = corner_node[c];
-                    const double nx      = normals_sh( cn, 0 );
-                    const double ny      = normals_sh( cn, 1 );
-                    const double nz      = normals_sh( cn, 2 );
+                    const double nx      = normals_cmb_sh( cn, 0 );
+                    const double ny      = normals_cmb_sh( cn, 1 );
+                    const double nz      = normals_cmb_sh( cn, 2 );
                     const double os0     = src_sh( cn, 0, lvl0 );
                     const double os1     = src_sh( cn, 1, lvl0 );
                     const double os2     = src_sh( cn, 2, lvl0 );
@@ -2196,9 +2217,9 @@ class EpsilonDivDivKerngen
                 for ( int c = 0; c < 4; ++c )
                 {
                     const int    cn      = corner_node[c];
-                    const double nx      = normals_sh( cn, 0 );
-                    const double ny      = normals_sh( cn, 1 );
-                    const double nz      = normals_sh( cn, 2 );
+                    const double nx      = normals_surf_sh( cn, 0 );
+                    const double ny      = normals_surf_sh( cn, 1 );
+                    const double nz      = normals_surf_sh( cn, 2 );
                     const double os0     = src_sh( cn, 0, lvl0 + 1 );
                     const double os1     = src_sh( cn, 1, lvl0 + 1 );
                     const double os2     = src_sh( cn, 2, lvl0 + 1 );

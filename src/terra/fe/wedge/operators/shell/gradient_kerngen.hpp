@@ -84,6 +84,10 @@ class GradientKerngen
     grid::Grid2DDataScalar< ScalarT >                        radii_;
     grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag > boundary_mask_fine_;
 
+    // Free-slip normals per boundary (lateral, same layout as grid_fine_). Default: grid_fine_ (= r̂).
+    grid::Grid3DDataVec< ScalarT, 3 > normals_cmb_;
+    grid::Grid3DDataVec< ScalarT, 3 > normals_surface_;
+
     BoundaryConditions bcs_;
 
     linalg::OperatorApplyMode         operator_apply_mode_;
@@ -138,6 +142,8 @@ class GradientKerngen
     , grid_fine_( grid_fine )
     , radii_( radii_fine )
     , boundary_mask_fine_( boundary_mask_fine )
+    , normals_cmb_( grid_fine )
+    , normals_surface_( grid_fine )
     , operator_apply_mode_( operator_apply_mode )
     , operator_communication_mode_( operator_communication_mode )
     , recv_buffers_( domain_fine )
@@ -195,6 +201,15 @@ class GradientKerngen
     KernelPath kernel_path() const { return kernel_path_; }
 
     void force_slow_path() { kernel_path_ = KernelPath::Slow; }
+
+    /// Override the free-slip normals (lateral fields, normalised on use). Default: unit-sphere coords (r̂).
+    void set_freeslip_normals(
+        const grid::Grid3DDataVec< ScalarT, 3 >& normals_cmb,
+        const grid::Grid3DDataVec< ScalarT, 3 >& normals_surface )
+    {
+        normals_cmb_     = normals_cmb;
+        normals_surface_ = normals_surface;
+    }
 
     void set_operator_apply_and_communication_modes(
         const linalg::OperatorApplyMode         operator_apply_mode,
@@ -427,15 +442,13 @@ class GradientKerngen
                     for ( int i = 0; i < 18; ++i )
                         R[wedge]( i, i ) = 1.0;
 
+                    const auto& normals = at_cmb ? normals_cmb_ : normals_surface_;
                     for ( int bn = 0; bn < 3; ++bn )
                     {
-                        dense::Vec< double, 3 > normal = grid::shell::coords(
-                            s,
-                            x_cell + layer_hex_offset_x[wedge][bn],
-                            y_cell + layer_hex_offset_y[wedge][bn],
-                            r_cell + ( at_cmb ? 0 : 1 ),
-                            grid_fine_,
-                            radii_ );
+                        dense::Vec< double, 3 > normal;
+                        for ( int d = 0; d < 3; ++d )
+                            normal( d ) = normals(
+                                s, x_cell + layer_hex_offset_x[wedge][bn], y_cell + layer_hex_offset_y[wedge][bn], d );
 
                         auto      R_i         = trafo_mat_cartesian_to_normal_tangential( normal );
                         const int offset_in_R = at_cmb ? 0 : 9;
@@ -739,10 +752,12 @@ class GradientKerngen
                     {
                         if ( treat_freeslip && is_boundary_node )
                         {
-                            const int    nid = node_id( tx + ddx, ty + ddy );
-                            const double nx  = coords_sh( nid, 0 );
-                            const double ny  = coords_sh( nid, 1 );
-                            const double nz  = coords_sh( nid, 2 );
+                            const auto&  normals = at_cmb ? normals_cmb_ : normals_surface_;
+                            const int    xn      = xc_base + ddx;
+                            const int    yn      = yc_base + ddy;
+                            const double nx      = normals( local_subdomain_id, xn, yn, 0 );
+                            const double ny      = normals( local_subdomain_id, xn, yn, 1 );
+                            const double nz      = normals( local_subdomain_id, xn, yn, 2 );
                             const double cn  = c0 * nx + c1 * ny + c2 * nz;
                             c0 -= cn * nx;
                             c1 -= cn * ny;
