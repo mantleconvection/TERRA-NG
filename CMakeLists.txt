@@ -11,6 +11,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Enable verbose makefile output
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "16.0" )
+  message( FATAL_ERROR "TERRA-NG requires at least version 16 of Clang. Found: ${CMAKE_CXX_COMPILER_VERSION}" )
+endif ()
+
 # Make sure the serial backend is always build
 set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Always enable Serial backend" FORCE)
 
