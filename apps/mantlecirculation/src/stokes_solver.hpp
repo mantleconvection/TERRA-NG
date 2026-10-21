@@ -878,12 +878,9 @@ class StokesContext
 
         assemble_dirichlet_BCs( u_dirichlet );
 
-        if ( compressible )
-        {
-             // Project out pressure average
-            project_out_pressure_average( stok_vecs_["f"].block_2() );
-        }
-
+        // Project out pressure average
+        project_out_pressure_average( stok_vecs_["f"].block_2() );
+        
         solve_common( log_convergence );
     }
 
