@@ -874,11 +874,16 @@ class StokesContext
 
             linalg::apply( mass_rhs, stok_vecs_["f"].block_2() );
 
-            // Project out pressure average
-            project_out_pressure_average( stok_vecs_["f"].block_2() );
         }
 
         assemble_dirichlet_BCs( u_dirichlet );
+
+        if ( compressible )
+        {
+             // Project out pressure average
+            project_out_pressure_average( stok_vecs_["f"].block_2() );
+        }
+
         solve_common( log_convergence );
     }
 
@@ -945,10 +950,11 @@ class StokesContext
 
         linalg::apply( mass_rhs_2, stok_vecs_["f"].block_2() );
 
+        assemble_dirichlet_BCs( u_dirichlet );
+
         // Project out pressure average
         project_out_pressure_average( stok_vecs_["f"].block_2() );
 
-        assemble_dirichlet_BCs( u_dirichlet );
         solve_common( log_convergence );
     }
 
