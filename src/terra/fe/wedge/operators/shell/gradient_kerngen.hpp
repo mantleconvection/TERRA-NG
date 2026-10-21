@@ -408,7 +408,9 @@ class GradientKerngen
             else if ( bcf == FREESLIP )
             {
                 freeslip_reorder = true;
-                dense::Mat< ScalarT, 18, 6 > A_tmp[num_wedges_per_hex_cell] = { 0 };
+
+                // matrix is filled with zeros by default
+                dense::Mat< ScalarT, 18, 6 > A_tmp[num_wedges_per_hex_cell];
 
                 for ( int wedge = 0; wedge < 2; ++wedge )
                     for ( int node_idxi = 0; node_idxi < num_nodes_per_wedge; ++node_idxi )

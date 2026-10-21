@@ -225,7 +225,8 @@ class DivKGrad
         // use stored matrices (at least on some elements)
         if ( operator_stored_matrix_mode_ != linalg::OperatorStoredMatrixMode::Off )
         {
-            dense::Mat< ScalarT, LocalMatrixDim, LocalMatrixDim > A[num_wedges_per_hex_cell] = { 0 };
+            // matrix is filled with zeros by default
+            dense::Mat< ScalarT, LocalMatrixDim, LocalMatrixDim > A[num_wedges_per_hex_cell];
 
             if ( operator_stored_matrix_mode_ == linalg::OperatorStoredMatrixMode::Full )
             {
@@ -420,7 +421,9 @@ class DivKGrad
         extract_local_wedge_scalar_coefficients( k_local_hex, local_subdomain_id, x_cell, y_cell, r_cell, k_ );
 
         // Compute the local element matrix.
-        dense::Mat< ScalarT, LocalMatrixDim, LocalMatrixDim > A = { 0 };
+
+        // matrix is filled with zeros by default
+        dense::Mat< ScalarT, LocalMatrixDim, LocalMatrixDim > A;
         int num_quad_points = single_quadpoint_ ? quadrature::quad_felippa_1x1_num_quad_points :
                                                   quadrature::quad_felippa_3x2_num_quad_points;
 

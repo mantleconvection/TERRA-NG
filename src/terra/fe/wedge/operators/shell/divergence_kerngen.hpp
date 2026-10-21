@@ -441,7 +441,8 @@ class DivergenceKerngen
             }
             else if ( bcf == FREESLIP )
             {
-                dense::Mat< ScalarT, 6, 18 > A_tmp[num_wedges_per_hex_cell] = { 0 };
+                // matrix is filled with zeros by default
+                dense::Mat< ScalarT, 6, 18 > A_tmp[num_wedges_per_hex_cell];
 
                 for ( int wedge = 0; wedge < 2; ++wedge )
                 {
