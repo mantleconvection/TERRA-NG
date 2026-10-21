@@ -840,6 +840,9 @@ class StokesContext
                 stok_vecs_["u_prev"].block_1() );
 
             linalg::apply( mass_rhs, stok_vecs_["f"].block_2() );
+
+            // Project out pressure average
+            project_out_pressure_average( stok_vecs_["f"].block_2() );
         }
 
         assemble_dirichlet_BCs( u_dirichlet );
@@ -909,6 +912,9 @@ class StokesContext
 
         linalg::apply( mass_rhs_2, stok_vecs_["f"].block_2() );
 
+        // Project out pressure average
+        project_out_pressure_average( stok_vecs_["f"].block_2() );
+
         assemble_dirichlet_BCs( u_dirichlet );
         solve_common( log_convergence );
     }
@@ -931,12 +937,18 @@ class StokesContext
         }
         table_->clear();
 
-        // "Normalize" pressure (subtract average).
-        auto&            p = stok_vecs_["u"].block_2();
-        const ScalarType avg_pressure_approximation =
+        // Project out pressure average
+        project_out_pressure_average( stok_vecs_["u"].block_2() );
+    }
+
+    // "Normalize" pressure (subtract average).
+    void project_out_pressure_average( linalg::VectorQ1Scalar< ScalarType >& p )
+    {
+        const ScalarType avg_pressure_approx =
             kernels::common::masked_sum( p.grid_data(), p.mask_data(), grid::NodeOwnershipFlag::OWNED ) /
             static_cast< ScalarType >( num_dofs_pressure_ );
-        linalg::lincomb( p, { 1.0 }, { p }, -avg_pressure_approximation );
+
+        linalg::lincomb( p, { ScalarType( 1 ) }, { p }, -avg_pressure_approx );
     }
 
     /// Strong enforcement of the velocity BCs on the RHS, applied per boundary.
