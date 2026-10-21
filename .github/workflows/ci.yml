@@ -11,7 +11,7 @@ env:
   BUILD_TYPE: Release
 
   # For GCC and Clang
-  COMPILER_FLAGS: -Werror -Wno-deprecated-declarations -Wmissing-braces
+  COMPILER_FLAGS: -Werror -Wno-deprecated-declarations
 
 jobs:
   ci:
