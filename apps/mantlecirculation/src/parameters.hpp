@@ -793,7 +793,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->description(
             "E_a controls magnitude of temp-dependence. Full viscosity contrast is O(e^E_a) for FK types 1 to 3 and O(E_a) for fk-benchmark." );
     add_option_with_default(
-        app, "--activation_volume", parameters.physics_parameters.viscosity_parameters.activation_volume )
+        app, "--activation-volume", parameters.physics_parameters.viscosity_parameters.activation_volume )
         ->group( "Viscosity" )
         ->description(
             "V_a > 0 adds a further depth-dependence  as exp( E_a * T + V_a * d ). Counteracts the natural decrease of viscosity with depth from pure (absolute) temp-dependence." );
