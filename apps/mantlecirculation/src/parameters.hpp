@@ -52,9 +52,13 @@ struct MeshParameters
 
 struct PlateParameters
 {
-    bool apply_plate_velocities = false; // This does nothing yet
-    int  initial_plate_age      = 400;
-    int  final_plate_age        = 0;
+    bool apply_plate_velocities     = false;
+    bool interpolate_plates_in_time = true;
+    int  initial_plate_age          = 400;
+    int  final_plate_age            = 0;
+
+    std::string plates_topologies_path = "../../../TERRA-NG/data/plates/Chen2025-tomopac/topologies_0-410Ma.geojson";
+    std::string plates_reconstructions_path = "../../../TERRA-NG/data/plates/Chen2025-tomopac/TomoPAC2.rot";
 
     double plate_velocity_scaling = 1.0;
 };
@@ -150,7 +154,7 @@ struct InitialTemperatureParameters
     InitialPerturbation       perturbation = InitialPerturbation::SPHERICAL_HARMONICS;
 
     // Reference temperature from file
-    std::string Tref_profile_csv_path  = "TemperatureProfile_3800K.csv";
+    std::string Tref_profile_csv_path  = "../../../TERRA-NG/data/radialprofiles/TemperatureProfile_3800K.csv";
     std::string Tref_profile_value_key = "Temperature (K)";
 
     double perturbation_amplitude = 5e-2;
@@ -166,6 +170,31 @@ struct InitialTemperatureParameters
     int    sph_degree_l_2 = 0;
     int    sph_order_m_2  = 0;
     double sph_factor_2   = 0.0;
+};
+
+// PDA parameters
+struct PDAParameters
+{
+    // Mineralogical lookup-table to derive thermodynamic quantities
+    // (density, expansivity, specific heat capacity) directly from (T,p).
+    // Used for PDA compressibility, currently only density is extracted.
+    std::string mintable_path = "";
+
+    double rayleigh_number_pda = 1.0;
+
+    std::string pressure_profile_csv_path  = "";
+    std::string pressure_profile_value_key = "Pressure (Pa)";
+
+    // Lookup-table dimensions
+    // Pressure should be in col 0, temperature in col 1.
+    // It is also assumed that the table varies fastest in temperature.
+    int    table_density_col = 2;     // density column #
+    int    table_nP          = 1401;  // number of pressure steps
+    int    table_nT          = 1001;  // number of temperature steps
+    double table_min_P       = 0.0;   // minimum pressure
+    double table_min_T       = 300.0; // minimum temperature
+    double table_dP          = 1e8;   // pressure increment
+    double table_dT          = 4.0;   // temperature increment
 };
 
 // Work in progress
@@ -210,7 +239,7 @@ struct PhysicsParameters
     double calc_cm_per_year = 3e-4; // from non-dim velocity to cm/a
     double calc_time_Ma     = 1e6;  // from non-dim time to Ma
 
-    // Parameter radial profiles -- to be done
+    // Parameter radial profiles
     std::string density_profile_csv_path = "";
     std::string alpha_profile_csv_path   = "";
     std::string cp_profile_csv_path      = "";
@@ -220,8 +249,14 @@ struct PhysicsParameters
     std::string alpha_profile_value_key   = "alpha (1/K)";
     std::string cp_profile_value_key      = "Cp (J/kg K)";
 
+    // PDA parameters
+    std::string pda_mintable_path              = "";
+    std::string pda_pressure_profile_csv_path  = "";
+    std::string pda_pressure_profile_value_key = "pressure (Pa)";
+
     ViscosityParameters          viscosity_parameters{};
     InitialTemperatureParameters initial_temperature{};
+    PDAParameters                pda_parameters{};
 };
 
 /// Storage/working precision of the velocity-block multigrid V-cycle preconditioner.
@@ -323,12 +358,11 @@ struct TimeSteppingParameters
     double t_end_Ma   = 100.0;
     double t_end      = 1.0;
     double dt_max_Ma  = 5.0;
-    double dt_min_Ma  = 0.1;
+    double dt_min_Ma  = 0.001;
     double dt_max     = 1.0;
     double dt_min     = 1.0;
 
     int max_timesteps         = 10;
-    int timestep_initial      = 0;
     int initial_dt_ramp_steps = 20;
 
     int picard_iterations = 1;
@@ -346,9 +380,11 @@ struct IOParameters
 
     bool        load_checkpoint = false;
     std::string checkpoint_dir;
-    int         checkpoint_step = -1;
+    int         checkpoint_step     = -1;
+    bool        continue_simulation = true;
 
-    int output_frequency = 1;
+    int  output_frequency = 1;
+    bool output_per_Ma    = true;
 
     bool no_xdmf            = false;
     bool no_radial_profiles = false;
@@ -446,6 +482,11 @@ inline void nondimensionalise( Parameters& prm )
         phys.rayleigh_number = ( phys.reference_density * phys.gravity * phys.thermal_expansivity *
                                  std::pow( mesh.mantle_thickness_m, 3 ) * boundary.delta_T_K ) /
                                ( phys.viscosity_parameters.reference_viscosity * phys.thermal_diffusivity_dim );
+
+        // PDA Rayleigh number = ( rho_h * g * L^3 ) / ( eta * kappa )
+        phys.pda_parameters.rayleigh_number_pda =
+            ( phys.reference_density * phys.gravity * std::pow( mesh.mantle_thickness_m, 3 ) ) /
+            ( phys.viscosity_parameters.reference_viscosity * phys.thermal_diffusivity_dim );
 
         // Peclet number = ( U * L ) / kappa -> should be 1
         phys.peclet_number = ( phys.characteristic_velocity * mesh.mantle_thickness_m ) / phys.thermal_diffusivity_dim;
@@ -551,8 +592,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         app, "--refinement-level-subdomains", parameters.mesh_parameters.refinement_level_subdomains )
         ->group( "Domain" );
 
-    add_option_with_default( app, "--radius-cmb", parameters.mesh_parameters.radius_cmb_m )->group( "Domain" );
     add_option_with_default( app, "--radius-surface", parameters.mesh_parameters.radius_surface_m )->group( "Domain" );
+    add_option_with_default( app, "--radius-cmb", parameters.mesh_parameters.radius_cmb_m )->group( "Domain" );
 
     if ( parameters.devel_parameters.extended_parameters )
     {
@@ -604,21 +645,58 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         { "freeslip", BoundaryConditionsParameters::VelocityBC::FREE_SLIP },
     };
 
-    add_option_with_default( app, "--velocity-bc-cmb", parameters.boundary_parameters.velocity_bc_cmb )
-        ->transform( CLI::CheckedTransformer( velocity_bc_cmb_map, CLI::ignore_case ) )
-        ->default_val( "noslip" )
-        ->group( "Boundary Conditions" );
-
     add_option_with_default( app, "--velocity-bc-surface", parameters.boundary_parameters.velocity_bc_surface )
         ->transform( CLI::CheckedTransformer( velocity_bc_surface_map, CLI::ignore_case ) )
         ->default_val( "noslip" )
         ->group( "Boundary Conditions" );
 
-    add_option_with_default( app, "--temperature-cmb", parameters.boundary_parameters.temperature_cmb_K )
+    add_option_with_default( app, "--velocity-bc-cmb", parameters.boundary_parameters.velocity_bc_cmb )
+        ->transform( CLI::CheckedTransformer( velocity_bc_cmb_map, CLI::ignore_case ) )
+        ->default_val( "noslip" )
         ->group( "Boundary Conditions" );
 
     add_option_with_default( app, "--temperature-surface", parameters.boundary_parameters.temperature_surface_K )
         ->group( "Boundary Conditions" );
+
+    add_option_with_default( app, "--temperature-cmb", parameters.boundary_parameters.temperature_cmb_K )
+        ->group( "Boundary Conditions" );
+
+    // Plate parameters
+    add_flag_with_default(
+        app, "--apply-plate-velocities", parameters.boundary_parameters.plate_parameters.apply_plate_velocities )
+        ->group( "Plate Parameters" )
+        ->description(
+            "Assimilate plate velocities as surface boundary conditions. Enforces a no-slip condition at the surface." );
+
+    add_option_with_default(
+        app, "--initial-plate-age-Ma", parameters.boundary_parameters.plate_parameters.initial_plate_age )
+        ->group( "Plate Parameters" );
+
+    add_option_with_default(
+        app, "--final-plate-age-Ma", parameters.boundary_parameters.plate_parameters.final_plate_age )
+        ->group( "Plate Parameters" );
+
+    add_flag_with_default(
+        app,
+        "--interpolate-plates-in-time",
+        parameters.boundary_parameters.plate_parameters.interpolate_plates_in_time )
+        ->group( "Plate Parameters" )
+        ->description( "Interpolate between plate stages defined in the plate data (usually every 1 Ma)." );
+
+    add_option_with_default(
+        app, "--plates-topologies-path", parameters.boundary_parameters.plate_parameters.plates_topologies_path )
+        ->group( "Plate Parameters" )
+        ->description( "Paths to plate data." );
+
+    add_option_with_default(
+        app,
+        "--plates-reconstructions-path",
+        parameters.boundary_parameters.plate_parameters.plates_reconstructions_path )
+        ->group( "Plate Parameters" );
+
+    add_option_with_default(
+        app, "--plate-velocity-scaling", parameters.boundary_parameters.plate_parameters.plate_velocity_scaling )
+        ->group( "Plate Parameters" );
 
     //////////////////////////////
     /// Geophysical parameters ///
@@ -638,7 +716,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->default_val( "tala" )
         ->group( "Physical Parameters" )
         ->description(
-            "Formulation of compressibility, if active: Choose between 'tala', 'pda' (not yet supported) and 'pda-entropy' (not yet supported). See Gassmöller et al. (2020)." );
+            "Formulation of compressibility, if active: Choose between 'tala', 'pda' and 'pda-entropy' (not yet supported). See Gassmöller et al. (2020)." );
 
     add_flag_with_default( app, "--internal-heating-enabled", parameters.physics_parameters.internal_heating )
         ->group( "Physical Parameters" );
@@ -662,6 +740,14 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Radial input profiles" );
     add_option_with_default( app, "--cp-profile-path", parameters.physics_parameters.cp_profile_csv_path )
         ->group( "Radial input profiles" );
+
+    add_option_with_default( app, "--pda-mintable-path", parameters.physics_parameters.pda_parameters.mintable_path )
+        ->group( "PDA Parameters" )
+        ->description( "Path to mineralogical lookup-table." );
+    add_option_with_default(
+        app, "--pda-pressure-profile-csv-path", parameters.physics_parameters.pda_parameters.pressure_profile_csv_path )
+        ->group( "PDA Parameters" )
+        ->description( "Hydrostatic pressure profile for PDA." );
 
     // Viscosity parameters
     add_option_with_default(
@@ -698,7 +784,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->description(
             "E_a controls magnitude of temp-dependence. Full viscosity contrast is O(e^E_a) for FK types 1 to 3 and O(E_a) for fk-benchmark." );
     add_option_with_default(
-        app, "--activation_volume", parameters.physics_parameters.viscosity_parameters.activation_volume )
+        app, "--activation-volume", parameters.physics_parameters.viscosity_parameters.activation_volume )
         ->group( "Viscosity" )
         ->description(
             "V_a > 0 adds a further depth-dependence  as exp( E_a * T + V_a * d ). Counteracts the natural decrease of viscosity with depth from pure (absolute) temp-dependence." );
@@ -835,6 +921,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     };
     add_option_with_default( app, "--stokes-mg-precision", parameters.stokes_solver_parameters.mg_precision )
         ->transform( CLI::CheckedTransformer( mg_precision_map, CLI::ignore_case ) )
+        ->default_val( "double" )
         ->group( "Stokes Solver" );
     add_option_with_default(
         app, "--stokes-viscous-pc-num-vcycles", parameters.stokes_solver_parameters.viscous_pc_num_vcycles )
@@ -916,18 +1003,25 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
 
     add_option_with_default( app, "--outdir", parameters.io_parameters.outdir )->group( "I/O" );
     add_flag_with_default( app, "--outdir-overwrite", parameters.io_parameters.overwrite )->group( "I/O" );
-    add_option_with_default( app, "--output-pressure", parameters.io_parameters.output_pressure )->group( "I/O" );
+    add_flag_with_default( app, "--output-pressure", parameters.io_parameters.output_pressure )->group( "I/O" );
 
     // Checkpoint loading
-    add_option_with_default( app, "--load-checkpoint", parameters.io_parameters.load_checkpoint )
+    add_flag_with_default( app, "--load-checkpoint", parameters.io_parameters.load_checkpoint )
         ->group( "I/O" )
         ->description( "Starting from checkpoint" );
     add_option_with_default( app, "--checkpoint-dir", parameters.io_parameters.checkpoint_dir )->group( "I/O" );
     add_option_with_default( app, "--checkpoint-step", parameters.io_parameters.checkpoint_step )->group( "I/O" );
+    add_flag_with_default( app, "--continue-simulation", parameters.io_parameters.continue_simulation )
+        ->group( "I/O" )
+        ->description(
+            "Preserve timestep counter and model time through checkpoint restart (true) or restart from 0 (false)." );
 
     add_option_with_default( app, "--output-frequency", parameters.io_parameters.output_frequency )
         ->group( "I/O" )
         ->description( "Write XDMF and radial profile output every N timesteps. Default: 1 (every timestep)." );
+    add_flag_with_default( app, "--output-per-Ma", parameters.io_parameters.output_per_Ma )
+        ->group( "I/O" )
+        ->description( "If true, write output every [output-frequency] Ma instead of timesteps." );
 
     add_flag_with_default( app, "--no-xdmf", parameters.io_parameters.no_xdmf )
         ->group( "I/O" )
@@ -1023,12 +1117,6 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     // Nondimensionalise all relevant input parameters
     nondimensionalise( parameters );
 
-    // Determine timestep_initial from checkpointing parameters
-    if ( parameters.io_parameters.load_checkpoint )
-    {
-        parameters.time_stepping_parameters.timestep_initial = parameters.io_parameters.checkpoint_step;
-    }
-
     util::logroot << "=========================================\n";
     util::logroot << "     Starting mantle circulation app     \n";
     util::logroot << "     Run with -h or --help for help      \n";
@@ -1047,6 +1135,15 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         util::logroot << "--> T_surface, T_cmb, viscosity, Ra, internal_heating_rate, t_end, dt_max, dt_min.\n";
         util::logroot << "Output set to nondimensional.\n";
         util::logroot << "#############################################" << std::endl;
+    }
+
+    // Plate velocities require no-slip boundary at the surface
+    if ( parameters.boundary_parameters.plate_parameters.apply_plate_velocities &&
+         parameters.boundary_parameters.velocity_bc_surface != BoundaryConditionsParameters::VelocityBC::NO_SLIP )
+    {
+        util::logroot << "\n## Plate velocities require NO-SLIP boundary at the surface. Setting accordingly..."
+                      << std::endl;
+        parameters.boundary_parameters.velocity_bc_surface = BoundaryConditionsParameters::VelocityBC::NO_SLIP;
     }
 
     // Setting parameters for low-memory mode

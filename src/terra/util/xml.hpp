@@ -3,6 +3,7 @@
 #pragma once
 
 #include <map>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -30,6 +31,47 @@ class XML
     }
 
     [[nodiscard]] std::string to_string() const { return to_string( 0 ); }
+
+    /// @brief Inverse of the escaping done in to_string()/escape_xml().
+    [[nodiscard]] static std::string unescape_xml( const std::string& data )
+    {
+        std::string result;
+        result.reserve( data.size() );
+        for ( size_t i = 0; i < data.size(); )
+        {
+            if ( data.compare( i, 5, "&amp;" ) == 0 )
+            {
+                result += '&';
+                i += 5;
+            }
+            else if ( data.compare( i, 6, "&quot;" ) == 0 )
+            {
+                result += '"';
+                i += 6;
+            }
+            else if ( data.compare( i, 6, "&apos;" ) == 0 )
+            {
+                result += '\'';
+                i += 6;
+            }
+            else if ( data.compare( i, 4, "&lt;" ) == 0 )
+            {
+                result += '<';
+                i += 4;
+            }
+            else if ( data.compare( i, 4, "&gt;" ) == 0 )
+            {
+                result += '>';
+                i += 4;
+            }
+            else
+            {
+                result += data[i];
+                i += 1;
+            }
+        }
+        return result;
+    }
 
   private:
     std::string                          name_;
@@ -104,5 +146,36 @@ class XML
         return escaped.str();
     }
 };
+
+/// @brief Finds a single attribute's value in raw, already-serialized XML.
+///
+/// Not a general-purpose parser - intended only for reading back small pieces of data
+/// written by \ref XML::to_string(). Searches for the first occurrence of
+/// `<tag_name> ... attribute_name="...">`.
+///
+/// @return the unescaped attribute value, or std::nullopt if the tag or attribute was not found.
+[[nodiscard]] inline std::optional< std::string >
+    find_xml_attribute( const std::string& content, const std::string& tag_name, const std::string& attribute_name )
+{
+    const auto tag_pos = content.find( "<" + tag_name );
+    if ( tag_pos == std::string::npos )
+        return std::nullopt;
+
+    const auto tag_end = content.find( ">", tag_pos );
+    if ( tag_end == std::string::npos )
+        return std::nullopt;
+
+    const auto key           = attribute_name + "=\"";
+    const auto value_key_pos = content.find( key, tag_pos );
+    if ( value_key_pos == std::string::npos || value_key_pos > tag_end )
+        return std::nullopt;
+
+    const auto value_start = value_key_pos + key.size();
+    const auto value_end   = content.find( '"', value_start );
+    if ( value_end == std::string::npos )
+        return std::nullopt;
+
+    return XML::unescape_xml( content.substr( value_start, value_end - value_start ) );
+}
 
 } // namespace terra::util

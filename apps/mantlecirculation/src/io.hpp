@@ -1,7 +1,6 @@
 
 #pragma once
 
-#include <fstream>
 #include <vector>
 
 #include "grid/grid_types.hpp"
@@ -88,8 +87,10 @@ struct XdmfFields
 inline Result<> write_xdmf(
     std::optional< io::XDMFOutput< ScalarType > >& xdmf_output,
     std::optional< io::XDMFOutput< ScalarType > >& xdmf_output_pressure,
-    const int                                      timestep,
-    const bool                                     output_dimensional,
+    int                                            timestep,
+    ScalarType                                     simulated_time_Ma,
+    bool                                           output_per_Ma,
+    bool                                           output_dimensional,
     const std::vector< ScalarXdmfField >&          scalar_fields,
     const std::vector< VectorXdmfField >&          vector_fields,
     const std::optional< ScalarXdmfField >&        pressure_field )
@@ -104,7 +105,7 @@ inline Result<> write_xdmf(
         for ( auto& f : vector_fields )
             scale( *f.data, f.scale_factor );
 
-        xdmf_output->write( timestep );
+        xdmf_output->write( timestep, simulated_time_Ma, output_per_Ma );
 
         // ... and nondimensionalise again, if required
         for ( auto& f : scalar_fields )
@@ -119,7 +120,7 @@ inline Result<> write_xdmf(
         {
             scale( *pressure_field->data, pressure_field->scale_factor );
 
-            xdmf_output_pressure->write( timestep );
+            xdmf_output_pressure->write( timestep, simulated_time_Ma, output_per_Ma );
 
             if ( pressure_field->restore )
                 scale( *pressure_field->data, ScalarType( 1 ) / pressure_field->scale_factor );
@@ -139,7 +140,7 @@ inline Result<> compute_and_write_radial_profiles(
     const Grid2DDataScalar< int >&      subdomain_shell_idx,
     const std::vector< double >&        radial_coords,
     const Parameters&                   prm,
-    const int                           timestep,
+    const int                           out_step,
     const ScalarType                    field_scale  = ScalarType( 1 ),
     const std::string&                  radial_label = "radius" )
 {
@@ -149,20 +150,11 @@ inline Result<> compute_and_write_radial_profiles(
         field_scale,
         radial_label );
 
-    // Zero padding
-    std::ostringstream sst;
-    sst << std::setfill( '0' )
-        << std::setw(
-               std::to_string(
-                   prm.time_stepping_parameters.timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 )
-                   .size() )
-        << timestep;
-
     if ( mpi::rank() == 0 )
     {
         std::ofstream out(
             prm.io_parameters.outdir + "/" + prm.io_parameters.radial_profiles_out_dir + "/radial_profiles_" +
-            scalar_function.grid_data().label() + "_" + sst.str() + ".csv" );
+            scalar_function.grid_data().label() + "_" + std::to_string( out_step ) + ".csv" );
         profiles.print_csv( out );
     }
 
@@ -181,7 +173,7 @@ inline Result<> compute_and_write_velocity_radial_profiles(
     const std::vector< double >&                             radial_coords,
     const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask,
     const Parameters&                                        prm,
-    const int                                                timestep,
+    const int                                                out_step,
     const ScalarType                                         field_scale  = ScalarType( 1 ),
     const std::string&                                       radial_label = "radius" )
 {
@@ -212,22 +204,22 @@ inline Result<> compute_and_write_velocity_radial_profiles(
     Kokkos::fence();
 
     auto res1 = compute_and_write_radial_profiles(
-        u_r, subdomain_shell_idx, radial_coords, prm, timestep, field_scale, radial_label );
+        u_r, subdomain_shell_idx, radial_coords, prm, out_step, field_scale, radial_label );
     if ( res1.is_err() )
     {
         return res1;
     }
     return compute_and_write_radial_profiles(
-        u_t, subdomain_shell_idx, radial_coords, prm, timestep, field_scale, radial_label );
+        u_t, subdomain_shell_idx, radial_coords, prm, out_step, field_scale, radial_label );
 }
 
-inline Result<> write_timer_tree( const IOParameters& io_parameters, const int timestep )
+inline Result<> write_timer_tree( const IOParameters& io_parameters, const int out_step )
 {
     util::TimerTree::instance().aggregate_mpi();
     if ( mpi::rank() == 0 )
     {
         const auto timer_tree_file = io_parameters.outdir + "/" + io_parameters.timer_trees_dir + "/timer_tree_" +
-                                     std::to_string( timestep ) + ".json";
+                                     std::to_string( out_step ) + ".json";
         logroot << "Writing timer tree to " << timer_tree_file << std::endl;
         std::ofstream out( timer_tree_file );
         out << util::TimerTree::instance().json_aggregate();
