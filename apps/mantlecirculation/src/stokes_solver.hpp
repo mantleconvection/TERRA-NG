@@ -359,6 +359,16 @@ class StokesContext
             bcs_neumann,
             false );
 
+        K_neumann_diag_ = std::make_unique< Stokes >(
+            *domains_[velocity_level_],
+            *domains_[pressure_level_],
+            coords_shell_[velocity_level_],
+            coords_radii_[velocity_level_],
+            boundary_mask_[velocity_level_],
+            eta_[velocity_level_].grid_data(),
+            bcs_neumann,
+            true );
+
         M_ = std::make_unique< ViscousMass >(
             *domains_[velocity_level_], coords_shell_[velocity_level_], coords_radii_[velocity_level_], false );
 
@@ -775,11 +785,12 @@ class StokesContext
     /// in either case the table is cleared at the end of the call.
     template < typename RhoFieldType >
     void solve(
-        const linalg::VectorQ1Scalar< ScalarType >& T_for_buoyancy,
-        const RhoFieldType&                         rho,
-        const grid::Grid2DDataScalar< ScalarType >& alpha,
-        bool                                        compressible,
-        bool                                        log_convergence )
+        const linalg::VectorQ1Scalar< ScalarType >&                   T_for_buoyancy,
+        const std::optional< linalg::VectorQ1IsoQ2Q1< ScalarType > >& u_dirichlet,
+        const RhoFieldType&                                           rho,
+        const grid::Grid2DDataScalar< ScalarType >&                   alpha,
+        bool                                                          compressible,
+        bool                                                          log_convergence )
     {
         util::Timer timer_stokes( "stokes" );
 
@@ -812,8 +823,22 @@ class StokesContext
 
             if ( bcf == grid::shell::BoundaryConditionFlag::DIRICHLET )
             {
-                fe::strong_algebraic_homogeneous_velocity_dirichlet_enforcement_stokes_like(
-                    stok_vecs_["f"], boundary_mask_[velocity_level_], sbf );
+                if ( sbf == grid::shell::ShellBoundaryFlag::SURFACE && u_dirichlet.has_value() )
+                {
+                    fe::strong_algebraic_velocity_dirichlet_enforcement_stokes_like(
+                        *K_neumann_,
+                        *K_neumann_diag_,
+                        *u_dirichlet,
+                        triangular_prec_tmp_ /*tmp_vec*/,
+                        stok_vecs_["f"],
+                        boundary_mask_[velocity_level_],
+                        sbf );
+                }
+                else
+                {
+                    fe::strong_algebraic_homogeneous_velocity_dirichlet_enforcement_stokes_like(
+                        stok_vecs_["f"], boundary_mask_[velocity_level_], sbf );
+                }
             }
             else if ( bcf == grid::shell::BoundaryConditionFlag::FREESLIP )
             {
@@ -906,6 +931,7 @@ class StokesContext
     // body order (rather than fighting member-init order).
     std::unique_ptr< Stokes >           K_;
     std::unique_ptr< Stokes >           K_neumann_;
+    std::unique_ptr< Stokes >           K_neumann_diag_;
     std::unique_ptr< ViscousMass >      M_;
     std::vector< Viscous >              A_c_;
     std::vector< Prolongation >         P_;
