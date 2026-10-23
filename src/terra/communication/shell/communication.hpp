@@ -20,6 +20,7 @@ namespace detail {
 // Build an unmanaged view with the *same* data_type/layout/device as a Grid*DDataVec,
 // pointing into a raw pointer slice.
 template < class GridViewT >
+KOKKOS_INLINE_FUNCTION
 auto make_unmanaged_like( typename GridViewT::value_type* ptr, int n0 = 0, int n1 = 0, int n2 = 0 )
 {
     using data_type    = typename GridViewT::data_type;
