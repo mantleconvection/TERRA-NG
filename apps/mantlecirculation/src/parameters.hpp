@@ -173,7 +173,7 @@ struct InitialTemperatureParameters
     /// shells sph_layer and sph_layer + 1, counted from the CMB). -1 = whole domain (default).
     /// Number of layers is 2^(refinement_level_mesh_max + radial_extra_levels), so valid
     /// indices are 0 ... num_layers - 1.
-    int sph_layer = -1;    
+    int sph_layer = -1;
 };
 
 // Work in progress
@@ -751,7 +751,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->transform( CLI::CheckedTransformer( init_temp_perturbation_map, CLI::ignore_case ) )
         ->default_val( "spherical-harmonics" )
         ->group( "Initial Temperature" )
-        ->description( "'noise', 'spherical-harmonics' / 'sph' or 'spherical-harmonics-superposition' / 'sph-superposition' perturbation." );
+        ->description(
+            "'noise', 'spherical-harmonics' / 'sph' or 'spherical-harmonics-superposition' / 'sph-superposition' perturbation." );
 
     add_option_with_default(
         app, "--perturbation-amplitude", parameters.physics_parameters.initial_temperature.perturbation_amplitude )

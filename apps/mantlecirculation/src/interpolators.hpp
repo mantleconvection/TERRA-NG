@@ -241,7 +241,7 @@ struct SphericalHarmonicPerturbationAdder
             const bool       in_layer    = radius >= layer_r_lo_ - layer_tol_ && radius <= layer_r_hi_ + layer_tol_;
             const bool       on_boundary = radius <= r_min_ + layer_tol_ || radius >= r_max_ - layer_tol_;
             taper                        = ( in_layer && !on_boundary ) ? ScalarType( 1 ) : ScalarType( 0 );
-        }        
+        }
         // apply tapering near top and bottom boundary
         else if ( taper_near_boundaries_ )
         {

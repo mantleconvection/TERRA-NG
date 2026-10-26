@@ -297,7 +297,9 @@ void initialize_temperature_fields(
 
             // Add spherical harmonic perturbation
             Kokkos::parallel_for(
-                "SphericalHarmonicPerturbationAdder", grid::shell::local_domain_md_range_policy_nodes( domain ), adder );
+                "SphericalHarmonicPerturbationAdder",
+                grid::shell::local_domain_md_range_policy_nodes( domain ),
+                adder );
             Kokkos::fence();
 
             // Communicate to ghost nodes
