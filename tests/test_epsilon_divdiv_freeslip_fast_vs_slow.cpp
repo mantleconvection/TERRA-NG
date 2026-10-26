@@ -7,6 +7,14 @@
 #include "terra/kernels/common/grid_operations.hpp"
 #include "terra/kokkos/kokkos_wrapper.hpp"
 #include "util/init.hpp"
+#include "tilted_normals.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <vector>
 
 using namespace terra;
 
@@ -286,6 +294,98 @@ void compare_epsilon_divdiv_path_comparison( int level, bool diagonal, int repea
               << ", inf = " << inf_slow_vs_dd << std::endl;
 }
 
+// User-set free-slip normals: fast-path timing with custom normals vs. the default r̂ normals, for
+// free-slip at the CMB, the surface and both (the last one uses separate CMB/surface shared-memory
+// tiles in the fast path). Each operator is timed twice in alternating order and the faster round
+// is kept, so that neither one systematically pays for warm-up effects.
+template < typename ScalarT >
+void compare_timing_custom_normals( int level, bool diagonal, int repeats )
+{
+    using Op = fe::wedge::operators::shell::EpsilonDivDivKerngen< ScalarT >;
+
+    const auto domain = DistributedDomain::create_uniform_single_subdomain_per_diamond( level, level, 0.5, 1.0 );
+
+    auto mask_data          = grid::setup_node_ownership_mask_data( domain );
+    auto boundary_mask_data = grid::shell::setup_boundary_mask_data( domain );
+
+    const auto coords_shell = terra::grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarT >( domain );
+    const auto coords_radii = terra::grid::shell::subdomain_shell_radii< ScalarT >( domain );
+
+    const auto normals_cmb     = test::tilted_normals( coords_shell, 0.1, 0.0 );
+    const auto normals_surface = test::tilted_normals( coords_shell, 0.1, 1.3 );
+
+    VectorW1Vec< ScalarT >    src( "src", domain, mask_data );
+    VectorW1Vec< ScalarT >    dst( "dst", domain, mask_data );
+    VectorW1Scalar< ScalarT > k_coeff( "k", domain, mask_data );
+
+    Kokkos::parallel_for(
+        "interpolate src",
+        local_domain_md_range_policy_nodes( domain ),
+        VectorFieldInterpolator( coords_shell, coords_radii, src.grid_data() ) );
+    Kokkos::parallel_for(
+        "interpolate k",
+        local_domain_md_range_policy_nodes( domain ),
+        ScalarCoeffInterpolator( coords_shell, coords_radii, k_coeff.grid_data() ) );
+
+    Kokkos::fence();
+
+    struct BCSet
+    {
+        const char*                        name;
+        grid::shell::BoundaryConditionFlag cmb, surface;
+    };
+    const std::vector< BCSet > bc_sets = {
+        { "FS/DIR", FREESLIP, DIRICHLET },
+        { "DIR/FS", DIRICHLET, FREESLIP },
+        { "FS/FS ", FREESLIP, FREESLIP },
+    };
+
+    for ( const auto& bc : bc_sets )
+    {
+        BoundaryConditions bcs = { { CMB, bc.cmb }, { SURFACE, bc.surface } };
+
+        auto make_op = [&]() {
+            return Op(
+                domain,
+                coords_shell,
+                coords_radii,
+                boundary_mask_data,
+                k_coeff.grid_data(),
+                bcs,
+                diagonal,
+                linalg::OperatorApplyMode::Replace,
+                linalg::OperatorCommunicationMode::CommunicateAdditively,
+                linalg::OperatorStoredMatrixMode::Off );
+        };
+
+        Op op_fast = make_op(); // fast free-slip path, custom normals
+        Op op_fast_rhat = make_op(); // fast path, default r̂ normals
+
+        op_fast.set_freeslip_normals( normals_cmb, normals_surface );
+
+        auto time = [&]( Op& op ) {
+            linalg::apply( op, src, dst ); // warmup
+            Kokkos::fence();
+            Kokkos::Timer timer;
+            for ( int i = 0; i < repeats; ++i )
+                linalg::apply( op, src, dst );
+            Kokkos::fence();
+            return timer.seconds() / repeats;
+        };
+
+        double t_fast      = time( op_fast );
+        double t_fast_rhat = time( op_fast_rhat );
+        t_fast_rhat        = std::min( t_fast_rhat, time( op_fast_rhat ) );
+        t_fast             = std::min( t_fast, time( op_fast ) );
+
+        std::cout << "  " << bc.name << "  fast(custom) = " << t_fast << " s/apply"
+                  << "  fast(rhat) = " << t_fast_rhat << " s/apply";
+        if ( t_fast_rhat > 0.0 )
+            std::cout << "  custom/rhat = " << ( t_fast / t_fast_rhat ) << "x";
+        std::cout << std::endl;
+    }
+}
+
 int main( int argc, char** argv )
 {
     util::terra_initialize( &argc, &argv );
@@ -304,6 +404,40 @@ int main( int argc, char** argv )
         {
             std::cout << "level = " << level << std::endl;
             compare_epsilon_divdiv_path_comparison< double >( level, diagonal, repeats );
+        }
+    }
+
+    // Opt-in (not run in CI): timing with user-set free-slip normals.
+    //   --custom-normals-timing [--repeats N] [--min-level L] [--max-level L]
+    bool custom_normals_timing = false;
+    int  cn_repeats            = 20;
+    int  cn_min_level          = 4;
+    int  cn_max_level          = 6;
+    for ( int a = 1; a < argc; ++a )
+    {
+        if ( std::strcmp( argv[a], "--custom-normals-timing" ) == 0 )
+            custom_normals_timing = true;
+        else if ( a + 1 < argc && std::strcmp( argv[a], "--repeats" ) == 0 )
+            cn_repeats = std::atoi( argv[++a] );
+        else if ( a + 1 < argc && std::strcmp( argv[a], "--min-level" ) == 0 )
+            cn_min_level = std::atoi( argv[++a] );
+        else if ( a + 1 < argc && std::strcmp( argv[a], "--max-level" ) == 0 )
+            cn_max_level = std::atoi( argv[++a] );
+    }
+
+    if ( custom_normals_timing )
+    {
+        for ( auto diagonal : { true, false } )
+        {
+            std::cout << "==================================================" << std::endl;
+            std::cout << "EpsilonDivDivKerngen timing with user-set free-slip normals" << std::endl;
+            std::cout << "diagonal = " << diagonal << "  repeats = " << cn_repeats << std::endl;
+
+            for ( int level = cn_min_level; level <= cn_max_level; ++level )
+            {
+                std::cout << "level = " << level << std::endl;
+                compare_timing_custom_normals< double >( level, diagonal, cn_repeats );
+            }
         }
     }
 

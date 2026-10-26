@@ -11,6 +11,33 @@
 // The velocity is derived from a poloidal function P(r,theta,phi) = Pl(r) * Y_22(theta,phi):
 //   u = curl(r x grad(P))
 // The coefficients A,B,C,D,E for Pl(r) and G,H,K for pressure are pre-computed by assess.
+//
+// Options (defaults reproduce the original test):
+//   --consistent-normals  free-slip normals n = g/|g|, g = Bᵀ·1 (as in mantlecirculation), used by the
+//                         fine-level operator and the RHS projection; default r̂. With these, constant
+//                         pressure is an exact null mode of K; with r̂ it is only a near-null mode.
+//   --y00 c               add a Y_00 density c (r/Rp)^k. Its force is a pure gradient, so the exact
+//                         solution only gains the hydrostatic pressure -g c r^3/(3 Rp^2); u is unchanged.
+//                         This mimics the app's buoyancy, which uses the full T (nonzero spherical mean).
+//   --max-level L, --start-level L, --restart R   finest level, first level solved, FGMRES restart.
+//
+// Observed results (levels 3-6, minlevel 2, FGMRES restart 30, max 200 iterations, rel. tol 1e-14).
+// "order" = log2 of the error ratio between successive levels.
+//
+//   Y22 only, r̂:           vel order 1.89/1.93/1.96, pre order 2.03/1.91/1.85, 66-141 iterations.
+//   Y22 only, consistent:   vel order 1.89/1.93/1.96, pre order 2.00/1.80/1.59, 66-132 iterations.
+//                           Pressure error ~33% higher at level 6 (1.21e-5 vs 9.08e-6); velocity same.
+//                           Cause: the consistent normals deviate from r̂ (the exact normal here) by
+//                           O(h) at ~7% of boundary nodes (max angle 0.68/0.34/0.17/0.085 deg on levels
+//                           3-6; mean angle ~O(h^2)). Not the null mode: the computed mean pressure is
+//                           ~1e-17 and the mean is subtracted before the error is computed anyway.
+//   Y22 + Y00 (c=10), r̂:   solver stalls. Relative residual plateaus at ~1e-9 (level 5: 8.2e-9 from
+//                           iteration 30 to 200); levels 4-6 hit the 200-iteration limit. This is the
+//                           stall seen in the app: the large hydrostatic mean pressure has to be found
+//                           through the near-null mode, which the preconditioner does not handle.
+//   Y22 + Y00 (c=10), consistent: no stall (65-140 iterations, residual to ~1e-13), vel order
+//                           2.12/1.97/1.97, pre order 2.02/2.03/1.99. The second-order hydrostatic
+//                           pressure error dominates and masks the lower-order Y22 part above.
 
 #include "../src/terra/communication/shell/communication.hpp"
 
@@ -59,8 +86,11 @@
 
 #include "util/init.hpp"
 #include "util/table.hpp"
+#include "fe/solver_utils.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <cmath>
 #include <fstream>
 #include <map>
@@ -228,28 +258,30 @@ void velocity_cartesian( const double cx, const double cy, const double cz,
     uz = cz / r * u_r - st * u_theta;
 }
 
-// Pressure: p(r,θ,φ) = (G*r^2 + H*r^-3 + K*r^3) * Y_22(θ,φ)
+// Pressure: p(r,θ,φ) = (G*r^2 + H*r^-3 + K*r^3) * Y_22(θ,φ) - g*c00*r^3/(3*Rp^2)
+// The last term is the hydrostatic pressure of the optional Y_00 density c00*(r/Rp)^2 (u = 0 for it).
 KOKKOS_INLINE_FUNCTION
-double pressure_cartesian( const double cx, const double cy, const double cz )
+double pressure_cartesian( const double cx, const double cy, const double cz, const double c00 )
 {
     double r, theta, phi;
     to_spherical( cx, cy, cz, r, theta, phi );
 
     const double r2 = r * r;
     const double r3 = r2 * r;
-    return ( coeff_G * r2 + coeff_H / r3 + coeff_K * r3 ) * Y22( theta, phi );
+    return ( coeff_G * r2 + coeff_H / r3 + coeff_K * r3 ) * Y22( theta, phi ) -
+           gravity * c00 * r3 / ( 3.0 * Rp * Rp );
 }
 
-// Density perturbation: delta_rho(r,θ,φ) = (r/Rp)^k * Y_22(θ,φ)
+// Density perturbation: delta_rho(r,θ,φ) = (r/Rp)^k * ( Y_22(θ,φ) + c00 ), c00 = optional Y_00 part
 // Body force (strong form): f_i = -g * delta_rho * x_i / r
 KOKKOS_INLINE_FUNCTION
-void body_force_cartesian( const double cx, const double cy, const double cz,
+void body_force_cartesian( const double cx, const double cy, const double cz, const double c00,
                            double& fx, double& fy, double& fz )
 {
     double r, theta, phi;
     to_spherical( cx, cy, cz, r, theta, phi );
 
-    const double rho = ( r / Rp ) * ( r / Rp ) * Y22( theta, phi );  // (r/Rp)^2 * Y_22
+    const double rho = ( r / Rp ) * ( r / Rp ) * ( Y22( theta, phi ) + c00 );  // (r/Rp)^2 * (Y_22 + c00)
     const double f_radial = -gravity * rho / r;
 
     fx = f_radial * cx;
@@ -310,18 +342,21 @@ struct AssessSolutionPressureInterpolator
     Grid4DDataScalar< double >                         data_p_;
     Grid4DDataScalar< grid::shell::ShellBoundaryFlag > mask_;
     bool                                               only_boundary_;
+    double                                             c00_;
 
     AssessSolutionPressureInterpolator(
         const Grid3DDataVec< double, 3 >&                         grid,
         const Grid2DDataScalar< double >&                         radii,
         const Grid4DDataScalar< double >&                         data_p,
         const Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& mask,
-        const bool                                                only_boundary )
+        const bool                                                only_boundary,
+        const double                                              c00 = 0.0 )
     : grid_( grid )
     , radii_( radii )
     , data_p_( data_p )
     , mask_( mask )
     , only_boundary_( only_boundary )
+    , c00_( c00 )
     {}
 
     KOKKOS_INLINE_FUNCTION
@@ -335,7 +370,7 @@ struct AssessSolutionPressureInterpolator
         if ( !only_boundary_ || on_boundary )
         {
             data_p_( local_subdomain_id, x, y, r ) =
-                assess_solution::pressure_cartesian( coords( 0 ), coords( 1 ), coords( 2 ) );
+                assess_solution::pressure_cartesian( coords( 0 ), coords( 1 ), coords( 2 ), c00_ );
         }
     }
 };
@@ -345,14 +380,17 @@ struct AssessRHSVelocityInterpolator
     Grid3DDataVec< double, 3 > grid_;
     Grid2DDataScalar< double > radii_;
     Grid4DDataVec< double, 3 > data_;
+    double                     c00_;
 
     AssessRHSVelocityInterpolator(
         const Grid3DDataVec< double, 3 >& grid,
         const Grid2DDataScalar< double >& radii,
-        const Grid4DDataVec< double, 3 >& data )
+        const Grid4DDataVec< double, 3 >& data,
+        const double                      c00 = 0.0 )
     : grid_( grid )
     , radii_( radii )
     , data_( data )
+    , c00_( c00 )
     {}
 
     KOKKOS_INLINE_FUNCTION
@@ -361,7 +399,7 @@ struct AssessRHSVelocityInterpolator
         const dense::Vec< double, 3 > coords = grid::shell::coords( local_subdomain_id, x, y, r, grid_, radii_ );
 
         double fx, fy, fz;
-        assess_solution::body_force_cartesian( coords( 0 ), coords( 1 ), coords( 2 ), fx, fy, fz );
+        assess_solution::body_force_cartesian( coords( 0 ), coords( 1 ), coords( 2 ), c00_, fx, fy, fz );
 
         data_( local_subdomain_id, x, y, r, 0 ) = fx;
         data_( local_subdomain_id, x, y, r, 1 ) = fy;
@@ -392,7 +430,10 @@ std::tuple< double, double, int >
 test( int    min_level,
       int    max_level,
       int    level_subdomains,
-      const std::shared_ptr< util::Table >& table )
+      const std::shared_ptr< util::Table >& table,
+      bool   consistent_normals,
+      double c00,
+      int    fgmres_restart )
 {
     using ScalarType = double;
 
@@ -525,6 +566,25 @@ test( int    min_level,
         bcs_neumann,
         true );
 
+    // Optional consistent (Bᵀ·1) free-slip normals on the fine level, as in mantlecirculation: used
+    // by K_op (A, Bᵀ, B) and by the RHS projection below. Set before the fine inverse diagonal is
+    // computed. Default: r̂ (unit-sphere coords).
+    Grid3DDataVec< double, 3 > freeslip_normals_cmb = coords_shell[velocity_level];
+    if ( consistent_normals )
+    {
+        Grid3DDataVec< double, 3 > freeslip_normals_surface;
+        std::tie( freeslip_normals_cmb, freeslip_normals_surface ) = fe::consistent_freeslip_normals< ScalarType >(
+            K_neumann,
+            domains[velocity_level],
+            domains[pressure_level],
+            mask_data[velocity_level],
+            mask_data[pressure_level],
+            coords_shell[velocity_level],
+            boundary_mask_data[velocity_level],
+            bcs );
+        K_op.set_freeslip_normals( freeslip_normals_cmb, freeslip_normals_surface );
+    }
+
     ViscousMass M( domains[velocity_level], coords_shell[velocity_level], coords_radii[velocity_level], false );
 
     std::vector< Viscous >      A_diag;
@@ -587,20 +647,21 @@ test( int    min_level,
             coords_radii[pressure_level],
             stok_vecs["solution"].block_2().grid_data(),
             boundary_mask_data[pressure_level],
-            false ) );
+            false,
+            c00 ) );
 
     // RHS: f = M * body_force
     Kokkos::parallel_for(
         "assess rhs interpolation",
         local_domain_md_range_policy_nodes( domains[velocity_level] ),
         AssessRHSVelocityInterpolator(
-            coords_shell[velocity_level], coords_radii[velocity_level], stok_vecs["tmp_1"].block_1().grid_data() ) );
+            coords_shell[velocity_level], coords_radii[velocity_level], stok_vecs["tmp_1"].block_1().grid_data(), c00 ) );
 
     linalg::apply( M, stok_vecs["tmp_1"].block_1(), stok_vecs["f"].block_1() );
 
-    // Free-slip at CMB: zero only the normal component of the RHS
+    // Free-slip at CMB: zero only the normal component of the RHS (same normals as K_op)
     fe::strong_algebraic_freeslip_enforcement_in_place(
-        stok_vecs["f"], coords_shell[velocity_level], boundary_mask_data[velocity_level], CMB );
+        stok_vecs["f"], freeslip_normals_cmb, boundary_mask_data[velocity_level], CMB );
 
     // Zero-slip at surface: zero all velocity RHS components
     fe::strong_algebraic_homogeneous_velocity_dirichlet_enforcement_stokes_like(
@@ -703,7 +764,6 @@ test( int    min_level,
 
     PrecStokes prec_stokes( K_op.block_11(), pmass, K_op.block_12(), triangular_prec_tmp, prec_11, inv_lumped_pmass );
 
-    constexpr int fgmres_restart    = 30;
     constexpr int fgmres_max_iters  = 200;
 
     std::vector< VectorW1IsoW2W1< ScalarType > > tmp_fgmres;
@@ -744,6 +804,9 @@ test( int    min_level,
         kernels::common::masked_sum(
             u.block_2().grid_data(), u.block_2().mask_data(), grid::NodeOwnershipFlag::OWNED ) /
         num_dofs_pressure;
+
+    util::logroot << "  avg pressure: solution = " << avg_pressure_solution
+                  << "  approximation = " << avg_pressure_approximation << "\n";
 
     linalg::lincomb( solution.block_2(), { 1.0 }, { solution.block_2() }, -avg_pressure_solution );
     linalg::lincomb( u.block_2(), { 1.0 }, { u.block_2() }, -avg_pressure_approximation );
@@ -822,7 +885,28 @@ int main( int argc, char** argv )
     MPI_Init( &argc, &argv );
     Kokkos::ScopeGuard scope_guard( argc, argv );
 
-    const int max_level = 6;
+    // --consistent-normals: use the consistent (Bᵀ·1) free-slip normals instead of r̂.
+    // --y00 c: add a Y_00 density c*(r/Rp)^2 to the forcing (hydrostatic pressure, zero velocity).
+    bool   consistent_normals = false;
+    double c00                = 0.0;
+    // --max-level L, --start-level L (first fine level to solve), --restart R (FGMRES restart length).
+    int max_level      = 6;
+    int start_level    = -1;
+    int fgmres_restart = 30;
+    for ( int a = 1; a < argc; ++a )
+    {
+        if ( std::strcmp( argv[a], "--consistent-normals" ) == 0 )
+            consistent_normals = true;
+        else if ( a + 1 < argc && std::strcmp( argv[a], "--y00" ) == 0 )
+            c00 = std::atof( argv[++a] );
+        else if ( a + 1 < argc && std::strcmp( argv[a], "--max-level" ) == 0 )
+            max_level = std::atoi( argv[++a] );
+        else if ( a + 1 < argc && std::strcmp( argv[a], "--start-level" ) == 0 )
+            start_level = std::atoi( argv[++a] );
+        else if ( a + 1 < argc && std::strcmp( argv[a], "--restart" ) == 0 )
+            fgmres_restart = std::atoi( argv[++a] );
+    }
+
     auto      table     = std::make_shared< util::Table >();
 
     std::map< int, std::map< int, double > > err_vel;
@@ -831,6 +915,8 @@ int main( int argc, char** argv )
     for ( int minlevel = 2; minlevel <= 2; ++minlevel )
     {
         util::logroot << "=== Assess Stokes test (l=2, m=2, k=2, FreeZeroSlip) ===\n";
+        util::logroot << "free-slip normals = " << ( consistent_normals ? "consistent (B^T 1)" : "r_hat" )
+                      << "  y00 = " << c00 << "\n";
         util::logroot << "minlevel = " << minlevel << "\n";
 
         err_vel.clear();
@@ -840,7 +926,7 @@ int main( int argc, char** argv )
         static double prev_l2_vel     = 1.0;
         static double prev_l2_pre     = 1.0;
 
-        for ( int level = minlevel + 1; level <= max_level; ++level )
+        for ( int level = std::max( minlevel + 1, start_level ); level <= max_level; ++level )
         {
             for ( int level_subdomains = 0; level_subdomains <= 0; ++level_subdomains )
             {
@@ -850,7 +936,7 @@ int main( int argc, char** argv )
                 timer.reset();
 
                 const auto [l2_error_vel, l2_error_pre, iterations] =
-                    test( minlevel, level, level_subdomains, table );
+                    test( minlevel, level, level_subdomains, table, consistent_normals, c00, fgmres_restart );
 
                 const auto time_total = timer.seconds();
 
