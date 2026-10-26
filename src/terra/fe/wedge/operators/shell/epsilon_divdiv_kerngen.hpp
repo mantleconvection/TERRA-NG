@@ -113,6 +113,7 @@ class EpsilonDivDivKerngen
     grid::Grid3DDataVec< CoordScalarT, 3 >                   grid_;  ///< Lateral shell geometry (unit sphere coords)
     grid::Grid3DDataVec< CoordScalarT, 3 > normals_cmb_;     ///< Free-slip normals at the CMB (default: grid_ = r̂)
     grid::Grid3DDataVec< CoordScalarT, 3 > normals_surface_; ///< Free-slip normals at the surface (default: grid_)
+    bool custom_freeslip_normals_ = false; ///< false: free-slip uses r̂ (original code path), see set_freeslip_normals()
     grid::Grid2DDataScalar< CoordScalarT >                   radii_; ///< Radial coordinates per local subdomain
     grid::Grid4DDataScalar< ScalarType >                     k_;     ///< Scalar coefficient field
     grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag > mask_;  ///< Boundary flags per cell/node
@@ -503,14 +504,20 @@ class EpsilonDivDivKerngen
     grid::Grid2DDataScalar< CoordScalarT >      get_radii() const { return radii_; }
     grid::Grid3DDataVec< CoordScalarT, 3 >      get_grid() { return grid_; }
 
-    /// Override the free-slip normals (lateral fields, normalised on use). Default: unit-sphere coords (r̂).
+    /// Use the given free-slip normals (lateral fields, normalised on use) instead of r̂. Until this is
+    /// called, the original r̂ code paths run unchanged (the fast path then keeps a single normals tile
+    /// in team scratch instead of two).
     void set_freeslip_normals(
         const grid::Grid3DDataVec< CoordScalarT, 3 >& normals_cmb,
         const grid::Grid3DDataVec< CoordScalarT, 3 >& normals_surface )
     {
-        normals_cmb_     = normals_cmb;
-        normals_surface_ = normals_surface;
+        normals_cmb_             = normals_cmb;
+        normals_surface_         = normals_surface;
+        custom_freeslip_normals_ = true;
     }
+
+
+    bool has_custom_freeslip_normals() const { return custom_freeslip_normals_; }
 
     KOKKOS_INLINE_FUNCTION
     bool has_flag(
@@ -883,8 +890,10 @@ class EpsilonDivDivKerngen
         const int n    = lat_tile_ + 1;
         const int nxy  = n * n;
 
-        // DOUBLE tiles: coords_sh(nxy,3) + normals_{cmb,surf}_sh(nxy,3) + r_sh(nlev).
-        const size_t ndouble = size_t( nxy ) * 3 + 2 * size_t( nxy ) * 3 + size_t( nlev );
+        // DOUBLE tiles: coords_sh(nxy,3) + normals_sh(nxy,3) + r_sh(nlev), plus a second normals tile
+        // (CMB and surface separately) only with custom free-slip normals.
+        const size_t n_normal_tiles = custom_freeslip_normals_ ? 2 : 1;
+        const size_t ndouble        = size_t( nxy ) * 3 + n_normal_tiles * size_t( nxy ) * 3 + size_t( nlev );
         // CompT tiles: src_sh(nxy,3,nlev) + k_sh(nxy,nlev).
         const size_t ncomp = size_t( nxy ) * 3 * nlev + size_t( nxy ) * nlev;
 
@@ -1194,14 +1203,27 @@ class EpsilonDivDivKerngen
                     {
                         // Normal in CoordScalarT (geometry precision); the
                         // resulting rotation is cast down when written into R (ScalarT).
-                        const auto&                   normals = at_cmb ? normals_cmb_ : normals_surface_;
                         dense::Vec< CoordScalarT, 3 > normal;
-                        for ( int d = 0; d < 3; ++d )
-                            normal( d ) = normals(
+                        if ( custom_freeslip_normals_ )
+                        {
+                            const auto& normals = at_cmb ? normals_cmb_ : normals_surface_;
+                            for ( int d = 0; d < 3; ++d )
+                                normal( d ) = normals(
+                                    local_subdomain_id,
+                                    x_cell + layer_hex_offset_x[wedge][boundary_node_idx],
+                                    y_cell + layer_hex_offset_y[wedge][boundary_node_idx],
+                                    d );
+                        }
+                        else
+                        {
+                            normal = grid::shell::coords(
                                 local_subdomain_id,
                                 x_cell + layer_hex_offset_x[wedge][boundary_node_idx],
                                 y_cell + layer_hex_offset_y[wedge][boundary_node_idx],
-                                d );
+                                r_cell + ( at_cmb ? 0 : 1 ),
+                                grid_,
+                                radii_ );
+                        }
 
                         auto R_i = trafo_mat_cartesian_to_normal_tangential( normal );
 
@@ -1710,11 +1732,19 @@ class EpsilonDivDivKerngen
         ScratchCoords coords_sh( shmem, nxy, 3 );
         shmem += nxy * 3;
 
-        // Normalized free-slip normals (CMB, surface) in shared memory — avoids 12 persistent register-doubles.
-        ScratchCoords normals_cmb_sh( shmem, nxy, 3 );
+        // Normalized free-slip normals in shared memory — avoids 12 persistent register-doubles.
+        // normals_sh: r̂ by default; with custom normals it holds the CMB normals and a second tile
+        // holds the surface normals.
+        ScratchCoords normals_sh( shmem, nxy, 3 );
         shmem += nxy * 3;
-        ScratchCoords normals_surf_sh( shmem, nxy, 3 );
-        shmem += nxy * 3;
+        // Per-boundary views read by the kernel below. Both are normals_sh unless custom normals are set.
+        ScratchCoords normals_cmb_sh  = normals_sh;
+        ScratchCoords normals_surf_sh = normals_sh;
+        if ( custom_freeslip_normals_ )
+        {
+            normals_surf_sh = ScratchCoords( shmem, nxy, 3 );
+            shmem += nxy * 3;
+        }
 
         auto r_sh =
             Kokkos::View< double*, Kokkos::LayoutRight, typename Team::scratch_memory_space, Kokkos::MemoryUnmanaged >(
@@ -1745,27 +1775,48 @@ class EpsilonDivDivKerngen
                 coords_sh( n, 1 ) = cy;
                 coords_sh( n, 2 ) = cz;
 
-                double ax = normals_cmb_( local_subdomain_id, xi, yi, 0 );
-                double ay = normals_cmb_( local_subdomain_id, xi, yi, 1 );
-                double az = normals_cmb_( local_subdomain_id, xi, yi, 2 );
-                normalize3( ax, ay, az );
-                normals_cmb_sh( n, 0 ) = ax;
-                normals_cmb_sh( n, 1 ) = ay;
-                normals_cmb_sh( n, 2 ) = az;
+                if ( custom_freeslip_normals_ )
+                {
+                    double ax = normals_cmb_( local_subdomain_id, xi, yi, 0 );
+                    double ay = normals_cmb_( local_subdomain_id, xi, yi, 1 );
+                    double az = normals_cmb_( local_subdomain_id, xi, yi, 2 );
+                    normalize3( ax, ay, az );
+                    normals_cmb_sh( n, 0 ) = ax;
+                    normals_cmb_sh( n, 1 ) = ay;
+                    normals_cmb_sh( n, 2 ) = az;
 
-                double bx = normals_surface_( local_subdomain_id, xi, yi, 0 );
-                double by = normals_surface_( local_subdomain_id, xi, yi, 1 );
-                double bz = normals_surface_( local_subdomain_id, xi, yi, 2 );
-                normalize3( bx, by, bz );
-                normals_surf_sh( n, 0 ) = bx;
-                normals_surf_sh( n, 1 ) = by;
-                normals_surf_sh( n, 2 ) = bz;
+                    double bx = normals_surface_( local_subdomain_id, xi, yi, 0 );
+                    double by = normals_surface_( local_subdomain_id, xi, yi, 1 );
+                    double bz = normals_surface_( local_subdomain_id, xi, yi, 2 );
+                    normalize3( bx, by, bz );
+                    normals_surf_sh( n, 0 ) = bx;
+                    normals_surf_sh( n, 1 ) = by;
+                    normals_surf_sh( n, 2 ) = bz;
+                }
+                else
+                {
+                    // r̂ = normalised unit-sphere coords.
+                    const double n2 = cx * cx + cy * cy + cz * cz;
+                    if ( n2 > 0.0 )
+                    {
+                        const double invn  = 1.0 / Kokkos::sqrt( n2 );
+                        normals_sh( n, 0 ) = cx * invn;
+                        normals_sh( n, 1 ) = cy * invn;
+                        normals_sh( n, 2 ) = cz * invn;
+                    }
+                    else
+                    {
+                        normals_sh( n, 0 ) = normals_sh( n, 1 ) = normals_sh( n, 2 ) = 0.0;
+                    }
+                }
             }
             else
             {
+                // Tile node outside the subdomain: zero every normals tile that exists.
                 coords_sh( n, 0 ) = coords_sh( n, 1 ) = coords_sh( n, 2 ) = 0.0;
-                normals_cmb_sh( n, 0 ) = normals_cmb_sh( n, 1 ) = normals_cmb_sh( n, 2 ) = 0.0;
-                normals_surf_sh( n, 0 ) = normals_surf_sh( n, 1 ) = normals_surf_sh( n, 2 ) = 0.0;
+                normals_sh( n, 0 ) = normals_sh( n, 1 ) = normals_sh( n, 2 ) = 0.0;
+                if ( custom_freeslip_normals_ )
+                    normals_surf_sh( n, 0 ) = normals_surf_sh( n, 1 ) = normals_surf_sh( n, 2 ) = 0.0;
             }
         } );
 

@@ -87,6 +87,8 @@ class GradientKerngen
     // Free-slip normals per boundary (lateral, same layout as grid_fine_). Default: grid_fine_ (= r̂).
     grid::Grid3DDataVec< ScalarT, 3 > normals_cmb_;
     grid::Grid3DDataVec< ScalarT, 3 > normals_surface_;
+    // false: free-slip uses r̂ (original code paths), see set_freeslip_normals().
+    bool custom_freeslip_normals_ = false;
 
     BoundaryConditions bcs_;
 
@@ -202,14 +204,19 @@ class GradientKerngen
 
     void force_slow_path() { kernel_path_ = KernelPath::Slow; }
 
-    /// Override the free-slip normals (lateral fields, normalised on use). Default: unit-sphere coords (r̂).
+    /// Use the given free-slip normals (lateral fields, must be unit length: the fast path does not
+    /// normalise) instead of r̂. Until this is called, the original r̂ code paths run unchanged.
     void set_freeslip_normals(
         const grid::Grid3DDataVec< ScalarT, 3 >& normals_cmb,
         const grid::Grid3DDataVec< ScalarT, 3 >& normals_surface )
     {
-        normals_cmb_     = normals_cmb;
-        normals_surface_ = normals_surface;
+        normals_cmb_             = normals_cmb;
+        normals_surface_         = normals_surface;
+        custom_freeslip_normals_ = true;
     }
+
+
+    bool has_custom_freeslip_normals() const { return custom_freeslip_normals_; }
 
     void set_operator_apply_and_communication_modes(
         const linalg::OperatorApplyMode         operator_apply_mode,
@@ -442,13 +449,26 @@ class GradientKerngen
                     for ( int i = 0; i < 18; ++i )
                         R[wedge]( i, i ) = 1.0;
 
-                    const auto& normals = at_cmb ? normals_cmb_ : normals_surface_;
                     for ( int bn = 0; bn < 3; ++bn )
                     {
                         dense::Vec< double, 3 > normal;
-                        for ( int d = 0; d < 3; ++d )
-                            normal( d ) = normals(
-                                s, x_cell + layer_hex_offset_x[wedge][bn], y_cell + layer_hex_offset_y[wedge][bn], d );
+                        if ( custom_freeslip_normals_ )
+                        {
+                            const auto& normals = at_cmb ? normals_cmb_ : normals_surface_;
+                            for ( int d = 0; d < 3; ++d )
+                                normal( d ) = normals(
+                                    s, x_cell + layer_hex_offset_x[wedge][bn], y_cell + layer_hex_offset_y[wedge][bn], d );
+                        }
+                        else
+                        {
+                            normal = grid::shell::coords(
+                                s,
+                                x_cell + layer_hex_offset_x[wedge][bn],
+                                y_cell + layer_hex_offset_y[wedge][bn],
+                                r_cell + ( at_cmb ? 0 : 1 ),
+                                grid_fine_,
+                                radii_ );
+                        }
 
                         auto      R_i         = trafo_mat_cartesian_to_normal_tangential( normal );
                         const int offset_in_R = at_cmb ? 0 : 9;
@@ -752,12 +772,20 @@ class GradientKerngen
                     {
                         if ( treat_freeslip && is_boundary_node )
                         {
-                            const auto&  normals = at_cmb ? normals_cmb_ : normals_surface_;
-                            const int    xn      = xc_base + ddx;
-                            const int    yn      = yc_base + ddy;
-                            const double nx      = normals( local_subdomain_id, xn, yn, 0 );
-                            const double ny      = normals( local_subdomain_id, xn, yn, 1 );
-                            const double nz      = normals( local_subdomain_id, xn, yn, 2 );
+                            // Default: r̂ = cached unit-sphere coord. Custom normals: read from global memory.
+                            const int nid = node_id( tx + ddx, ty + ddy );
+                            double    nx  = coords_sh( nid, 0 );
+                            double    ny  = coords_sh( nid, 1 );
+                            double    nz  = coords_sh( nid, 2 );
+                            if ( custom_freeslip_normals_ )
+                            {
+                                const auto& normals = at_cmb ? normals_cmb_ : normals_surface_;
+                                const int   xn      = xc_base + ddx;
+                                const int   yn      = yc_base + ddy;
+                                nx                  = normals( local_subdomain_id, xn, yn, 0 );
+                                ny                  = normals( local_subdomain_id, xn, yn, 1 );
+                                nz                  = normals( local_subdomain_id, xn, yn, 2 );
+                            }
                             const double cn  = c0 * nx + c1 * ny + c2 * nz;
                             c0 -= cn * nx;
                             c1 -= cn * ny;
