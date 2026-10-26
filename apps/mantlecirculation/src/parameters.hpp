@@ -168,6 +168,12 @@ struct InitialTemperatureParameters
     int    sph_degree_l_2 = 0;
     int    sph_order_m_2  = 0;
     double sph_factor_2   = 0.0;
+
+    /// Restrict the spherical-harmonic perturbation to a single radial layer (cell layer between
+    /// shells sph_layer and sph_layer + 1, counted from the CMB). -1 = whole domain (default).
+    /// Number of layers is 2^(refinement_level_mesh_max + radial_extra_levels), so valid
+    /// indices are 0 ... num_layers - 1.
+    int sph_layer = -1;    
 };
 
 // Work in progress
@@ -779,6 +785,15 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Initial Temperature" )
         ->description(
             "Weight factor for second spherical harmonic: T += eps * envelope * (Y_l1^m1 + factor_2 * Y_l2^m2)." );
+
+    add_option_with_default(
+        app, "--initial-temperature-sph-layer", parameters.physics_parameters.initial_temperature.sph_layer )
+        ->group( "Initial Temperature" )
+        ->description(
+            "Restrict the spherical harmonic perturbation to a single radial layer (0 = layer at the CMB). "
+            "Number of layers is 2^(refinement-level-mesh-max + radial-extra-levels), e.g. 16 for level 5 and 32 for "
+            "level 6 with the default radial-extra-levels = -1. Perturbs the nodes on both shells bounding the layer "
+            "(except the CMB/surface shells) without boundary tapering. -1 = whole domain." );
 
     ///////////////////////////
     /// Time discretization ///

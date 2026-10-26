@@ -220,6 +220,14 @@ struct SphericalHarmonicPerturbationAdder
     Grid4DDataScalar< ScalarType >              data_;
     Grid4DDataScalar< grid::NodeOwnershipFlag > mask_;
 
+    /// Optional restriction to a single radial layer: only nodes with radius in
+    /// [layer_r_lo_ - layer_tol_, layer_r_hi_ + layer_tol_] are perturbed. Nodes on
+    /// the domain boundaries (r_min / r_max) are never perturbed in this mode.
+    bool       restrict_to_layer_ = false;
+    ScalarType layer_r_lo_        = ScalarType( 0 );
+    ScalarType layer_r_hi_        = ScalarType( 0 );
+    ScalarType layer_tol_         = ScalarType( 0 );
+
     static constexpr ScalarType taper_width_ = ScalarType( 0.05 );
 
     KOKKOS_INLINE_FUNCTION
@@ -227,8 +235,15 @@ struct SphericalHarmonicPerturbationAdder
     {
         ScalarType taper = ScalarType( 1 );
 
+        if ( restrict_to_layer_ )
+        {
+            const ScalarType radius      = radii_( id, r );
+            const bool       in_layer    = radius >= layer_r_lo_ - layer_tol_ && radius <= layer_r_hi_ + layer_tol_;
+            const bool       on_boundary = radius <= r_min_ + layer_tol_ || radius >= r_max_ - layer_tol_;
+            taper                        = ( in_layer && !on_boundary ) ? ScalarType( 1 ) : ScalarType( 0 );
+        }        
         // apply tapering near top and bottom boundary
-        if ( taper_near_boundaries_ )
+        else if ( taper_near_boundaries_ )
         {
             const ScalarType radius           = radii_( id, r );
             const ScalarType dist_to_boundary = Kokkos::min( radius - r_min_, r_max_ - radius );
