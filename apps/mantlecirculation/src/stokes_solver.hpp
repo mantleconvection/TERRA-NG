@@ -6,6 +6,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "build_radii.hpp"
@@ -48,6 +49,7 @@
 #include "util/logging.hpp"
 #include "util/table.hpp"
 #include "util/timer.hpp"
+#include "fe/solver_utils.hpp"
 
 namespace terra::mantlecirculation {
 
@@ -369,8 +371,18 @@ class StokesContext
             bcs_neumann,
             true );
 
+        // Consistent (Bᵀ·1) free-slip normals on the fine level, see consistent_freeslip_normals().
         // Must precede everything that copies K_'s blocks (MG, smoothers, block preconditioner).
-        setup_consistent_freeslip_normals();
+        std::tie( freeslip_normals_cmb_, freeslip_normals_surface_ ) = fe::consistent_freeslip_normals< ScalarType >(
+            *K_neumann_,
+            *domains_[velocity_level_],
+            *domains_[pressure_level_],
+            ownership_mask_[velocity_level_],
+            ownership_mask_[pressure_level_],
+            coords_shell_[velocity_level_],
+            boundary_mask_[velocity_level_],
+            bcs_ );
+        K_->set_freeslip_normals( freeslip_normals_cmb_, freeslip_normals_surface_ );
 
         M_ = std::make_unique< ViscousMass >(
             *domains_[velocity_level_], coords_shell_[velocity_level_], coords_radii_[velocity_level_], false );
@@ -751,6 +763,19 @@ class StokesContext
     // Public accessors needed by the rest of the app.
 
     linalg::VectorW1IsoW2W1< ScalarType >& solution() { return stok_vecs_["u"]; }
+
+    /// Diagnostic K·[0; 1] on the fine level, see pressure_nullspace_residual().
+    void compute_pressure_nullspace_residual( linalg::VectorW1Vec< ScalarType >& out )
+    {
+        fe::pressure_nullspace_residual< ScalarType >(
+            *K_,
+            *K_neumann_,
+            *domains_[velocity_level_],
+            *domains_[pressure_level_],
+            ownership_mask_[velocity_level_],
+            ownership_mask_[pressure_level_],
+            out );
+    }
     linalg::VectorW1Scalar< ScalarType >&  eta_fine() { return eta_[velocity_level_]; }
     long                                   num_dofs_pressure() const { return num_dofs_pressure_; }
     const grid::shell::BoundaryConditions& boundary_conditions() const { return bcs_; }
@@ -896,88 +921,6 @@ class StokesContext
         linalg::assign( stok_vecs_["u_prev"], stok_vecs_["u"] );
     }
 
-    // Public only because CUDA forbids extended device lambdas in private member functions.
-    /// Free-slip normals consistent with the discrete gradient: n_i = g_i / |g_i| with g = Bᵀ_Neumann·1
-    /// (oriented like r̂). With these, P·Bᵀ·1 = 0, so constant pressure is an exact null mode of K;
-    /// with r̂ it is only approximately one. Lateral fields
-    /// like coords_shell; nodes off the respective boundary keep r̂. Set on the fine-level K_ only.
-    void setup_consistent_freeslip_normals()
-    {
-        const auto& coords        = coords_shell_[velocity_level_];
-        freeslip_normals_cmb_     = coords;
-        freeslip_normals_surface_ = coords;
-
-        const bool has_freeslip =
-            grid::shell::get_boundary_condition_flag( bcs_, grid::shell::ShellBoundaryFlag::CMB ) ==
-                grid::shell::BoundaryConditionFlag::FREESLIP ||
-            grid::shell::get_boundary_condition_flag( bcs_, grid::shell::ShellBoundaryFlag::SURFACE ) ==
-                grid::shell::BoundaryConditionFlag::FREESLIP;
-        if ( !has_freeslip )
-            return;
-
-        // g = Bᵀ_Neumann · 1 (velocity block of K_neumann · [0; 1]).
-        linalg::VectorW1IsoW2W1< ScalarType > src(
-            "normals_src",
-            *domains_[velocity_level_],
-            *domains_[pressure_level_],
-            ownership_mask_[velocity_level_],
-            ownership_mask_[pressure_level_] );
-        linalg::VectorW1IsoW2W1< ScalarType > dst(
-            "normals_dst",
-            *domains_[velocity_level_],
-            *domains_[pressure_level_],
-            ownership_mask_[velocity_level_],
-            ownership_mask_[pressure_level_] );
-        linalg::assign( src.block_1(), ScalarType( 0 ) );
-        linalg::assign( src.block_2(), ScalarType( 1 ) );
-        linalg::apply( *K_neumann_, src, dst );
-
-        using NormalField = grid::Grid3DDataVec< ScalarType, 3 >;
-        const NormalField n_cmb( "freeslip_normals_cmb", coords.extent( 0 ), coords.extent( 1 ), coords.extent( 2 ) );
-        const NormalField n_surf(
-            "freeslip_normals_surface", coords.extent( 0 ), coords.extent( 1 ), coords.extent( 2 ) );
-        Kokkos::deep_copy( n_cmb, coords );
-        Kokkos::deep_copy( n_surf, coords );
-
-        const auto g     = dst.block_1().grid_data();
-        const auto mask  = boundary_mask_[velocity_level_];
-        const int  r_top = static_cast< int >( g.extent( 3 ) ) - 1;
-
-        Kokkos::parallel_for(
-            "consistent_freeslip_normals",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 0, 0 }, { g.extent( 0 ), g.extent( 1 ), g.extent( 2 ) } ),
-            KOKKOS_LAMBDA( const int s, const int x, const int y ) {
-                for ( int b = 0; b < 2; ++b )
-                {
-                    const int  r    = ( b == 0 ) ? 0 : r_top;
-                    const auto flag = ( b == 0 ) ? grid::shell::ShellBoundaryFlag::CMB :
-                                                   grid::shell::ShellBoundaryFlag::SURFACE;
-                    if ( !util::has_flag( mask( s, x, y, r ), flag ) )
-                        continue;
-
-                    const ScalarType gx   = g( s, x, y, r, 0 );
-                    const ScalarType gy   = g( s, x, y, r, 1 );
-                    const ScalarType gz   = g( s, x, y, r, 2 );
-                    const ScalarType norm = Kokkos::sqrt( gx * gx + gy * gy + gz * gz );
-                    if ( norm == ScalarType( 0 ) )
-                        continue;
-
-                    // Orient like r̂ (sign is irrelevant for the projection, kept for readability).
-                    const ScalarType dot  = gx * coords( s, x, y, 0 ) + gy * coords( s, x, y, 1 ) + gz * coords( s, x, y, 2 );
-                    const ScalarType sc   = ( dot < 0 ? ScalarType( -1 ) : ScalarType( 1 ) ) / norm;
-                    const auto&      n    = ( b == 0 ) ? n_cmb : n_surf;
-                    n( s, x, y, 0 )       = sc * gx;
-                    n( s, x, y, 1 )       = sc * gy;
-                    n( s, x, y, 2 )       = sc * gz;
-                }
-            } );
-        Kokkos::fence();
-
-        freeslip_normals_cmb_     = n_cmb;
-        freeslip_normals_surface_ = n_surf;
-        K_->set_freeslip_normals( freeslip_normals_cmb_, freeslip_normals_surface_ );
-    }
-
   private:
     // Inputs stored BY VALUE so this context owns its dependencies and isn't
     // tied to the lifetime/identity of the mc.cpp locals.  Vectors-of-views
@@ -990,8 +933,8 @@ class StokesContext
     std::vector< grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag > > boundary_mask_;
     grid::Grid2DDataScalar< ScalarType >                                    eta_profile_;
     grid::shell::BoundaryConditions                                         bcs_{}; // velocity BC set (owned copy)
-    grid::Grid3DDataVec< ScalarType, 3 > freeslip_normals_cmb_;     // fine level, see setup_consistent_freeslip_normals()
-    grid::Grid3DDataVec< ScalarType, 3 > freeslip_normals_surface_; // fine level, see setup_consistent_freeslip_normals()
+    grid::Grid3DDataVec< ScalarType, 3 > freeslip_normals_cmb_;     // fine level, see consistent_freeslip_normals()
+    grid::Grid3DDataVec< ScalarType, 3 > freeslip_normals_surface_; // fine level, see consistent_freeslip_normals()
     const Parameters&                                                       prm_;
     std::shared_ptr< util::Table >                                          table_;
 

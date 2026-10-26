@@ -356,6 +356,8 @@ struct IOParameters
 
     bool no_xdmf            = false;
     bool no_radial_profiles = false;
+
+    bool output_pressure_nullspace_residual = false;
 };
 
 // This struct holds options that might be useful for debugging, benchmarking, etc., but are not intended to appear at the surface for 'standard' use.
@@ -977,6 +979,13 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     add_flag_with_default( app, "--no-radial-profiles", parameters.io_parameters.no_radial_profiles )
         ->group( "I/O" )
         ->description( "Disable radial profile output." );
+
+    add_flag_with_default(
+        app, "--output-pressure-nullspace-residual", parameters.io_parameters.output_pressure_nullspace_residual )
+        ->group( "I/O" )
+        ->description( "Compute K·[0; 1] (Stokes operator with BCs applied to zero velocity and constant pressure), "
+                       "log its norms and write its velocity block to XDMF as 'K_p1'. Zero iff constant pressure "
+                       "is an exact null mode of the discrete Stokes operator." );
 
     //////////////////////////
     /// Developer settings ///

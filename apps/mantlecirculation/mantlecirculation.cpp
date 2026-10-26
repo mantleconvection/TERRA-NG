@@ -557,6 +557,16 @@ Result<> run( const Parameters& prm )
         xdmf_output->add( nu_h_view->grid_data() );
     }
 
+    // Diagnostic: K·[0; 1] (velocity block). Independent of T and eta, so computed once
+    // and written unchanged with every XDMF output.
+    std::optional< VectorW1Vec< ScalarType > > K_p1;
+    if ( prm.io_parameters.output_pressure_nullspace_residual )
+    {
+        K_p1.emplace( "K_p1", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
+        stokes.compute_pressure_nullspace_residual( *K_p1 );
+        xdmf_output->add( K_p1->grid_data() );
+    }
+
     if ( !prm.io_parameters.no_xdmf )
     {
         logroot << "Writing initial XDMF ..." << std::endl;
