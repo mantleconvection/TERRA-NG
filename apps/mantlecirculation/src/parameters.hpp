@@ -140,11 +140,13 @@ enum class InitialTemperatureProfile
 
 /// Initial temperature perturbation.
 /// Choice between random noise and a spherical harmonic perturbation pattern, defined with parameters 'sph_degree_l' and 'sph_order_m'.
-/// Amplitudes for both cases are set with the parameter 'perturbation_amplitude', in fraction of global temperature difference.
+/// SPH_SUPERPOSITION: random superposition of all Y_l^m with 1 <= l <= 'sph_degree_l' and |m| <= min(l, 'sph_order_m').
+/// Amplitudes for all cases are set with the parameter 'perturbation_amplitude', in fraction of global temperature difference.
 enum class InitialPerturbation
 {
     NOISE,
-    SPHERICAL_HARMONICS
+    SPHERICAL_HARMONICS,
+    SPH_SUPERPOSITION
 };
 
 struct InitialTemperatureParameters
@@ -778,14 +780,16 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     std::map< std::string, InitialPerturbation > init_temp_perturbation_map{
         { "noise", InitialPerturbation::NOISE },
         { "spherical-harmonics", InitialPerturbation::SPHERICAL_HARMONICS },
-        { "sph", InitialPerturbation::SPHERICAL_HARMONICS } };
+        { "sph", InitialPerturbation::SPHERICAL_HARMONICS },
+        { "sph-superposition", InitialPerturbation::SPH_SUPERPOSITION },
+        { "spherical-harmonics-superposition", InitialPerturbation::SPH_SUPERPOSITION } };
 
     add_option_with_default(
         app, "--initial-temperature-perturbation", parameters.physics_parameters.initial_temperature.perturbation )
         ->transform( CLI::CheckedTransformer( init_temp_perturbation_map, CLI::ignore_case ) )
         ->default_val( "spherical-harmonics" )
         ->group( "Initial Temperature" )
-        ->description( "'noise' or 'spherical-harmonics' / 'sph' perturbation." );
+        ->description( "'noise', 'spherical-harmonics' / 'sph' or 'spherical-harmonics-superposition' / 'sph-superposition' perturbation." );
 
     add_option_with_default(
         app, "--perturbation-amplitude", parameters.physics_parameters.initial_temperature.perturbation_amplitude )
@@ -795,12 +799,14 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     add_option_with_default(
         app, "--initial-temperature-sph-degree", parameters.physics_parameters.initial_temperature.sph_degree_l )
         ->group( "Initial Temperature" )
-        ->description( "Spherical harmonic degree l for initial temperature perturbation (0 = none)." );
+        ->description( "Spherical harmonic degree l for initial temperature perturbation (0 = none). "
+                       "Maximum degree for 'sph-superposition' / 'spherical-harmonics-superposition'." );
 
     add_option_with_default(
         app, "--initial-temperature-sph-order", parameters.physics_parameters.initial_temperature.sph_order_m )
         ->group( "Initial Temperature" )
-        ->description( "Spherical harmonic order m for initial temperature perturbation." );
+        ->description( "Spherical harmonic order m for initial temperature perturbation. "
+                       "Maximum |m| for 'sph-superposition' / 'spherical-harmonics-superposition'." );
 
     add_option_with_default(
         app, "--initial-temperature-sph-degree-2", parameters.physics_parameters.initial_temperature.sph_degree_l_2 )
