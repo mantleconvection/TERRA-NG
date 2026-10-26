@@ -187,9 +187,9 @@ void initialize_temperature_fields(
 
     else if (
         init_temp.perturbation == InitialPerturbation::SPHERICAL_HARMONICS ||
-        init_temp.perturbation == InitialPerturbation::SPH_SUPERPOSITION )
+        init_temp.perturbation == InitialPerturbation::SPHERICAL_HARMONICS_SUPERPOSITION )
     {
-        const bool superpose = ( init_temp.perturbation == InitialPerturbation::SPH_SUPERPOSITION );
+        const bool superpose = ( init_temp.perturbation == InitialPerturbation::SPHERICAL_HARMONICS_SUPERPOSITION );
         const bool sph       = ( init_temp.sph_degree_l > 0 && init_temp.perturbation_amplitude != 0.0 );
         const bool sph_2     = ( !superpose && init_temp.sph_degree_l_2 > 0 && init_temp.sph_factor_2 != 0.0 &&
                              init_temp.perturbation_amplitude != 0.0 );

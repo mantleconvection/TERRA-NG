@@ -140,13 +140,13 @@ enum class InitialTemperatureProfile
 
 /// Initial temperature perturbation.
 /// Choice between random noise and a spherical harmonic perturbation pattern, defined with parameters 'sph_degree_l' and 'sph_order_m'.
-/// SPH_SUPERPOSITION: random superposition of all Y_l^m with 1 <= l <= 'sph_degree_l' and |m| <= min(l, 'sph_order_m').
+/// SPHERICAL_HARMONICS_SUPERPOSITION: random superposition of all Y_l^m with 1 <= l <= 'sph_degree_l' and |m| <= min(l, 'sph_order_m').
 /// Amplitudes for all cases are set with the parameter 'perturbation_amplitude', in fraction of global temperature difference.
 enum class InitialPerturbation
 {
     NOISE,
     SPHERICAL_HARMONICS,
-    SPH_SUPERPOSITION
+    SPHERICAL_HARMONICS_SUPERPOSITION
 };
 
 struct InitialTemperatureParameters
@@ -781,8 +781,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         { "noise", InitialPerturbation::NOISE },
         { "spherical-harmonics", InitialPerturbation::SPHERICAL_HARMONICS },
         { "sph", InitialPerturbation::SPHERICAL_HARMONICS },
-        { "sph-superposition", InitialPerturbation::SPH_SUPERPOSITION },
-        { "spherical-harmonics-superposition", InitialPerturbation::SPH_SUPERPOSITION } };
+        { "sph-superposition", InitialPerturbation::SPHERICAL_HARMONICS_SUPERPOSITION },
+        { "spherical-harmonics-superposition", InitialPerturbation::SPHERICAL_HARMONICS_SUPERPOSITION } };
 
     add_option_with_default(
         app, "--initial-temperature-perturbation", parameters.physics_parameters.initial_temperature.perturbation )
