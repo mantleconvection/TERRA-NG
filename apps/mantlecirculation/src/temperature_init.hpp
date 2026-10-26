@@ -11,6 +11,7 @@
 #include "io.hpp"
 #include "kokkos/kokkos_wrapper.hpp"
 #include "linalg/vector_q1.hpp"
+#include "mpi/mpi.hpp"
 #include "parameters.hpp"
 #include "shell/spherical_harmonics.hpp"
 #include "util/logging.hpp"
@@ -242,6 +243,9 @@ void initialize_temperature_fields(
                     max_tmp = Kokkos::max( max_tmp, Kokkos::abs( sph_coeffs( id, x, y ) ) );
                 },
                 Kokkos::Max< ScalarType >( max_abs_sph ) );
+
+            // Use the global maximum, so that all subdomains are scaled by the same factor
+            MPI_Allreduce( MPI_IN_PLACE, &max_abs_sph, 1, mpi::mpi_datatype< ScalarType >(), MPI_MAX, MPI_COMM_WORLD );
 
             // Normalize in-place
             Kokkos::parallel_for(
