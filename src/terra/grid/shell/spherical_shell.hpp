@@ -2572,8 +2572,8 @@ class DistributedDomain
 
     using LocalSubdomainIdx = int;
 
-    /// @brief Creates a \ref DistributedDomain with a single subdomain per diamond and initializes all the subdomain
-    ///        neighborhoods.
+    /// @brief Creates a \ref DistributedDomain with each diamond being a single subdomain and initializes all the subdomain
+    ///        neighborhoods. This version uses equidistantly spaced radial layers.
     static DistributedDomain create_uniform_single_subdomain_per_diamond(
         const int                                  lateral_diamond_refinement_level,
         const int                                  radial_diamond_refinement_level,
@@ -2589,8 +2589,8 @@ class DistributedDomain
             subdomain_to_rank );
     }
 
-    /// @brief Creates a \ref DistributedDomain with a single subdomain per diamond and initializes all the subdomain
-    ///        neighborhoods.
+    /// @brief Creates a \ref DistributedDomain with each diamond being a single subdomain and initializes all the subdomain
+    ///        neighborhoods. This version uses the specified radii for its spherical layers.
     static DistributedDomain create_uniform_single_subdomain_per_diamond(
         const int                                  lateral_diamond_refinement_level,
         const std::vector< double >&               radii,
@@ -2599,8 +2599,8 @@ class DistributedDomain
         return create_uniform( lateral_diamond_refinement_level, radii, 0, 0, subdomain_to_rank );
     }
 
-    /// @brief Creates a \ref DistributedDomain with a single subdomain per diamond and initializes all the subdomain
-    ///        neighborhoods.
+    /// @brief Creates a \ref DistributedDomain with (potentially) multiple subdomains per diamond and initializes all
+    ///        the subdomain neighborhoods. This version uses equidistantly spaced radial layers.
     static DistributedDomain create_uniform(
         const int                                  lateral_diamond_refinement_level,
         const int                                  radial_diamond_refinement_level,
@@ -2618,8 +2618,8 @@ class DistributedDomain
             subdomain_to_rank );
     }
 
-    /// @brief Creates a \ref DistributedDomain with a single subdomain per diamond and initializes all the subdomain
-    ///        neighborhoods.
+    /// @brief Creates a \ref DistributedDomain with (potentially) multiple subdomains per diamond and initializes all
+    ///        the subdomain neighborhoods. This version uses the specified radii for its spherical layers.
     static DistributedDomain create_uniform(
         const int                                  lateral_diamond_refinement_level,
         const std::vector< double >&               radii,
