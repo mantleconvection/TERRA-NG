@@ -27,6 +27,8 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    # only deploy pages on main repo, not on forks
+    if: github.repository == 'mantleconvection/TERRA-NG'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
