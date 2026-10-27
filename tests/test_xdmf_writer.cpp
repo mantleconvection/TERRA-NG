@@ -4,7 +4,6 @@
 #include <optional>
 
 #include "terra/grid/shell/spherical_shell.hpp"
-#include "terra/io/vtk.hpp"
 #include "terra/io/xdmf.hpp"
 #include "util/filesystem.hpp"
 #include "util/init.hpp"

@@ -6,7 +6,6 @@
 #include <optional>
 
 #include "terra/grid/shell/spherical_shell.hpp"
-#include "terra/io/vtk.hpp"
 #include "terra/io/xdmf.hpp"
 #include "util/cli11_helper.hpp"
 #include "util/cli11_wrapper.hpp"

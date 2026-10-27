@@ -5,7 +5,6 @@
 #include <optional>
 
 #include "terra/grid/shell/spherical_shell.hpp"
-#include "terra/io/vtk.hpp"
 #include "terra/io/xdmf.hpp"
 #include "util/cli11_helper.hpp"
 #include "util/cli11_wrapper.hpp"
@@ -158,6 +157,10 @@ int main( int argc, char** argv )
     logroot << "Writing output to directory: " << parameters.output_directory << "\n\n";
 
     xdmf.write( 0 );
+
+    // terra::io::VTKOutput<double> vtkOut( subdomain_shell_coords, subdomain_radii );
+    // vtkOut.add_scalar_field( grid_diamond_id );
+    // vtkOut.write( "meshDemo.vtu" );
 
     logroot << "Bye :)" << std::endl;
 

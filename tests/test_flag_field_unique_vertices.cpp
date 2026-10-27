@@ -2,7 +2,6 @@
 #include "kernels/common/grid_operations.hpp"
 #include "linalg/vector_q1.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
-#include "terra/io/vtk.hpp"
 #include "util/filesystem.hpp"
 #include "util/init.hpp"
 
