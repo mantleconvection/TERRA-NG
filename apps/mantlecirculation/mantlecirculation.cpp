@@ -54,6 +54,8 @@
 
 using ScalarType = double;
 
+// Minor change to test CI in a PR 
+
 namespace terra::mantlecirculation {
 
 using grid::Grid2DDataScalar;
