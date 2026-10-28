@@ -37,7 +37,7 @@ struct Context
     grid::Grid2DDataScalar< ScalarT >           radii;
     grid::Grid4DDataScalar< ShellBoundaryFlag > boundary_mask;
     grid::Grid4DDataScalar< NodeOwnershipFlag > ownership_mask;
-    linalg::VectorQ1Scalar< ScalarT >           src;
+    linalg::VectorW1Scalar< ScalarT >           src;
 };
 
 struct Initializer
@@ -96,7 +96,7 @@ double measure_run_time( OperatorT& op, const linalg::SrcOf< OperatorT >& src, l
 template < linalg::OperatorLike OperatorT >
 void run_benchmark( OperatorT& op, const Context& ctx, Table::Row& row, bool compare_baseline = false )
 {
-    linalg::VectorQ1Scalar< ScalarT > dst( "dst", ctx.domain, ctx.ownership_mask );
+    linalg::VectorW1Scalar< ScalarT > dst( "dst", ctx.domain, ctx.ownership_mask );
     const double                      seconds = measure_run_time( op, ctx.src, dst );
     const auto   n_dofs = kernels::common::count_masked< long >( ctx.ownership_mask, grid::NodeOwnershipFlag::OWNED );
     const double dofs_per_s = static_cast< double >( n_dofs ) / seconds;
@@ -133,8 +133,8 @@ void run_test( OperatorT& op, const Context& ctx, Table::Row& row )
         OperatorApplyMode::Add,
         OperatorCommunicationMode::SkipCommunication );
 
-    linalg::VectorQ1Scalar< ScalarT > dst( "dst", ctx.domain, ctx.ownership_mask );
-    linalg::VectorQ1Scalar< ScalarT > dst_ref( "dst-ref", ctx.domain, ctx.ownership_mask );
+    linalg::VectorW1Scalar< ScalarT > dst( "dst", ctx.domain, ctx.ownership_mask );
+    linalg::VectorW1Scalar< ScalarT > dst_ref( "dst-ref", ctx.domain, ctx.ownership_mask );
 
     linalg::assign( dst, 0.0 );
     linalg::assign( dst_ref, 0.0 );
@@ -142,7 +142,7 @@ void run_test( OperatorT& op, const Context& ctx, Table::Row& row )
     linalg::apply( op, ctx.src, dst );
     linalg::apply( op_ref, ctx.src, dst_ref );
 
-    linalg::VectorQ1Scalar< ScalarT > error( "error", ctx.domain, ctx.ownership_mask );
+    linalg::VectorW1Scalar< ScalarT > error( "error", ctx.domain, ctx.ownership_mask );
     linalg::lincomb( error, { 1.0, -1.0 }, { dst, dst_ref } );
 
     ScalarT    inf_error = linalg::norm_inf( error );
@@ -220,7 +220,7 @@ int main( int argc, char** argv )
     const auto grid  = grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarT >( domain );
     const auto radii = grid::shell::subdomain_shell_radii< ScalarT >( domain );
 
-    const linalg::VectorQ1Scalar< ScalarT > src( "src", domain, ownership_mask );
+    const linalg::VectorW1Scalar< ScalarT > src( "src", domain, ownership_mask );
     Initializer( domain, grid, radii, src.grid_data() ).initialize();
 
     Context ctx{

@@ -22,7 +22,7 @@
 
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "mpi/mpi.hpp"
 #include "src/parameters.hpp"
 #include "terra/io/xdmf.hpp"
@@ -48,7 +48,7 @@ using grid::shell::DistributedDomain;
 using util::logall;
 using util::logroot;
 
-// using linalg::VectorQ1IsoQ2Q1;
+// using linalg::VectorW1IsoW2W1;
 
 namespace plates {
 

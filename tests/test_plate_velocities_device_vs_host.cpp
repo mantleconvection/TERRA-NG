@@ -35,7 +35,7 @@
 #include "grid/bit_masks.hpp"
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/io/xdmf.hpp"
 #include "terra/kokkos/kokkos_wrapper.hpp"
 #include "terra/plates/local_averaging_point_weight_provider.hpp"

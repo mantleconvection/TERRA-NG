@@ -9,7 +9,7 @@
 //   LHS:  (M + dt·A_pureGalerkin) · T^{n+1} = q                 (kerngen A, set_supg_enabled(false))
 //   RHS:  q = M · T^n  -  dt · ∫ ν_h ∇T^n · ∇φ_i dx              (per-wedge EV diffusion)
 //   ν_h:  computed each step from (T^n, T^{n-1}, u, lap_T)        (compute_nu_h, per-wedge)
-//   lap_T (Q1-nodal): (A_kappa · T) / M_lumped, with Dirichlet zeroed
+//   lap_T (W1-nodal): (A_kappa · T) / M_lumped, with Dirichlet zeroed
 //   T_{n-1}: rotated from T BEFORE the solve overwrites T
 //
 // Assertion: after one full revolution, the relative L2 error vs. the initial
@@ -44,8 +44,8 @@ using grid::Grid4DDataScalar;
 using grid::Grid4DDataVec;
 using grid::Grid5DDataScalar;
 using grid::shell::DistributedDomain;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 using ScalarType = double;
 
@@ -176,16 +176,16 @@ int test( const int level )
     const auto coords_shell = grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto coords_radii = grid::shell::subdomain_shell_radii< ScalarType >( domain );
 
-    VectorQ1Vec< ScalarType >    u( "u", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T( "T", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T_ref( "T_ref", domain, mask_data );
-    VectorQ1Scalar< ScalarType > f( "f", domain, mask_data );
-    VectorQ1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
-    VectorQ1Scalar< ScalarType > lap_T( "lap_T", domain, mask_data );
-    VectorQ1Scalar< ScalarType > M_lumped( "M_lumped", domain, mask_data );
+    VectorW1Vec< ScalarType >    u( "u", domain, mask_data );
+    VectorW1Scalar< ScalarType > T( "T", domain, mask_data );
+    VectorW1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data );
+    VectorW1Scalar< ScalarType > T_ref( "T_ref", domain, mask_data );
+    VectorW1Scalar< ScalarType > f( "f", domain, mask_data );
+    VectorW1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
+    VectorW1Scalar< ScalarType > lap_T( "lap_T", domain, mask_data );
+    VectorW1Scalar< ScalarType > M_lumped( "M_lumped", domain, mask_data );
 
-    VectorQ1Scalar< ScalarType > eta_shear( "eta_shear", domain, mask_data );
+    VectorW1Scalar< ScalarType > eta_shear( "eta_shear", domain, mask_data );
     linalg::assign( eta_shear, ScalarType( 0 ) );
 
     // Per-wedge ν_h field (new EV API): extents (n_sub, N-1, N-1, N_r-1, num_wedges).
@@ -221,7 +221,7 @@ int test( const int level )
     // Operators (mirror EVSolver constructor).
     //   A: pure-Galerkin advection-diffusion (SUPG kerngen with set_supg_enabled(false)).
     //   M: Mass.
-    //   A_kappa: WedgeConstantDivKGrad(κ-uniform) — Galerkin Laplacian → projected to Q1 by /M_lumped.
+    //   A_kappa: WedgeConstantDivKGrad(κ-uniform) — Galerkin Laplacian → projected to W1 by /M_lumped.
     //   A_evdiff: WedgeConstantDivKGrad(ν_h_wedge) — explicit EV stabilization on the RHS.
     using AD = fe::wedge::operators::shell::UnsteadyAdvectionDiffusionSUPGKerngen< ScalarType >;
     AD A(   domain, coords_shell, coords_radii, boundary_mask_data, u, diffusivity, dt, /*treat_boundary=*/true );
@@ -238,9 +238,9 @@ int test( const int level )
     EVDiffOp A_kappa(  domain, coords_shell, coords_radii, kappa_wedge );
     EVDiffOp A_evdiff( domain, coords_shell, coords_radii, nu_h_wedge );
 
-    // M_lumped = M · 1_vec  (used to project K·T → Q1-nodal lap field).
+    // M_lumped = M · 1_vec  (used to project K·T → W1-nodal lap field).
     {
-        VectorQ1Scalar< ScalarType > ones( "ones", domain, mask_data );
+        VectorW1Scalar< ScalarType > ones( "ones", domain, mask_data );
         linalg::assign( ones, ScalarType( 1 ) );
         linalg::assign( M_lumped, ScalarType( 0 ) );
         linalg::apply( M, ones, M_lumped );
@@ -249,7 +249,7 @@ int test( const int level )
     // FGMRES setup for the (M + dt·A)·T = f solve.
     constexpr int restart = 30;
     auto          table   = std::make_shared< util::Table >();
-    std::vector< VectorQ1Scalar< ScalarType > > fgmres_tmps;
+    std::vector< VectorW1Scalar< ScalarType > > fgmres_tmps;
     fgmres_tmps.reserve( 2 * restart + 4 );
     for ( int i = 0; i < 2 * restart + 4; ++i )
         fgmres_tmps.emplace_back( "fgmres_tmp", domain, mask_data );

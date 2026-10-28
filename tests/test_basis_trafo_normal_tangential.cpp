@@ -28,7 +28,7 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Vec;
 using util::logroot;
 
 struct SolutionInterpolator
@@ -121,15 +121,15 @@ void test( int level )
     auto mask_data          = grid::setup_node_ownership_mask_data( domain );
     auto boundary_mask_data = grid::shell::setup_boundary_mask_data( domain );
 
-    VectorQ1Vec< ScalarType > a( "a", domain, mask_data );
-    VectorQ1Vec< ScalarType > b( "b", domain, mask_data );
+    VectorW1Vec< ScalarType > a( "a", domain, mask_data );
+    VectorW1Vec< ScalarType > b( "b", domain, mask_data );
 
-    VectorQ1Vec< ScalarType > no_normal( "no_normal", domain, mask_data );
-    VectorQ1Vec< ScalarType > no_tangent( "no_tangent", domain, mask_data );
+    VectorW1Vec< ScalarType > no_normal( "no_normal", domain, mask_data );
+    VectorW1Vec< ScalarType > no_tangent( "no_tangent", domain, mask_data );
 
-    linalg::VectorQ1Scalar< ScalarType > scalar_func( "scalar_func", domain, mask_data );
+    linalg::VectorW1Scalar< ScalarType > scalar_func( "scalar_func", domain, mask_data );
 
-    VectorQ1Vec< ScalarType > error( "error", domain, mask_data );
+    VectorW1Vec< ScalarType > error( "error", domain, mask_data );
 
     const auto coords_shell = terra::grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto coords_radii = terra::grid::shell::subdomain_shell_radii< ScalarType >( domain );

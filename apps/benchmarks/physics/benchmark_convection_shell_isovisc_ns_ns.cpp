@@ -24,7 +24,7 @@
 #include "linalg/solvers/multigrid.hpp"
 #include "linalg/solvers/pbicgstab.hpp"
 #include "linalg/solvers/pcg.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "shell/radial_profiles.hpp"
 #include "util/cli11_helper.hpp"
 #include "util/cli11_wrapper.hpp"
@@ -44,9 +44,9 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 using ScalarType = double;
 
@@ -234,7 +234,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 
     // Set up Stokes vectors for the finest grid.
 
-    std::map< std::string, VectorQ1IsoQ2Q1< ScalarType > > stok_vecs;
+    std::map< std::string, VectorW1IsoW2W1< ScalarType > > stok_vecs;
     std::vector< std::string >                             stok_vec_names = { "u", "f" };
 
     const auto num_stokes_bicgstab_tmps = 2 * ( prm.stokes_bicgstab_l + 1 ) + 2;
@@ -248,7 +248,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 
     for ( const auto& name : stok_vec_names )
     {
-        stok_vecs[name] = VectorQ1IsoQ2Q1< ScalarType >(
+        stok_vecs[name] = VectorW1IsoW2W1< ScalarType >(
             name,
             domains[velocity_level],
             domains[pressure_level],
@@ -261,9 +261,9 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 
     // Set up tmp vecs for multigrid.
 
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg;
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg_r;
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg_e;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg_r;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg_e;
 
     for ( int level = 0; level < num_levels; level++ )
     {
@@ -277,7 +277,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 
     // Set up temperature vectors.
 
-    std::map< std::string, VectorQ1Scalar< ScalarType > > temp_vecs;
+    std::map< std::string, VectorW1Scalar< ScalarType > > temp_vecs;
     std::vector< std::string >                            temp_vec_names = { "T", "q" };
     constexpr int                                         num_temp_tmps  = 8;
 
@@ -289,7 +289,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
     for ( const auto& name : temp_vec_names )
     {
         temp_vecs[name] =
-            VectorQ1Scalar< ScalarType >( name, domains[velocity_level], ownership_mask_data[velocity_level] );
+            VectorW1Scalar< ScalarType >( name, domains[velocity_level], ownership_mask_data[velocity_level] );
     }
 
     auto& T = temp_vecs["T"];
@@ -336,7 +336,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
     std::vector< Prolongation > P;
     std::vector< Restriction >  R;
 
-    std::vector< VectorQ1Vec< ScalarType > > inverse_diagonals;
+    std::vector< VectorW1Vec< ScalarType > > inverse_diagonals;
 
     for ( int level = 0; level < num_levels; level++ )
     {
@@ -346,7 +346,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
         inverse_diagonals.emplace_back(
             "inverse_diagonal_" + std::to_string( level ), domains[level], ownership_mask_data[level] );
 
-        VectorQ1Vec< ScalarType > tmp(
+        VectorW1Vec< ScalarType > tmp(
             "inverse_diagonal_tmp" + std::to_string( level ), domains[level], ownership_mask_data[level] );
 
         linalg::assign( tmp, 1.0 );
@@ -377,7 +377,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
 
     using CoarseGridSolver = linalg::solvers::PCG< Viscous >;
 
-    std::vector< VectorQ1Vec< ScalarType > > coarse_grid_tmps;
+    std::vector< VectorW1Vec< ScalarType > > coarse_grid_tmps;
     for ( int i = 0; i < 4; i++ )
     {
         coarse_grid_tmps.emplace_back( "tmp_coarse_grid", domains[0], ownership_mask_data[0] );
@@ -402,7 +402,7 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
         prm.stokes_bicgstab_relative_tolerance,
         prm.stokes_bicgstab_absolute_tolerance };
 
-    std::vector< VectorQ1IsoQ2Q1< ScalarType > > tmp_bicgstab( num_stokes_bicgstab_tmps );
+    std::vector< VectorW1IsoW2W1< ScalarType > > tmp_bicgstab( num_stokes_bicgstab_tmps );
     for ( int i = 0; i < num_stokes_bicgstab_tmps; i++ )
     {
         tmp_bicgstab[i] = stok_vecs["tmp_" + std::to_string( i )];
@@ -486,10 +486,10 @@ void run( const Parameters& prm, const std::shared_ptr< util::Table >& table )
         domains[velocity_level], T.grid_data(), communication::CommunicationReduction::SUM );
 
     const auto                                  num_temp_tmps_energy = 14;
-    std::vector< VectorQ1Scalar< ScalarType > > tmp_gmres( num_temp_tmps_energy );
+    std::vector< VectorW1Scalar< ScalarType > > tmp_gmres( num_temp_tmps_energy );
     for ( int i = 0; i < num_temp_tmps_energy; i++ )
     {
-        tmp_gmres[i] = VectorQ1Scalar< ScalarType >(
+        tmp_gmres[i] = VectorW1Scalar< ScalarType >(
             "tmp_energy_gmres", domains[velocity_level], ownership_mask_data[velocity_level] );
     }
 

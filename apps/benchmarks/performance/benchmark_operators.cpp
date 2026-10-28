@@ -22,7 +22,7 @@
 #include "fe/wedge/operators/shell/vector_laplace_simple.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/dense/mat.hpp"
 #include "terra/dense/vec.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
@@ -62,9 +62,9 @@ using linalg::apply;
 using linalg::DstOf;
 using linalg::OperatorLike;
 using linalg::SrcOf;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using terra::grid::shell::BoundaryConditions;
 using util::logroot;
 
@@ -243,30 +243,30 @@ BenchmarkData
         kernels::common::count_masked< long >( mask_data_coarse, grid::NodeOwnershipFlag::OWNED );
     const auto dofs_stokes = dofs_vec + dofs_scalar_coarse;
 
-    VectorQ1Scalar< double > src_scalar_double( "src_scalar_double", domain, mask_data );
-    VectorQ1Scalar< double > dst_scalar_double( "dst_scalar_double", domain, mask_data );
+    VectorW1Scalar< double > src_scalar_double( "src_scalar_double", domain, mask_data );
+    VectorW1Scalar< double > dst_scalar_double( "dst_scalar_double", domain, mask_data );
 
-    VectorQ1Scalar< float > src_scalar_float( "src_scalar_float", domain, mask_data );
-    VectorQ1Scalar< float > dst_scalar_float( "dst_scalar_float", domain, mask_data );
+    VectorW1Scalar< float > src_scalar_float( "src_scalar_float", domain, mask_data );
+    VectorW1Scalar< float > dst_scalar_float( "dst_scalar_float", domain, mask_data );
 
-    VectorQ1Vec< double > src_vec_double( "src_vec_double", domain, mask_data );
-    VectorQ1Vec< double > dst_vec_double( "dst_vec_double", domain, mask_data );
+    VectorW1Vec< double > src_vec_double( "src_vec_double", domain, mask_data );
+    VectorW1Vec< double > dst_vec_double( "dst_vec_double", domain, mask_data );
 
-    VectorQ1Vec< float > src_vec_float( "src_vec_float", domain, mask_data );
-    VectorQ1Vec< float > dst_vec_float( "dst_vec_float", domain, mask_data );
+    VectorW1Vec< float > src_vec_float( "src_vec_float", domain, mask_data );
+    VectorW1Vec< float > dst_vec_float( "dst_vec_float", domain, mask_data );
 
-    VectorQ1IsoQ2Q1< double > src_stokes_double(
+    VectorW1IsoW2W1< double > src_stokes_double(
         "src_stokes_double", domain, domain_coarse, mask_data, mask_data_coarse );
-    VectorQ1IsoQ2Q1< double > dst_stokes_double(
+    VectorW1IsoW2W1< double > dst_stokes_double(
         "dst_stokes_double", domain, domain_coarse, mask_data, mask_data_coarse );
 
-    VectorQ1IsoQ2Q1< float > src_stokes_float(
+    VectorW1IsoW2W1< float > src_stokes_float(
         "src_stokes_double", domain, domain_coarse, mask_data, mask_data_coarse );
-    VectorQ1IsoQ2Q1< float > dst_stokes_float(
+    VectorW1IsoW2W1< float > dst_stokes_float(
         "dst_stokes_double", domain, domain_coarse, mask_data, mask_data_coarse );
 
-    VectorQ1Scalar< double > coeff_double( "coeff_double", domain, mask_data );
-    VectorQ1Scalar< float >  coeff_float( "coeff_float", domain, mask_data );
+    VectorW1Scalar< double > coeff_double( "coeff_double", domain, mask_data );
+    VectorW1Scalar< float >  coeff_float( "coeff_float", domain, mask_data );
 
     linalg::assign( coeff_double, 1.0 );
     linalg::assign( coeff_float, 1.0 );

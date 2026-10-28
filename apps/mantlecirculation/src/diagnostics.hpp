@@ -5,7 +5,7 @@
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "kokkos/kokkos_wrapper.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "mpi/mpi.hpp"
 #include "parameters.hpp"
 #include "util/logging.hpp"
@@ -127,8 +127,8 @@ inline ScalarType compute_boundary_heat_flux_integral(
 /// @param at_surface  If true, compute Nu at the outer surface; if false, at the CMB.
 inline ScalarType compute_nusselt(
     const grid::shell::DistributedDomain&                           domain,
-    const linalg::VectorQ1Scalar< ScalarType >&                     T,
-    const linalg::VectorQ1Scalar< ScalarType >&                     T_ref,
+    const linalg::VectorW1Scalar< ScalarType >&                     T,
+    const linalg::VectorW1Scalar< ScalarType >&                     T_ref,
     const grid::Grid3DDataVec< ScalarType, 3 >&                     coords_shell,
     const grid::Grid2DDataScalar< ScalarType >&                     coords_radii,
     const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
@@ -153,7 +153,7 @@ inline ScalarType compute_nusselt(
 /// MPI_Allreduce'd before the final ratio.
 inline ScalarType compute_v_rms(
     const grid::shell::DistributedDomain&       domain,
-    const linalg::VectorQ1Vec< ScalarType, 3 >& velocity,
+    const linalg::VectorW1Vec< ScalarType, 3 >& velocity,
     const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
     const grid::Grid2DDataScalar< ScalarType >& coords_radii )
 {

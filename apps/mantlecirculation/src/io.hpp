@@ -7,7 +7,7 @@
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "io/xdmf.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "parameters.hpp"
 #include "shell/radial_profiles.hpp"
 #include "util/filesystem.hpp"
@@ -27,9 +27,9 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using util::logroot;
 using util::Ok;
 using util::Result;
@@ -135,7 +135,7 @@ inline Result<> write_xdmf(
 }
 
 inline Result<> compute_and_write_radial_profiles(
-    const VectorQ1Scalar< ScalarType >& scalar_function,
+    const VectorW1Scalar< ScalarType >& scalar_function,
     const Grid2DDataScalar< int >&      subdomain_shell_idx,
     const std::vector< double >&        radial_coords,
     const Parameters&                   prm,
@@ -169,12 +169,12 @@ inline Result<> compute_and_write_radial_profiles(
     return { Ok{} };
 }
 
-/// Decompose a Q1 velocity field into its radial (signed) and tangential (magnitude)
+/// Decompose a W1 velocity field into its radial (signed) and tangential (magnitude)
 /// components and write radial profiles for both, reusing
 /// `compute_and_write_radial_profiles`. Output files are named
 /// `radial_profiles_u_r_<step>.csv` and `radial_profiles_u_t_<step>.csv`.
 inline Result<> compute_and_write_velocity_radial_profiles(
-    const linalg::VectorQ1Vec< ScalarType, 3 >&              velocity,
+    const linalg::VectorW1Vec< ScalarType, 3 >&              velocity,
     const grid::Grid3DDataVec< ScalarType, 3 >&              coords_shell,
     const grid::Grid2DDataScalar< int >&                     subdomain_shell_idx,
     const DistributedDomain&                                 domain,
@@ -185,8 +185,8 @@ inline Result<> compute_and_write_velocity_radial_profiles(
     const ScalarType                                         field_scale  = ScalarType( 1 ),
     const std::string&                                       radial_label = "radius" )
 {
-    VectorQ1Scalar< ScalarType > u_r( "u_r", domain, mask );
-    VectorQ1Scalar< ScalarType > u_t( "u_t", domain, mask );
+    VectorW1Scalar< ScalarType > u_r( "u_r", domain, mask );
+    VectorW1Scalar< ScalarType > u_t( "u_t", domain, mask );
 
     const auto u_grid   = velocity.grid_data();
     auto       u_r_grid = u_r.grid_data();

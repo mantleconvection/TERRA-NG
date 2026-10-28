@@ -54,8 +54,8 @@ using grid::Grid4DDataVec;
 using grid::shell::BoundaryConditionFlag;
 using grid::shell::BoundaryConditions;
 using grid::shell::DistributedDomain;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 using ScalarT      = double;
 using Epsilon      = fe::wedge::operators::shell::EpsilonDivDivKerngen< ScalarT, 3 >;
@@ -319,7 +319,7 @@ int main( int argc, char** argv )
     // Per-level scalar viscosity field k = 1. Built on each level's own domain so
     // reductions/halos respect that level's comm.
     // -------------------------------------------------------------------------
-    std::vector< VectorQ1Scalar< ScalarT > > k_per_level;
+    std::vector< VectorW1Scalar< ScalarT > > k_per_level;
     for ( int L = min_level; L <= max_level; ++L )
     {
         const auto& LL = ld_on_own_comm[L - min_level];
@@ -352,12 +352,12 @@ int main( int argc, char** argv )
     Epsilon A( Lt.domain, Lt.shell_coords, Lt.radii, Lt.boundary_mask, k_fine.grid_data(),
                bcs, /*diagonal=*/false );
 
-    VectorQ1Vec< ScalarT, 3 > u( "u", Lt.domain, Lt.mask );
-    VectorQ1Vec< ScalarT, 3 > f( "f", Lt.domain, Lt.mask );
-    VectorQ1Vec< ScalarT, 3 > solution( "solution", Lt.domain, Lt.mask );
-    VectorQ1Vec< ScalarT, 3 > error( "error", Lt.domain, Lt.mask );
-    VectorQ1Vec< ScalarT, 3 > u_classical( "u_classical", Lt.domain, Lt.mask );
-    VectorQ1Vec< ScalarT, 3 > u_agglom( "u_agglom", Lt.domain, Lt.mask );
+    VectorW1Vec< ScalarT, 3 > u( "u", Lt.domain, Lt.mask );
+    VectorW1Vec< ScalarT, 3 > f( "f", Lt.domain, Lt.mask );
+    VectorW1Vec< ScalarT, 3 > solution( "solution", Lt.domain, Lt.mask );
+    VectorW1Vec< ScalarT, 3 > error( "error", Lt.domain, Lt.mask );
+    VectorW1Vec< ScalarT, 3 > u_classical( "u_classical", Lt.domain, Lt.mask );
+    VectorW1Vec< ScalarT, 3 > u_agglom( "u_agglom", Lt.domain, Lt.mask );
 
     Kokkos::parallel_for( "sol",
         local_domain_md_range_policy_nodes( Lt.domain ),
@@ -381,24 +381,24 @@ int main( int argc, char** argv )
     // deadlock in halo exchanges, so skip the kernel and return a zero-filled stub.
     constexpr int cheby_order               = 2;
     constexpr int cheby_max_ev_power_iters  = 10;
-    auto build_smoother = [&]( const LevelData& LL, const VectorQ1Scalar< ScalarT >& k_level ) {
-        VectorQ1Vec< ScalarT, 3 > tmp_sm_a( "tmp_sm_a", LL.domain, LL.mask );
-        VectorQ1Vec< ScalarT, 3 > tmp_sm_b( "tmp_sm_b", LL.domain, LL.mask );
-        VectorQ1Vec< ScalarT, 3 > inv_diag( "inv_diag", LL.domain, LL.mask );
+    auto build_smoother = [&]( const LevelData& LL, const VectorW1Scalar< ScalarT >& k_level ) {
+        VectorW1Vec< ScalarT, 3 > tmp_sm_a( "tmp_sm_a", LL.domain, LL.mask );
+        VectorW1Vec< ScalarT, 3 > tmp_sm_b( "tmp_sm_b", LL.domain, LL.mask );
+        VectorW1Vec< ScalarT, 3 > inv_diag( "inv_diag", LL.domain, LL.mask );
         if ( LL.domain.comm() != MPI_COMM_NULL )
         {
             Epsilon A_diag( LL.domain, LL.shell_coords, LL.radii, LL.boundary_mask, k_level.grid_data(),
                              bcs, /*diagonal=*/true );
-            VectorQ1Vec< ScalarT, 3 > ones( "ones", LL.domain, LL.mask );
+            VectorW1Vec< ScalarT, 3 > ones( "ones", LL.domain, LL.mask );
             assign( ones, 1.0 );
             apply( A_diag, ones, inv_diag );
             linalg::invert_entries( inv_diag );
         }
-        std::vector< VectorQ1Vec< ScalarT, 3 > > tmps{ tmp_sm_a, tmp_sm_b };
+        std::vector< VectorW1Vec< ScalarT, 3 > > tmps{ tmp_sm_a, tmp_sm_b };
         return Smoother( cheby_order, inv_diag, tmps, presmooth, cheby_max_ev_power_iters );
     };
     auto make_cgs_tmps = []( const LevelData& LL ) {
-        std::vector< VectorQ1Vec< ScalarT, 3 > > v;
+        std::vector< VectorW1Vec< ScalarT, 3 > > v;
         for ( int i = 0; i < 4; ++i )
             v.emplace_back( "cgs_tmp_" + std::to_string( i ), LL.domain, LL.mask );
         return v;
@@ -415,7 +415,7 @@ int main( int argc, char** argv )
         const double t0 = MPI_Wtime();
 
         std::vector< LevelData > ld_world;
-        std::vector< VectorQ1Scalar< ScalarT > > k_world;
+        std::vector< VectorW1Scalar< ScalarT > > k_world;
         for ( int L = min_level; L <= max_level; ++L )
         {
             ld_world.push_back( make_ld( L, MPI_COMM_WORLD, 1 ) );
@@ -430,7 +430,7 @@ int main( int argc, char** argv )
         std::vector< Prolongation >                P_add;
         std::vector< Restriction >                 R;
         std::vector< Smoother >                    sm;
-        std::vector< VectorQ1Vec< ScalarT, 3 > >   tmp_r, tmp_e, tmp;
+        std::vector< VectorW1Vec< ScalarT, 3 > >   tmp_r, tmp_e, tmp;
 
         for ( int L = min_level; L <= max_level; ++L )
         {
@@ -533,7 +533,7 @@ int main( int argc, char** argv )
                 std::cout << "[DBG]   post done L=" << L << std::endl << std::flush;
         }
 
-        std::vector< VectorQ1Vec< ScalarT, 3 > > tmp;
+        std::vector< VectorW1Vec< ScalarT, 3 > > tmp;
         for ( int L = min_level; L <= max_level; ++L )
         {
             const auto& LL = ld_on_own_comm[L - min_level];
@@ -541,10 +541,10 @@ int main( int argc, char** argv )
         }
 
         std::vector< Epsilon >                     A_c;
-        std::vector< VectorQ1Vec< ScalarT, 3 > >   tmp_r, tmp_e;
+        std::vector< VectorW1Vec< ScalarT, 3 > >   tmp_r, tmp_e;
         std::vector< Prolongation >                P_add;
         std::vector< Restriction >                 R;
-        std::vector< VectorQ1Vec< ScalarT, 3 > >   tmp_r_fine, tmp_e_fine;
+        std::vector< VectorW1Vec< ScalarT, 3 > >   tmp_r_fine, tmp_e_fine;
         std::vector< Redistribute >                redist;
 
         for ( int Li = 0; Li < max_level - min_level; ++Li )

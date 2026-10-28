@@ -17,7 +17,7 @@
 #include "linalg/solvers/gca/local_matrix_storage.hpp"
 #include "linalg/trafo/local_basis_trafo_normal_tangential.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
 
 #include <cstdlib>   // for std::getenv (wave-parallel DN path opt-in)
@@ -79,8 +79,8 @@ template < typename ScalarT, int VecDim = 3, typename CoordScalarT = ScalarT >
 class EpsilonDivDivKerngen
 {
   public:
-    using SrcVectorType                 = linalg::VectorQ1Vec< ScalarT, VecDim >;
-    using DstVectorType                 = linalg::VectorQ1Vec< ScalarT, VecDim >;
+    using SrcVectorType                 = linalg::VectorW1Vec< ScalarT, VecDim >;
+    using DstVectorType                 = linalg::VectorW1Vec< ScalarT, VecDim >;
     using ScalarType                    = ScalarT;
     static constexpr int LocalMatrixDim = 18;
     using Grid4DDataLocalMatrices = terra::grid::Grid4DDataMatrices< ScalarType, LocalMatrixDim, LocalMatrixDim, 2 >;

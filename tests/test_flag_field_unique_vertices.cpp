@@ -1,6 +1,6 @@
 #include "io/xdmf.hpp"
 #include "kernels/common/grid_operations.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
 #include "util/filesystem.hpp"
 #include "util/init.hpp"

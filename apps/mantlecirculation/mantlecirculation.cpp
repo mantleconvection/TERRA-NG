@@ -32,7 +32,7 @@
 #include "linalg/solvers/multigrid.hpp"
 #include "linalg/solvers/pcg.hpp"
 #include "linalg/solvers/power_iteration.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "mpi/mpi.hpp"
 #include "shell/spherical_harmonics.hpp"
 #include "src/build_radii.hpp"
@@ -65,9 +65,9 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using linalg::solvers::TwoGridGCA;
 using terra::kernels::common::scale;
 using util::logroot;
@@ -162,9 +162,9 @@ Result<> run( const Parameters& prm )
 
     Grid2DDataScalar< int > subdomain_shell_idx = grid::shell::subdomain_shell_idx( ( *domains[velocity_level] ) );
 
-    // Set up the prognostic Q1 temperature.
-    VectorQ1Scalar< ScalarType > T( "T", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
-    VectorQ1Scalar< ScalarType > Tdev( "Tdev", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
+    // Set up the prognostic W1 temperature.
+    VectorW1Scalar< ScalarType > T( "T", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
+    VectorW1Scalar< ScalarType > Tdev( "Tdev", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
 
     // True when compressibility is on and any PDA form is used.
     const bool pda_form =
@@ -174,7 +174,7 @@ Result<> run( const Parameters& prm )
 
     // Optional 3-D density field for PDA
     // Density is needed in Stokes and energy -- so we set it up here
-    std::optional< VectorQ1Scalar< ScalarType > > density;
+    std::optional< VectorW1Scalar< ScalarType > > density;
     if ( pda_form )
     {
         density.emplace( "density", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
@@ -219,13 +219,13 @@ Result<> run( const Parameters& prm )
     radial_profile_init(
         rho_profile, alpha_profile, cp_profile, *domains[velocity_level], coords_radii[velocity_level], prm );
 
-    // Initialise density Q1 field from radial profile -- before Stokes solver setup
+    // Initialise density W1 field from radial profile -- before Stokes solver setup
     if ( pda_form )
     {
         Kokkos::parallel_for(
-            "RadialProfileToQ1",
+            "RadialProfileToW1",
             grid::shell::local_domain_md_range_policy_nodes( *domains[velocity_level] ),
-            RadialProfileToQ1{ density->grid_data(), rho_profile } );
+            RadialProfileToW1{ density->grid_data(), rho_profile } );
         Kokkos::fence();
     }
 
@@ -287,7 +287,7 @@ Result<> run( const Parameters& prm )
     table->clear();
 
     // Reference conductive temperature profile (also used for the Nusselt number).
-    VectorQ1Scalar< ScalarType > T_cond( "T_cond", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
+    VectorW1Scalar< ScalarType > T_cond( "T_cond", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
     compute_reference_conductive_profile(
         T_cond, ( *domains[velocity_level] ), coords_shell[velocity_level], coords_radii[velocity_level], prm );
 
@@ -413,7 +413,7 @@ Result<> run( const Parameters& prm )
                             prm.boundary_parameters.plate_parameters.plate_velocity_scaling );
 
     std::shared_ptr< plates::PlateVelocityProvider > oracle;
-    std::optional< VectorQ1IsoQ2Q1< ScalarType > >   plate_velocities;
+    std::optional< VectorW1IsoW2W1< ScalarType > >   plate_velocities;
 
     if ( prm.boundary_parameters.plate_parameters.apply_plate_velocities )
     {
@@ -446,7 +446,7 @@ Result<> run( const Parameters& prm )
 
     // Pass full 3-D density to Stokes for PDA, else radial density profile.
     // Contrary to Tdev, 3-D density is passed already unwrapped, to accomodate
-    // the data structure differences: VectorQ1Scalar class (3-D rho)
+    // the data structure differences: VectorW1Scalar class (3-D rho)
     // serves as a wrapper around the raw Kokkos::View Grid4DDataScalar,
     // whereas rho_profile (Grid2DDataScalar) is already a plain Kokkos::View.
     if ( pda_form )
@@ -549,7 +549,7 @@ Result<> run( const Parameters& prm )
     break;
     }
 
-    // EV-specific: register the Q1-projected per-wedge ν_h diagnostic field
+    // EV-specific: register the W1-projected per-wedge ν_h diagnostic field
     // with XDMF if the energy solver exposes one.  Must happen before any
     // xdmf_output.write() call.
     if ( auto* nu_h_view = energy->nu_h_nodal_view() )
@@ -660,7 +660,7 @@ Result<> run( const Parameters& prm )
             true );
         const auto V_rms_0 = compute_v_rms(
             ( *domains[velocity_level] ), u.block_1(), coords_shell[velocity_level], coords_radii[velocity_level] );
-        logroot << "Nu_top (Q1) = " << Nu_top_0 << ", V_rms = " << V_rms_0 << "  [timestep 0, before time stepping]"
+        logroot << "Nu_top (W1) = " << Nu_top_0 << ", V_rms = " << V_rms_0 << "  [timestep 0, before time stepping]"
                 << std::endl;
     }
 
@@ -863,7 +863,7 @@ Result<> run( const Parameters& prm )
                 ( *domains[velocity_level] ), u.block_1(), coords_shell[velocity_level], coords_radii[velocity_level] );
             if ( timestep % 10 == 0 )
             {
-                logroot << "Nu_top (Q1) = " << Nu_top << ", V_rms = " << V_rms << std::endl;
+                logroot << "Nu_top (W1) = " << Nu_top << ", V_rms = " << V_rms << std::endl;
             }
             // Per-step CSV. simulated_time is updated below; the value here is
             // the time at the *end* of this step (current T just solved).
@@ -873,7 +873,7 @@ Result<> run( const Parameters& prm )
                 std::ofstream     out( path, std::ios::app );
                 if ( out.tellp() == 0 )
                 {
-                    out << "timestep,sim_time,Nu_top_Q1,V_rms\n";
+                    out << "timestep,sim_time,Nu_top_W1,V_rms\n";
                 }
                 const double t_end_of_step = simulated_time + prm.energy_solver_parameters.energy_substeps * dt;
                 out << timestep << "," << t_end_of_step << "," << Nu_top << ","

@@ -8,7 +8,7 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/linear_form.hpp"
 #include "linalg/operator.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::fe::wedge::linearforms::shell {
 
@@ -45,7 +45,7 @@ class HeatingTerm
     static_assert( VelocityVecDim == 3, "HeatingTerm requires a 3D velocity field." );
 
   public:
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
   private:
@@ -55,8 +55,8 @@ class HeatingTerm
     grid::Grid2DDataScalar< ScalarT > radii_;
 
     /// Scalar input field: temperature T (Adiabatic) or viscosity eta (Shear).
-    linalg::VectorQ1Scalar< ScalarT >              field_;
-    linalg::VectorQ1Vec< ScalarT, VelocityVecDim > velocity_;
+    linalg::VectorW1Scalar< ScalarT >              field_;
+    linalg::VectorW1Vec< ScalarT, VelocityVecDim > velocity_;
 
     CoefficientT coefficient_;
 
@@ -89,8 +89,8 @@ class HeatingTerm
         const grid::shell::DistributedDomain&                 domain,
         const grid::Grid3DDataVec< ScalarT, 3 >&              grid,
         const grid::Grid2DDataScalar< ScalarT >&              radii,
-        const linalg::VectorQ1Scalar< ScalarT >&              field,
-        const linalg::VectorQ1Vec< ScalarT, VelocityVecDim >& velocity,
+        const linalg::VectorW1Scalar< ScalarT >&              field,
+        const linalg::VectorW1Vec< ScalarT, VelocityVecDim >& velocity,
         const CoefficientT&                                   coefficient,
         const linalg::OperatorApplyMode         operator_apply_mode = linalg::OperatorApplyMode::Replace,
         const linalg::OperatorCommunicationMode operator_communication_mode =

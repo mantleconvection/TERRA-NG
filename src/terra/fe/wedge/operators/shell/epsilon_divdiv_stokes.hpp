@@ -8,7 +8,7 @@
 #include "gradient_kerngen.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "util/timer.hpp"
 #include "zero.hpp"
 
@@ -19,8 +19,8 @@ template < typename ScalarT, int VecDim = 3 >
 class EpsDivDivStokes
 {
   public:
-    using SrcVectorType = linalg::VectorQ1IsoQ2Q1< ScalarT, VecDim >;
-    using DstVectorType = linalg::VectorQ1IsoQ2Q1< ScalarT, VecDim >;
+    using SrcVectorType = linalg::VectorW1IsoW2W1< ScalarT, VecDim >;
+    using DstVectorType = linalg::VectorW1IsoW2W1< ScalarT, VecDim >;
     using ScalarType    = ScalarT;
 
     using Block11Type = EpsilonDivDivKerngen< ScalarType, VecDim >;

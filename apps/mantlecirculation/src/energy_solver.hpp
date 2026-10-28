@@ -21,7 +21,7 @@
 #include "linalg/solvers/diagonal_solver.hpp"
 #include "linalg/solvers/fgmres.hpp"
 #include "linalg/solvers/fgmres_lowmem.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "parameters.hpp"
 #include "util/logging.hpp"
 #include "util/table.hpp"
@@ -59,25 +59,25 @@ class EnergySolver
     /// `output_frequency`).  Default is no-op.
     virtual void dump_diagnostics( int /*timestep*/, const std::string& /*outdir*/ ) {}
 
-    /// Optional Q1-nodal diagnostic field (e.g., per-wedge ν_h projected to
+    /// Optional W1-nodal diagnostic field (e.g., per-wedge ν_h projected to
     /// nodes for XDMF visualisation).  Returns nullptr if the scheme has no
     /// such field or it has not been enabled.  When non-null, the main loop
     /// registers it with XDMFOutput before the first write().
-    virtual linalg::VectorQ1Scalar< ScalarType >* nu_h_nodal_view() { return nullptr; }
+    virtual linalg::VectorW1Scalar< ScalarType >* nu_h_nodal_view() { return nullptr; }
 
-    /// Optional Q1-nodal projection of (K · T) / M_lumped — the lumped-mass
+    /// Optional W1-nodal projection of (K · T) / M_lumped — the lumped-mass
     /// Galerkin Laplacian feed to the EV residual.  Exposed so the main loop
     /// can dump it via radial_profiles for hypothesis-3 diagnosis (boundary
     /// flux dropped → wall-row |Lap| should be small relative to the first
     /// interior shell).  Returns nullptr unless the scheme allocates it.
-    virtual linalg::VectorQ1Scalar< ScalarType >* lap_diag_view() { return nullptr; }
+    virtual linalg::VectorW1Scalar< ScalarType >* lap_diag_view() { return nullptr; }
 
-    /// Optional Q1-nodal projection of the per-wedge characteristic length
+    /// Optional W1-nodal projection of the per-wedge characteristic length
     /// h_w = V_wedge^{1/3} (cell-constant; scattered to nodes with
     /// count-normalisation).  Exposed for hypothesis-2 diagnosis (radial
     /// h_w over dr ≫ 1 → BL-normal over-damping).  Returns nullptr unless
     /// the scheme allocates it.
-    virtual linalg::VectorQ1Scalar< ScalarType >* h_w_diag_view() { return nullptr; }
+    virtual linalg::VectorW1Scalar< ScalarType >* h_w_diag_view() { return nullptr; }
 };
 
 template < typename ScalarType >
@@ -169,8 +169,8 @@ class SUPGSolver : public EnergySolver< ScalarType >
         const grid::Grid2DDataScalar< ScalarType >&                     coords_radii,
         const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
         const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&        ownership_mask,
-        const linalg::VectorQ1Vec< ScalarType, 3 >&                     velocity,
-        linalg::VectorQ1Scalar< ScalarType >&                           T,
+        const linalg::VectorW1Vec< ScalarType, 3 >&                     velocity,
+        linalg::VectorW1Scalar< ScalarType >&                           T,
         ScalarType                                                      h,
         const Parameters&                                               prm,
         std::shared_ptr< util::Table >                                  table )
@@ -190,9 +190,9 @@ class SUPGSolver : public EnergySolver< ScalarType >
     , diag_( "supg_diag", *domain_, ownership_mask_ )
     {
         // T_backup_ is only touched when there is more than one Picard iteration;
-        // leave it empty (unallocated) otherwise to save a Q1-scalar field.
+        // leave it empty (unallocated) otherwise to save a W1-scalar field.
         if ( prm_.time_stepping_parameters.picard_iterations > 1 )
-            T_backup_ = linalg::VectorQ1Scalar< ScalarType >( "supg_T_backup", *domain_, ownership_mask_ );
+            T_backup_ = linalg::VectorW1Scalar< ScalarType >( "supg_T_backup", *domain_, ownership_mask_ );
 
         util::logroot << "Setting up SUPG energy solver ..." << std::endl;
 
@@ -233,7 +233,7 @@ class SUPGSolver : public EnergySolver< ScalarType >
         A_neumann_diag_->dt() = ScalarType( 1e-4 );
         linalg::assign( diag_, ScalarType( 0 ) );
         {
-            linalg::VectorQ1Scalar< ScalarType > ones( "ones", *domain_, ownership_mask_ );
+            linalg::VectorW1Scalar< ScalarType > ones( "ones", *domain_, ownership_mask_ );
             linalg::assign( ones, ScalarType( 1 ) );
             linalg::apply( *A_neumann_diag_, ones, diag_ );
         }
@@ -293,7 +293,7 @@ class SUPGSolver : public EnergySolver< ScalarType >
 
         // Update inverse diagonal each step (dt changed).
         {
-            linalg::VectorQ1Scalar< ScalarType > ones( "ones", *domain_, ownership_mask_ );
+            linalg::VectorW1Scalar< ScalarType > ones( "ones", *domain_, ownership_mask_ );
             linalg::assign( ones, ScalarType( 1 ) );
             linalg::apply( *A_neumann_diag_, ones, diag_ );
             linalg::invert_entries( diag_ );
@@ -349,8 +349,8 @@ class SUPGSolver : public EnergySolver< ScalarType >
     const grid::Grid2DDataScalar< ScalarType >&                     coords_radii_;
     const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask_;
     const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&        ownership_mask_;
-    const linalg::VectorQ1Vec< ScalarType, 3 >&                     velocity_;
-    linalg::VectorQ1Scalar< ScalarType >&                           T_;
+    const linalg::VectorW1Vec< ScalarType, 3 >&                     velocity_;
+    linalg::VectorW1Scalar< ScalarType >&                           T_;
     ScalarType                                                      h_;
     const Parameters&                                               prm_;
     std::shared_ptr< util::Table >                                  table_;
@@ -359,9 +359,9 @@ class SUPGSolver : public EnergySolver< ScalarType >
     std::unique_ptr< AD >                               A_, A_neumann_, A_neumann_diag_;
     std::unique_ptr< TempMass >                         M_;
     std::unique_ptr< FGMRESType >                       solver_;
-    linalg::VectorQ1Scalar< ScalarType >                g_, tmp_, q_, diag_;
-    linalg::VectorQ1Scalar< ScalarType >                T_backup_;
-    std::vector< linalg::VectorQ1Scalar< ScalarType > > tmp_gmres_;
+    linalg::VectorW1Scalar< ScalarType >                g_, tmp_, q_, diag_;
+    linalg::VectorW1Scalar< ScalarType >                T_backup_;
+    std::vector< linalg::VectorW1Scalar< ScalarType > > tmp_gmres_;
 };
 
 /// Implicit Galerkin energy solve with explicit lagged entropy-viscosity
@@ -382,7 +382,7 @@ class EVSolver : public EnergySolver< ScalarType >
     using FGMRESDouble = linalg::solvers::FGMRES< AD_EV, DiagSolverT >;
     // Reduced-precision Krylov basis variant (operator stays double). FP16 storage
     // (native __half on HIP): basis is store-only + convert, so no half arithmetic.
-    using BasisVecT   = linalg::VectorQ1Scalar< Kokkos::Experimental::bhalf_t >;
+    using BasisVecT   = linalg::VectorW1Scalar< Kokkos::Experimental::bhalf_t >;
     using FGMRESFloat = linalg::solvers::FGMRESLowMem< AD_EV, BasisVecT, DiagSolverT >;
 
     using AdiabaticOp =
@@ -397,9 +397,9 @@ class EVSolver : public EnergySolver< ScalarType >
         const grid::Grid2DDataScalar< ScalarType >&                     coords_radii,
         const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
         const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&        ownership_mask,
-        const linalg::VectorQ1Scalar< ScalarType >&                     eta,
-        const linalg::VectorQ1Vec< ScalarType, 3 >&                     velocity,
-        linalg::VectorQ1Scalar< ScalarType >&                           T,
+        const linalg::VectorW1Scalar< ScalarType >&                     eta,
+        const linalg::VectorW1Vec< ScalarType, 3 >&                     velocity,
+        linalg::VectorW1Scalar< ScalarType >&                           T,
         typename CoeffType::DiffusionCoeffT                             diffusion_coeff,
         ScalarType                                                      surface_diffusion_coeff,
         typename CoeffType::InternalHeatingCoeffT                       internal_heating_coeff,
@@ -434,22 +434,22 @@ class EVSolver : public EnergySolver< ScalarType >
         // within step() (lap_T_ done at the lumped-mass divide, then rhs_ev_ for the
         // EV diffusion RHS, then g_ for the Dirichlet vector), so they share a single
         // allocation. Kokkos Views are ref-counted, so these shallow copies alias the
-        // same storage; step() keeps using the three semantic names. Saves 2 Q1 fields.
+        // same storage; step() keeps using the three semantic names. Saves 2 W1 fields.
         rhs_ev_ = lap_T_;
         g_      = lap_T_;
 
         // Picard backups are only touched when iterating; leave them empty
-        // (unallocated) otherwise to save two Q1-scalar fields.
+        // (unallocated) otherwise to save two W1-scalar fields.
         if ( prm_.time_stepping_parameters.picard_iterations > 1 )
         {
-            T_backup_      = linalg::VectorQ1Scalar< ScalarType >( "ev_T_backup", *domain_, ownership_mask_ );
-            T_prev_backup_ = linalg::VectorQ1Scalar< ScalarType >( "ev_T_prev_backup", *domain_, ownership_mask_ );
+            T_backup_      = linalg::VectorW1Scalar< ScalarType >( "ev_T_backup", *domain_, ownership_mask_ );
+            T_prev_backup_ = linalg::VectorW1Scalar< ScalarType >( "ev_T_prev_backup", *domain_, ownership_mask_ );
         }
 
         util::logroot << "Setting up entropy-viscosity (EV) energy solver ..." << std::endl;
 
         if ( prm_.devel_parameters.extended_diagnostics )
-            log_hbm( "EV: after Q1 scalar fields (T_prev/rhs/lap/M_lumped/backups/g/tmp/q/diag)" );
+            log_hbm( "EV: after W1 scalar fields (T_prev/rhs/lap/M_lumped/backups/g/tmp/q/diag)" );
 
         // Per-wedge ν_h field: extents (#subdomains, N-1, N-1, N_r-1, num_wedges).
         const auto num_sub = static_cast< long long >( domain_->subdomains().size() );
@@ -516,10 +516,10 @@ class EVSolver : public EnergySolver< ScalarType >
         A_kappa_ = std::make_unique< DiffOp >( *domain_, coords_shell_, coords_radii_, diffusion_coeff_ );
 
         // Global lumped mass M_lumped = M · 1, used to invert the global
-        // Galerkin K·T into a Q1-nodal lap field per timestep:
-        //   lap_T = (K · T) / M_lumped  ≈  −κ∇²T (Q1-nodal).
+        // Galerkin K·T into a W1-nodal lap field per timestep:
+        //   lap_T = (K · T) / M_lumped  ≈  −κ∇²T (W1-nodal).
         {
-            linalg::VectorQ1Scalar< ScalarType > ones( "ev_setup_ones", *domain_, ownership_mask_ );
+            linalg::VectorW1Scalar< ScalarType > ones( "ev_setup_ones", *domain_, ownership_mask_ );
             linalg::assign( ones, ScalarType( 1 ) );
             linalg::assign( M_lumped_, ScalarType( 0 ) );
             linalg::apply( *M_, ones, M_lumped_ );
@@ -532,7 +532,7 @@ class EVSolver : public EnergySolver< ScalarType >
         A_neumann_diag_->dt() = ScalarType( 1e-4 );
         linalg::assign( diag_, ScalarType( 0 ) );
         {
-            linalg::VectorQ1Scalar< ScalarType > ones( "ev_setup_ones", *domain_, ownership_mask_ );
+            linalg::VectorW1Scalar< ScalarType > ones( "ev_setup_ones", *domain_, ownership_mask_ );
             linalg::assign( ones, ScalarType( 1 ) );
             linalg::apply( *A_neumann_diag_, ones, diag_ );
         }
@@ -578,9 +578,9 @@ class EVSolver : public EnergySolver< ScalarType >
                       << ")" << std::endl;
     }
 
-    linalg::VectorQ1Scalar< ScalarType >* nu_h_nodal_view() override { return nu_h_nodal_diag_.get(); }
-    linalg::VectorQ1Scalar< ScalarType >* lap_diag_view() override { return lap_diag_.get(); }
-    linalg::VectorQ1Scalar< ScalarType >* h_w_diag_view() override { return h_w_nodal_diag_.get(); }
+    linalg::VectorW1Scalar< ScalarType >* nu_h_nodal_view() override { return nu_h_nodal_diag_.get(); }
+    linalg::VectorW1Scalar< ScalarType >* lap_diag_view() override { return lap_diag_.get(); }
+    linalg::VectorW1Scalar< ScalarType >* h_w_diag_view() override { return h_w_nodal_diag_.get(); }
 
     ScalarType compute_dt( const int timestep ) override
     {
@@ -677,7 +677,7 @@ class EVSolver : public EnergySolver< ScalarType >
             out << timestep << "," << g_min << "," << g_max << "," << g_mean << "," << g_n << "\n";
         }
 
-        // Populate the Q1-nodal diagnostic field for XDMF visualisation.
+        // Populate the W1-nodal diagnostic field for XDMF visualisation.
         // Per cell: cell_avg = (ν_h_w0 + ν_h_w1) / 2.  Splat that scalar to
         // all 8 corners with atomic_add into nu_h_nodal_diag_ + count, then
         // additive halo exchange + pointwise divide.
@@ -895,7 +895,7 @@ class EVSolver : public EnergySolver< ScalarType >
         A_neumann_diag_->dt() = dt;
 
         {
-            linalg::VectorQ1Scalar< ScalarType > ones( "ev_step_ones", *domain_, ownership_mask_ );
+            linalg::VectorW1Scalar< ScalarType > ones( "ev_step_ones", *domain_, ownership_mask_ );
             linalg::assign( ones, ScalarType( 1 ) );
             linalg::assign( diag_, ScalarType( 0 ) );
             linalg::apply( *A_neumann_diag_, ones, diag_ );
@@ -913,7 +913,7 @@ class EVSolver : public EnergySolver< ScalarType >
             const bool need_nu_h = ( i > 0 ) || !nu_h_locked_for_step_;
             if ( need_nu_h )
             {
-                // 1) Global Q1-nodal lap projection: lap_T = (K · T) / M_lumped
+                // 1) Global W1-nodal lap projection: lap_T = (K · T) / M_lumped
                 //    with K the global Galerkin Laplacian (κ-weighted) and
                 //    M_lumped the global lumped mass.  Continuity across
                 //    element interfaces lets r_E collapse to ≈0 in smooth
@@ -1050,9 +1050,9 @@ class EVSolver : public EnergySolver< ScalarType >
     const grid::Grid2DDataScalar< ScalarType >&                     coords_radii_;
     const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask_;
     const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&        ownership_mask_;
-    const linalg::VectorQ1Vec< ScalarType, 3 >&                     velocity_;
-    linalg::VectorQ1Scalar< ScalarType >&                           T_;
-    const linalg::VectorQ1Scalar< ScalarType >&                     eta_;
+    const linalg::VectorW1Vec< ScalarType, 3 >&                     velocity_;
+    linalg::VectorW1Scalar< ScalarType >&                           T_;
+    const linalg::VectorW1Scalar< ScalarType >&                     eta_;
     ScalarType                                                      h_;
     const Parameters&                                               prm_;
     std::shared_ptr< util::Table >                                  table_;
@@ -1070,28 +1070,28 @@ class EVSolver : public EnergySolver< ScalarType >
     std::unique_ptr< FGMRESDouble > solver_double_;
     std::unique_ptr< FGMRESFloat >  solver_float_;
 
-    linalg::VectorQ1Scalar< ScalarType >                                  g_, tmp_, q_, diag_;
-    linalg::VectorQ1Scalar< ScalarType >                                  T_prev_;
-    linalg::VectorQ1Scalar< ScalarType >                                  rhs_ev_;
-    linalg::VectorQ1Scalar< ScalarType >                                  lap_T_;
-    linalg::VectorQ1Scalar< ScalarType >                                  M_lumped_;
-    linalg::VectorQ1Scalar< ScalarType >                                  T_backup_;
-    linalg::VectorQ1Scalar< ScalarType >                                  T_prev_backup_;
+    linalg::VectorW1Scalar< ScalarType >                                  g_, tmp_, q_, diag_;
+    linalg::VectorW1Scalar< ScalarType >                                  T_prev_;
+    linalg::VectorW1Scalar< ScalarType >                                  rhs_ev_;
+    linalg::VectorW1Scalar< ScalarType >                                  lap_T_;
+    linalg::VectorW1Scalar< ScalarType >                                  M_lumped_;
+    linalg::VectorW1Scalar< ScalarType >                                  T_backup_;
+    linalg::VectorW1Scalar< ScalarType >                                  T_prev_backup_;
     grid::Grid5DDataScalar< ScalarType >                                  nu_h_wedge_;
     fe::wedge::operators::shell::EntropyViscosityParameters< ScalarType > ev_params_{};
-    std::vector< linalg::VectorQ1Scalar< ScalarType > >                   tmp_gmres_;
+    std::vector< linalg::VectorW1Scalar< ScalarType > >                   tmp_gmres_;
     std::vector< BasisVecT >                                              basis_gmres_;
 
-    // Q1-nodal diagnostic field (only allocated when ev_dump_nu_h is on).
-    std::unique_ptr< linalg::VectorQ1Scalar< ScalarType > >                                    nu_h_nodal_diag_;
-    std::unique_ptr< linalg::VectorQ1Scalar< ScalarType > >                                    nu_h_count_diag_;
+    // W1-nodal diagnostic field (only allocated when ev_dump_nu_h is on).
+    std::unique_ptr< linalg::VectorW1Scalar< ScalarType > >                                    nu_h_nodal_diag_;
+    std::unique_ptr< linalg::VectorW1Scalar< ScalarType > >                                    nu_h_count_diag_;
     std::unique_ptr< communication::shell::SubdomainNeighborhoodSendRecvBuffer< ScalarType > > diag_send_, diag_recv_;
 
     // Hypothesis-2/3 diagnostic fields (only allocated when ev_dump_nu_h is on).
     grid::Grid5DDataScalar< ScalarType >                    h_w_wedge_;
-    std::unique_ptr< linalg::VectorQ1Scalar< ScalarType > > h_w_nodal_diag_;
-    std::unique_ptr< linalg::VectorQ1Scalar< ScalarType > > h_w_count_diag_;
-    std::unique_ptr< linalg::VectorQ1Scalar< ScalarType > > lap_diag_;
+    std::unique_ptr< linalg::VectorW1Scalar< ScalarType > > h_w_nodal_diag_;
+    std::unique_ptr< linalg::VectorW1Scalar< ScalarType > > h_w_count_diag_;
+    std::unique_ptr< linalg::VectorW1Scalar< ScalarType > > lap_diag_;
     bool                                                    geom_stats_written_ = false;
 
     // Locked-by-Picard flag: false at the start of each timestep (set by

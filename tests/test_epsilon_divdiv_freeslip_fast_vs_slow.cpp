@@ -1,7 +1,7 @@
 #include "../src/terra/communication/shell/communication.hpp"
 #include "fe/wedge/integrands.hpp"
 #include "fe/wedge/operators/shell/epsilon_divdiv_kerngen.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/grid/grid_types.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
 #include "terra/kernels/common/grid_operations.hpp"
@@ -20,8 +20,8 @@ using grid::shell::BoundaryConditionFlag::DIRICHLET;
 using grid::shell::BoundaryConditionFlag::FREESLIP;
 using grid::shell::ShellBoundaryFlag::CMB;
 using grid::shell::ShellBoundaryFlag::SURFACE;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 struct VectorFieldInterpolator
 {
@@ -94,24 +94,24 @@ void compare_epsilon_divdiv_path_comparison( int level, bool diagonal, int repea
     const auto coords_shell = terra::grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarT >( domain );
     const auto coords_radii = terra::grid::shell::subdomain_shell_radii< ScalarT >( domain );
 
-    VectorQ1Vec< ScalarT > src( "src", domain, mask_data );
+    VectorW1Vec< ScalarT > src( "src", domain, mask_data );
 
     // Freeslip/Dirichlet outputs (fast + slow)
-    VectorQ1Vec< ScalarT > dst_fast_fs( "dst_fast_fs", domain, mask_data );
-    VectorQ1Vec< ScalarT > dst_slow_fs( "dst_slow_fs", domain, mask_data );
+    VectorW1Vec< ScalarT > dst_fast_fs( "dst_fast_fs", domain, mask_data );
+    VectorW1Vec< ScalarT > dst_slow_fs( "dst_slow_fs", domain, mask_data );
 
     // Dirichlet/Dirichlet outputs (fast + slow)
-    VectorQ1Vec< ScalarT > dst_dd_fast( "dst_dd_fast", domain, mask_data );
-    VectorQ1Vec< ScalarT > dst_dd_slow( "dst_dd_slow", domain, mask_data );
+    VectorW1Vec< ScalarT > dst_dd_fast( "dst_dd_fast", domain, mask_data );
+    VectorW1Vec< ScalarT > dst_dd_slow( "dst_dd_slow", domain, mask_data );
 
     // Error vectors
-    VectorQ1Vec< ScalarT > err_fast_vs_slow( "err_fast_vs_slow", domain, mask_data );
-    VectorQ1Vec< ScalarT > err_dd_fast_vs_slow( "err_dd_fast_vs_slow", domain, mask_data );
-    VectorQ1Vec< ScalarT > err_fast_vs_dd( "err_fast_vs_dd", domain, mask_data );
-    VectorQ1Vec< ScalarT > err_slow_vs_dd( "err_slow_vs_dd", domain, mask_data );
+    VectorW1Vec< ScalarT > err_fast_vs_slow( "err_fast_vs_slow", domain, mask_data );
+    VectorW1Vec< ScalarT > err_dd_fast_vs_slow( "err_dd_fast_vs_slow", domain, mask_data );
+    VectorW1Vec< ScalarT > err_fast_vs_dd( "err_fast_vs_dd", domain, mask_data );
+    VectorW1Vec< ScalarT > err_slow_vs_dd( "err_slow_vs_dd", domain, mask_data );
 
-    VectorQ1Scalar< ScalarT > k_coeff( "k", domain, mask_data );
-    VectorQ1Scalar< ScalarT > gca_elements( "gca_elements", domain, mask_data );
+    VectorW1Scalar< ScalarT > k_coeff( "k", domain, mask_data );
+    VectorW1Scalar< ScalarT > gca_elements( "gca_elements", domain, mask_data );
 
     Kokkos::parallel_for(
         "interpolate src",

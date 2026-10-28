@@ -12,7 +12,7 @@
 #include "linalg/solvers/gca/local_matrix_storage.hpp"
 #include "linalg/trafo/local_basis_trafo_normal_tangential.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
 
 namespace terra::fe::wedge::operators::shell::epsdivdiv_history {
@@ -50,8 +50,8 @@ template < typename ScalarT, int VecDim = 3 >
 class EpsilonDivDivKerngenV07SplitPaths
 {
   public:
-    using SrcVectorType                 = linalg::VectorQ1Vec< ScalarT, VecDim >;
-    using DstVectorType                 = linalg::VectorQ1Vec< ScalarT, VecDim >;
+    using SrcVectorType                 = linalg::VectorW1Vec< ScalarT, VecDim >;
+    using DstVectorType                 = linalg::VectorW1Vec< ScalarT, VecDim >;
     using ScalarType                    = ScalarT;
     static constexpr int LocalMatrixDim = 18;
     using Grid4DDataLocalMatrices =

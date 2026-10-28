@@ -9,7 +9,7 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -17,8 +17,8 @@ template < typename ScalarT, typename CoefficientT = grid::Grid4DDataScalar< Sca
 class KMass
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Scalar< ScalarT >;
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using SrcVectorType = linalg::VectorW1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
   private:

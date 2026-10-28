@@ -10,27 +10,27 @@
 
 namespace terra::linalg {
 
-/// @brief Q1 scalar finite element vector on a distributed shell grid.
+/// @brief W1 scalar finite element vector on a distributed shell grid.
 ///
 /// Same layout as required for tensor-product wedge elements.
 ///
 /// Satisfies the VectorLike concept (see vector.hpp).
 /// Provides masked grid data and operations for scalar fields.
 template < typename ScalarT >
-class VectorQ1Scalar
+class VectorW1Scalar
 {
   public:
     /// @brief Scalar type of the vector.
     using ScalarType = ScalarT;
 
     /// @brief Default constructor.
-    VectorQ1Scalar() = default;
+    VectorW1Scalar() = default;
 
-    /// @brief Construct a Q1 scalar vector with label, domain, and mask data.
+    /// @brief Construct a W1 scalar vector with label, domain, and mask data.
     /// @param label Name for the vector.
     /// @param distributed_domain Distributed shell domain.
     /// @param mask_data Mask data grid.
-    VectorQ1Scalar(
+    VectorW1Scalar(
         const std::string&                                       label,
         const grid::shell::DistributedDomain&                    distributed_domain,
         const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask_data )
@@ -50,7 +50,7 @@ class VectorQ1Scalar
              mask_data_.extent( 2 ) != grid_data_.extent( 2 ) || mask_data_.extent( 3 ) != grid_data_.extent( 3 ) )
         {
             throw std::runtime_error(
-                "VectorQ1Scalar::VectorQ1Scalar: mask_data and grid_data must have the same size" );
+                "VectorW1Scalar::VectorW1Scalar: mask_data and grid_data must have the same size" );
         }
     }
 
@@ -59,11 +59,11 @@ class VectorQ1Scalar
     /// @param c Coefficients.
     /// @param x Input vectors.
     /// @param c0 Scalar to add.
-    void lincomb_impl( const std::vector< ScalarType >& c, const std::vector< VectorQ1Scalar >& x, const ScalarType c0 )
+    void lincomb_impl( const std::vector< ScalarType >& c, const std::vector< VectorW1Scalar >& x, const ScalarType c0 )
     {
         if ( c.size() != x.size() )
         {
-            throw std::runtime_error( "VectorQ1Scalar::lincomb: c and x must have the same size" );
+            throw std::runtime_error( "VectorW1Scalar::lincomb: c and x must have the same size" );
         }
 
         if ( x.size() == 0 )
@@ -85,7 +85,7 @@ class VectorQ1Scalar
         }
         else
         {
-            throw std::runtime_error( "VectorQ1Scalar::lincomb: not implemented" );
+            throw std::runtime_error( "VectorW1Scalar::lincomb: not implemented" );
         }
     }
 
@@ -93,7 +93,7 @@ class VectorQ1Scalar
     /// Computes: \f$ \sum_{i} y_i \cdot x_i \f$ over owned nodes.
     /// @param x Other vector.
     /// @return Dot product value.
-    ScalarType dot_impl( const VectorQ1Scalar& x ) const
+    ScalarType dot_impl( const VectorW1Scalar& x ) const
     {
         return kernels::common::masked_dot_product(
             grid_data_, x.grid_data(), mask_data(), grid::NodeOwnershipFlag::OWNED, comm_ );
@@ -106,7 +106,7 @@ class VectorQ1Scalar
     /// @brief Elementwise scaling implementation for VectorLike concept.
     /// Computes: \f$ y_i = y_i \cdot x_i \f$
     /// @param x Scaling vector.
-    void scale_with_vector_impl( const VectorQ1Scalar& x )
+    void scale_with_vector_impl( const VectorW1Scalar& x )
     {
         kernels::common::mult_elementwise_inplace( grid_data_, x.grid_data() );
     }
@@ -148,7 +148,7 @@ class VectorQ1Scalar
     /// @brief Swap implementation for VectorLike concept.
     /// Exchanges grid_data and mask_data with another vector.
     /// @param other Other vector.
-    void swap_impl( VectorQ1Scalar& other )
+    void swap_impl( VectorW1Scalar& other )
     {
         std::swap( grid_data_, other.grid_data_ );
         std::swap( mask_data_, other.mask_data_ );
@@ -174,27 +174,27 @@ class VectorQ1Scalar
     MPI_Comm                                          comm_ = MPI_COMM_WORLD;
 };
 
-/// @brief Static assertion: VectorQ1Scalar satisfies VectorLike concept.
-static_assert( VectorLike< VectorQ1Scalar< double > > );
+/// @brief Static assertion: VectorW1Scalar satisfies VectorLike concept.
+static_assert( VectorLike< VectorW1Scalar< double > > );
 
-/// @brief Q1 vector finite element vector on a distributed shell grid.
+/// @brief W1 vector finite element vector on a distributed shell grid.
 ///
 /// Same layout as required for tensor-product wedge elements.
 ///
 /// Satisfies the VectorLike concept (see vector.hpp).
 /// Provides masked grid data and operations for vector fields.
 template < typename ScalarT, int VecDim = 3 >
-class VectorQ1Vec
+class VectorW1Vec
 {
   public:
     /// @brief Default constructor.
-    VectorQ1Vec() = default;
+    VectorW1Vec() = default;
 
-    /// @brief Construct a Q1 vector with label, domain, and mask data.
+    /// @brief Construct a W1 vector with label, domain, and mask data.
     /// @param label Name for the vector.
     /// @param distributed_domain Distributed shell domain.
     /// @param mask_data Mask data grid.
-    VectorQ1Vec(
+    VectorW1Vec(
         const std::string&                                       label,
         const grid::shell::DistributedDomain&                    distributed_domain,
         const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask_data )
@@ -214,7 +214,7 @@ class VectorQ1Vec
              mask_data_.extent( 2 ) != grid_data_.extent( 2 ) || mask_data_.extent( 3 ) != grid_data_.extent( 3 ) )
         {
             throw std::runtime_error(
-                "VectorQ1Scalar::VectorQ1Scalar: mask_data and grid_data must have the same size" );
+                "VectorW1Scalar::VectorW1Scalar: mask_data and grid_data must have the same size" );
         }
     }
 
@@ -228,11 +228,11 @@ class VectorQ1Vec
     /// @param c Coefficients.
     /// @param x Input vectors.
     /// @param c0 Scalar to add.
-    void lincomb_impl( const std::vector< ScalarType >& c, const std::vector< VectorQ1Vec >& x, const ScalarType c0 )
+    void lincomb_impl( const std::vector< ScalarType >& c, const std::vector< VectorW1Vec >& x, const ScalarType c0 )
     {
         if ( c.size() != x.size() )
         {
-            throw std::runtime_error( "VectorQ1Scalar::lincomb: c and x must have the same size" );
+            throw std::runtime_error( "VectorW1Scalar::lincomb: c and x must have the same size" );
         }
 
         if ( x.size() == 0 )
@@ -254,7 +254,7 @@ class VectorQ1Vec
         }
         else
         {
-            throw std::runtime_error( "VectorQ1Scalar::lincomb: not implemented" );
+            throw std::runtime_error( "VectorW1Scalar::lincomb: not implemented" );
         }
     }
 
@@ -262,7 +262,7 @@ class VectorQ1Vec
     /// Computes: \f$ \sum_{i} y_i \cdot x_i \f$ over owned nodes.
     /// @param x Other vector.
     /// @return Dot product value.
-    ScalarType dot_impl( const VectorQ1Vec& x ) const
+    ScalarType dot_impl( const VectorW1Vec& x ) const
     {
         return kernels::common::masked_dot_product(
             grid_data_, x.grid_data(), mask_data_, grid::NodeOwnershipFlag::OWNED, comm_ );
@@ -275,7 +275,7 @@ class VectorQ1Vec
     /// @brief Elementwise scaling implementation for VectorLike concept.
     /// Computes: \f$ y_i = y_i \cdot x_i \f$
     /// @param x Scaling vector.
-    void scale_with_vector_impl( const VectorQ1Vec& x )
+    void scale_with_vector_impl( const VectorW1Vec& x )
     {
         kernels::common::mult_elementwise_inplace( grid_data_, x.grid_data() );
     }
@@ -312,7 +312,7 @@ class VectorQ1Vec
     /// @brief Swap implementation for VectorLike concept.
     /// Exchanges grid_data and mask_data with another vector.
     /// @param other Other vector.
-    void swap_impl( VectorQ1Vec& other )
+    void swap_impl( VectorW1Vec& other )
     {
         std::swap( grid_data_, other.grid_data_ );
         std::swap( mask_data_, other.mask_data_ );
@@ -338,24 +338,24 @@ class VectorQ1Vec
     MPI_Comm                                          comm_ = MPI_COMM_WORLD;
 };
 
-/// @brief Static assertion: VectorQ1Vec satisfies VectorLike concept.
-static_assert( VectorLike< VectorQ1Vec< double, 3 > > );
+/// @brief Static assertion: VectorW1Vec satisfies VectorLike concept.
+static_assert( VectorLike< VectorW1Vec< double, 3 > > );
 
 /// @brief Copy a scalar vector into one of (possibly) different precision (elementwise cast).
 /// Used for reduced-precision storage (e.g. a float Krylov basis with a double solver).
 template < typename DstScalar, typename SrcScalar >
-void convert( const VectorQ1Scalar< SrcScalar >& src, VectorQ1Scalar< DstScalar >& dst )
+void convert( const VectorW1Scalar< SrcScalar >& src, VectorW1Scalar< DstScalar >& dst )
 {
     kernels::common::copy_convert( src.grid_data(), dst.grid_data() );
 }
 
 template < typename DstScalar, typename SrcScalar, int VecDim >
-void convert( const VectorQ1Vec< SrcScalar, VecDim >& src, VectorQ1Vec< DstScalar, VecDim >& dst )
+void convert( const VectorW1Vec< SrcScalar, VecDim >& src, VectorW1Vec< DstScalar, VecDim >& dst )
 {
     kernels::common::copy_convert( src.grid_data(), dst.grid_data() );
 }
 
-/// @brief Fused Chebyshev-smoother update for VectorQ1Vec (single-kernel fast path).
+/// @brief Fused Chebyshev-smoother update for VectorW1Vec (single-kernel fast path).
 ///
 /// Equivalent to the generic terra::linalg::chebyshev_fused_update, but collapses the
 /// residual / diagonal-preconditioner / recurrence / solution-update into one kernel per
@@ -363,11 +363,11 @@ void convert( const VectorQ1Vec< SrcScalar, VecDim >& src, VectorQ1Vec< DstScala
 /// @p z holds A*x on entry and is read-only; old @p d is read only when beta != 0.
 template < typename ScalarT, int VecDim >
 void chebyshev_fused_update(
-    VectorQ1Vec< ScalarT, VecDim >&       x,
-    VectorQ1Vec< ScalarT, VecDim >&       d,
-    VectorQ1Vec< ScalarT, VecDim >&       z,
-    const VectorQ1Vec< ScalarT, VecDim >& b,
-    const VectorQ1Vec< ScalarT, VecDim >& inv_diag,
+    VectorW1Vec< ScalarT, VecDim >&       x,
+    VectorW1Vec< ScalarT, VecDim >&       d,
+    VectorW1Vec< ScalarT, VecDim >&       z,
+    const VectorW1Vec< ScalarT, VecDim >& b,
+    const VectorW1Vec< ScalarT, VecDim >& inv_diag,
     ScalarT                               alpha,
     ScalarT                               beta )
 {

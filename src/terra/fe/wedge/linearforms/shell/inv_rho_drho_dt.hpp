@@ -7,7 +7,7 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/linear_form.hpp"
 #include "linalg/operator.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::linalg {
 enum class OperatorCommunicationMode;
@@ -22,7 +22,7 @@ namespace terra::fe::wedge::linearforms::shell {
 /// \f[
 ///   f_i = \int_\Omega \frac{1}{\rho} \dot\rho \, \phi_i \, \mathrm{d}x
 /// \f]
-/// into a scalar finite element coefficient vector, where \f$\phi_i\f$ are the scalar Q1 test
+/// into a scalar finite element coefficient vector, where \f$\phi_i\f$ are the scalar W1 test
 /// functions on the spherical shell mesh.
 ///
 /// This is the temporal part of the right-hand side of the mass conservation equation in the
@@ -43,7 +43,7 @@ namespace terra::fe::wedge::linearforms::shell {
 ///
 /// \code{.cpp}
 /// InvRhoDrhoDt< double > L( domain, grid, radii, rho, drho_dt );
-/// linalg::VectorQ1Scalar< double > g( domain );
+/// linalg::VectorW1Scalar< double > g( domain );
 /// linalg::apply( L, g );   // fills g_i = ∫ (1/ρ) ρ̇ φ_i dx
 /// \endcode
 ///
@@ -54,7 +54,7 @@ template < typename ScalarT >
 class InvRhoDrhoDt
 {
   public:
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
   private:
@@ -67,8 +67,8 @@ class InvRhoDrhoDt
     grid::Grid3DDataVec< ScalarT, 3 > grid_fine_;
     grid::Grid2DDataScalar< ScalarT > radii_fine_;
 
-    linalg::VectorQ1Scalar< ScalarT > rho_;
-    linalg::VectorQ1Scalar< ScalarT > drho_dt_;
+    linalg::VectorW1Scalar< ScalarT > rho_;
+    linalg::VectorW1Scalar< ScalarT > drho_dt_;
 
     linalg::OperatorApplyMode         operator_apply_mode_;
     linalg::OperatorCommunicationMode operator_communication_mode_;
@@ -89,8 +89,8 @@ class InvRhoDrhoDt
         const grid::Grid3DDataVec< ScalarT, 3 >& grid_fine,
         const grid::Grid2DDataScalar< ScalarT >& radii,
         const grid::Grid2DDataScalar< ScalarT >& radii_fine,
-        const linalg::VectorQ1Scalar< ScalarT >& rho_fine,
-        const linalg::VectorQ1Scalar< ScalarT >& drho_dt_fine,
+        const linalg::VectorW1Scalar< ScalarT >& rho_fine,
+        const linalg::VectorW1Scalar< ScalarT >& drho_dt_fine,
         const linalg::OperatorApplyMode          operator_apply_mode = linalg::OperatorApplyMode::Replace,
         const linalg::OperatorCommunicationMode  operator_communication_mode =
             linalg::OperatorCommunicationMode::CommunicateAdditively )

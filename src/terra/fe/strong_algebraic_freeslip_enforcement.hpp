@@ -2,7 +2,7 @@
 #pragma once
 
 #include "linalg/trafo/local_basis_trafo_normal_tangential.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 
 namespace terra::fe {
 
@@ -21,7 +21,7 @@ namespace terra::fe {
 /// @param freeslip_boundary_mask the flag that indicates where to apply the conditions
 template < typename ScalarType, typename ScalarTypeGrid, util::FlagLike FlagType >
 void strong_algebraic_freeslip_enforcement_in_place(
-    linalg::VectorQ1IsoQ2Q1< ScalarType >&          b,
+    linalg::VectorW1IsoW2W1< ScalarType >&          b,
     const grid::Grid3DDataVec< ScalarTypeGrid, 3 >& coords_shell,
     const grid::Grid4DDataScalar< FlagType >&       mask_data,
     const FlagType&                                 freeslip_boundary_mask )

@@ -10,7 +10,7 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/linear_form.hpp"
 #include "linalg/operator.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::fe::wedge::linearforms::shell::detail {
 
@@ -30,11 +30,11 @@ namespace terra::fe::wedge::linearforms::shell {
 /// \f[
 ///   f_i = \int_\Omega \frac{1}{\rho} \nabla\rho \cdot \mathbf{u} \, \phi_i \, \mathrm{d}x
 /// \f]
-/// into a scalar finite element coefficient vector, where \f$\phi_i\f$ are the scalar Q1 test
+/// into a scalar finite element coefficient vector, where \f$\phi_i\f$ are the scalar W1 test
 /// functions on the spherical shell mesh.
 ///
 /// Update: Templated class now supports density \f$\rho\f$ as either a scalar FE function
-/// (VectorQ1Scalar / Grid4DDataScalar) or as radial profile (Grid2DDataScalar).
+/// (VectorW1Scalar / Grid4DDataScalar) or as radial profile (Grid2DDataScalar).
 ///
 /// This term arises in the pressure equation of the Truncated Anelastic Liquid Approximation
 /// (TALA) and the Projected Density Approximation (PDA) for compressible Stokes flow in
@@ -52,7 +52,7 @@ namespace terra::fe::wedge::linearforms::shell {
 ///
 /// \code{.cpp}
 /// InvRhoGradRhoDotU< double > L( domain, grid, radii, rho, velocity );
-/// linalg::VectorQ1Scalar< double > g( domain );
+/// linalg::VectorW1Scalar< double > g( domain );
 /// linalg::apply( L, g );   // fills g_i = ∫ (1/ρ) ∇ρ·u φ_i dx
 /// \endcode
 ///
@@ -63,10 +63,10 @@ template < typename ScalarT, typename RhoFieldType, int VelocityVecDim = 3 >
 class InvRhoGradRhoDotU
 {
   public:
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
-    // Evaluate whether rho is VectorQ1Scalar (3-D) or radial profile
+    // Evaluate whether rho is VectorW1Scalar (3-D) or radial profile
     static constexpr bool rho_is_radial_profile = std::is_same_v< RhoFieldType, grid::Grid2DDataScalar< ScalarT > >;
 
     using RhoGridType = std::
@@ -84,7 +84,7 @@ class InvRhoGradRhoDotU
 
     RhoFieldType rho_;
 
-    linalg::VectorQ1Vec< ScalarT, VelocityVecDim > velocity_;
+    linalg::VectorW1Vec< ScalarT, VelocityVecDim > velocity_;
 
     linalg::OperatorApplyMode         operator_apply_mode_;
     linalg::OperatorCommunicationMode operator_communication_mode_;
@@ -106,7 +106,7 @@ class InvRhoGradRhoDotU
         const grid::Grid2DDataScalar< ScalarT >&              radii,
         const grid::Grid2DDataScalar< ScalarT >&              radii_fine,
         const RhoFieldType&                                   rho_fine,
-        const linalg::VectorQ1Vec< ScalarT, VelocityVecDim >& velocity_fine,
+        const linalg::VectorW1Vec< ScalarT, VelocityVecDim >& velocity_fine,
         const linalg::OperatorApplyMode                       operator_apply_mode = linalg::OperatorApplyMode::Replace,
         const linalg::OperatorCommunicationMode               operator_communication_mode =
             linalg::OperatorCommunicationMode::CommunicateAdditively )
@@ -299,7 +299,7 @@ class InvRhoGradRhoDotU
     }
 };
 
-static_assert( linalg::LinearFormLike< InvRhoGradRhoDotU< double, linalg::VectorQ1Scalar< double > > > );
+static_assert( linalg::LinearFormLike< InvRhoGradRhoDotU< double, linalg::VectorW1Scalar< double > > > );
 static_assert( linalg::LinearFormLike< InvRhoGradRhoDotU< double, grid::Grid2DDataScalar< double > > > );
 
 } // namespace terra::fe::wedge::linearforms::shell

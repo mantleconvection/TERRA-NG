@@ -11,7 +11,7 @@
 #include "linalg/operator.hpp"
 #include "linalg/solvers/gca/local_matrix_storage.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -19,8 +19,8 @@ template < typename ScalarT >
 class DivKGrad
 {
   public:
-    using SrcVectorType                 = linalg::VectorQ1Scalar< ScalarT >;
-    using DstVectorType                 = linalg::VectorQ1Scalar< ScalarT >;
+    using SrcVectorType                 = linalg::VectorW1Scalar< ScalarT >;
+    using DstVectorType                 = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType                    = ScalarT;
     static constexpr int LocalMatrixDim = 6;
     using LocalMatrixStorage            = linalg::solvers::LocalMatrixStorage< ScalarType, LocalMatrixDim >;

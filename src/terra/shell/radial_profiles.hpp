@@ -3,7 +3,7 @@
 #include <numeric>
 
 #include "kokkos/kokkos_wrapper.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "util/interpolation.hpp"
 #include "util/table.hpp"
 
@@ -30,11 +30,11 @@ struct RadialProfiles
     grid::Grid1DDataScalar< ScalarType > radial_avg_;
 };
 
-/// @brief Compute radial profiles (min, max, sum, count, average) for a Q1 scalar field (on device!).
+/// @brief Compute radial profiles (min, max, sum, count, average) for a W1 scalar field (on device!).
 ///
-/// @details Computes the radial profiles for a Q1 scalar field by iterating over all radial shells.
+/// @details Computes the radial profiles for a W1 scalar field by iterating over all radial shells.
 /// The profiles include minimum, maximum, sum, and count of nodes in each shell.
-/// The radial shells are defined by the radial dimension of the Q1 scalar field.
+/// The radial shells are defined by the radial dimension of the W1 scalar field.
 /// The output is a RadialProfiles struct with device-side arrays of size num_shells which contain:
 /// - Minimum value in the shell
 /// - Maximum value in the shell
@@ -60,7 +60,7 @@ struct RadialProfiles
 /// @endcode
 ///
 /// @tparam ScalarType Scalar type of the field.
-/// @param data Q1 scalar field data.
+/// @param data W1 scalar field data.
 /// @param subdomain_shell_idx global shell indices array with layout
 ///                            @code subdomain_shell_idx( local_subdomain_id, node_r_idx ) = global_shell_idx @endcode
 ///                            compute with \ref terra::grid::shell::subdomain_shell_idx.
@@ -68,7 +68,7 @@ struct RadialProfiles
 /// @return RadialProfiles struct containing [min, max, sum, count, average] for each radial shell (still on the device).
 template < typename ScalarType >
 RadialProfiles< ScalarType > radial_profiles(
-    const linalg::VectorQ1Scalar< ScalarType >& data,
+    const linalg::VectorW1Scalar< ScalarType >& data,
     const grid::Grid2DDataScalar< int >&        subdomain_shell_idx,
     const int                                   num_global_shells )
 {

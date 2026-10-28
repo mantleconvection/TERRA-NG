@@ -8,7 +8,7 @@
 #include "interpolators.hpp"
 #include "io.hpp"
 #include "kokkos/kokkos_wrapper.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "parameters.hpp"
 #include "shell/spherical_harmonics.hpp"
 #include "util/logging.hpp"
@@ -52,7 +52,7 @@ struct ComputePowerLawProfile
     }
 };
 
-/// Set T (Q1) from the configured initial-condition profile,
+/// Set T (W1) from the configured initial-condition profile,
 /// and add an optional noise or spherical-harmonic perturbation of maximum size
 /// parameters.physics_parameters.initial_temperature.perturbation_amplitude.
 ///
@@ -63,7 +63,7 @@ struct ComputePowerLawProfile
 ///   * FROM_FILE: Reading custom temperature profile from csv file.
 template < typename ScalarType >
 void initialize_temperature_fields(
-    linalg::VectorQ1Scalar< ScalarType >&                           T,
+    linalg::VectorW1Scalar< ScalarType >&                           T,
     grid::Grid2DDataScalar< ScalarType >&                           T_ref,
     const grid::shell::DistributedDomain&                           domain,
     const grid::Grid3DDataVec< ScalarType, 3 >&                     coords_shell,
@@ -120,11 +120,11 @@ void initialize_temperature_fields(
                 T_ref } );
     }
 
-    // Broadcast reference profile to Q1 nodes
+    // Broadcast reference profile to W1 nodes
     Kokkos::parallel_for(
-        "RadialProfileToQ1",
+        "RadialProfileToW1",
         grid::shell::local_domain_md_range_policy_nodes( domain ),
-        RadialProfileToQ1{ T.grid_data(), T_ref } );
+        RadialProfileToW1{ T.grid_data(), T_ref } );
     Kokkos::fence();
 
     // Add initial perturbation
@@ -134,7 +134,7 @@ void initialize_temperature_fields(
 
         // Add noise
         Kokkos::parallel_for(
-            "noise to Q1 temperature",
+            "noise to W1 temperature",
             grid::shell::local_domain_md_range_policy_nodes( domain ),
             NoiseAdder{
                 init_temp.perturbation_amplitude,
@@ -316,8 +316,8 @@ void radial_profile_init(
 
 template < typename ScalarType >
 void subtract_radial_profile(
-    linalg::VectorQ1Scalar< ScalarType >&       dst,
-    const linalg::VectorQ1Scalar< ScalarType >& src,
+    linalg::VectorW1Scalar< ScalarType >&       dst,
+    const linalg::VectorW1Scalar< ScalarType >& src,
     const grid::Grid2DDataScalar< ScalarType >& profile,
     const grid::shell::DistributedDomain&       domain )
 {
@@ -333,7 +333,7 @@ void subtract_radial_profile(
 /// added to XDMF output for visualisation.
 template < typename ScalarType >
 void compute_reference_conductive_profile(
-    linalg::VectorQ1Scalar< ScalarType >&       T_cond,
+    linalg::VectorW1Scalar< ScalarType >&       T_cond,
     const grid::shell::DistributedDomain&       domain,
     const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
     const grid::Grid2DDataScalar< ScalarType >& coords_radii,
@@ -361,8 +361,8 @@ void compute_reference_conductive_profile(
 /// Load (u, T) from an XDMF checkpoint.
 template < typename ScalarType >
 void load_temperature_checkpoint(
-    linalg::VectorQ1Vec< ScalarType, 3 >&       u_velocity,
-    linalg::VectorQ1Scalar< ScalarType >&       T,
+    linalg::VectorW1Vec< ScalarType, 3 >&       u_velocity,
+    linalg::VectorW1Scalar< ScalarType >&       T,
     const grid::shell::DistributedDomain&       domain,
     const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
     const grid::Grid2DDataScalar< ScalarType >& coords_radii,

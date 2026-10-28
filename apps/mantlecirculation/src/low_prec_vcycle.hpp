@@ -15,7 +15,7 @@
 #include "linalg/solvers/pcg.hpp"
 #include "linalg/solvers/power_iteration.hpp"
 #include "linalg/solvers/velocity_prec_handle.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 #include "parameters.hpp"
 
@@ -45,7 +45,7 @@ class LowPrecVCycle : public linalg::solvers::VelocityPrecHandle< ViscousDouble 
     using CoarseSolver = linalg::solvers::PCG< Viscous >;
     using MG = linalg::solvers::Multigrid< Viscous, Prolongation, Restriction, Smoother, CoarseSolver >;
 
-    using VelVec = linalg::VectorQ1Vec< MGScalar, 3 >;
+    using VelVec = linalg::VectorW1Vec< MGScalar, 3 >;
 
     using SrcVecD = linalg::SrcOf< ViscousDouble >;
     using DstVecD = linalg::DstOf< ViscousDouble >;
@@ -57,7 +57,7 @@ class LowPrecVCycle : public linalg::solvers::VelocityPrecHandle< ViscousDouble 
         const std::vector< grid::Grid2DDataScalar< double > >&                  coords_radii,
         const std::vector< grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag > >& boundary_mask,
         const std::vector< grid::Grid4DDataScalar< grid::NodeOwnershipFlag > >&        ownership_mask,
-        const std::vector< linalg::VectorQ1Scalar< double > >&                  eta,
+        const std::vector< linalg::VectorW1Scalar< double > >&                  eta,
         grid::shell::BoundaryConditions&                                        bcs,
         const Parameters&                                                       prm,
         std::shared_ptr< util::Table >                                          table )
@@ -158,7 +158,7 @@ class LowPrecVCycle : public linalg::solvers::VelocityPrecHandle< ViscousDouble 
   private:
     int num_levels_;
 
-    std::vector< linalg::VectorQ1Scalar< MGScalar > > eta_;
+    std::vector< linalg::VectorW1Scalar< MGScalar > > eta_;
 
     std::vector< Viscous >      A_;
     std::vector< Prolongation > P_;

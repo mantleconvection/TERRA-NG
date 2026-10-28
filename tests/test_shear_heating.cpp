@@ -43,8 +43,8 @@ using grid::Grid4DDataScalar;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 using uint_t = unsigned int;
 
@@ -165,11 +165,11 @@ int main( int argc, char** argv )
     const auto coords_shell = terra::grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto coords_radii = terra::grid::shell::subdomain_shell_radii< ScalarType >( domain );
 
-    VectorQ1Scalar< ScalarType > s_h( "s_h", domain, mask_data );
-    VectorQ1Scalar< ScalarType > mu( "mu", domain, mask_data );
-    VectorQ1Scalar< ScalarType > f_dst( "f_dst", domain, mask_data );
+    VectorW1Scalar< ScalarType > s_h( "s_h", domain, mask_data );
+    VectorW1Scalar< ScalarType > mu( "mu", domain, mask_data );
+    VectorW1Scalar< ScalarType > f_dst( "f_dst", domain, mask_data );
 
-    VectorQ1Vec< ScalarType, 3 > velocity("velocity", domain, mask_data);
+    VectorW1Vec< ScalarType, 3 > velocity("velocity", domain, mask_data);
 
     using ShearHeatingOperator = fe::wedge::linearforms::shell::ShearHeatingTerm< ScalarType, ShearHeatingCoefficientTest >;
 

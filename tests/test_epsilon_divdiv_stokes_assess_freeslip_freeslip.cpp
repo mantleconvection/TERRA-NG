@@ -44,7 +44,7 @@
 #include "linalg/solvers/pminres.hpp"
 #include "util/info.hpp"
 #include "linalg/solvers/richardson.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 
 #include "terra/dense/mat.hpp"
 #include "terra/fe/wedge/operators/shell/mass.hpp"
@@ -85,9 +85,9 @@ using grid::shell::ShellBoundaryFlag::BOUNDARY;
 using grid::shell::ShellBoundaryFlag::CMB;
 using grid::shell::ShellBoundaryFlag::SURFACE;
 using linalg::DiagonallyScaledOperator;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using linalg::solvers::DiagonalSolver;
 using linalg::solvers::power_iteration;
 using linalg::solvers::TwoGridGCA;
@@ -424,7 +424,7 @@ test( int    min_level,
     const auto velocity_level = num_levels - 1;
     const auto pressure_level = num_levels - 2;
 
-    std::map< std::string, VectorQ1IsoQ2Q1< ScalarType > > stok_vecs;
+    std::map< std::string, VectorW1IsoW2W1< ScalarType > > stok_vecs;
     std::vector< std::string >                             stok_vec_names = { "u", "f", "solution", "error" };
     constexpr int                                          num_stok_tmps  = 8;
 
@@ -436,7 +436,7 @@ test( int    min_level,
 
     for ( const auto& name : stok_vec_names )
     {
-        stok_vecs[name] = VectorQ1IsoQ2Q1< ScalarType >(
+        stok_vecs[name] = VectorW1IsoW2W1< ScalarType >(
             name,
             domains[velocity_level],
             domains[pressure_level],
@@ -449,9 +449,9 @@ test( int    min_level,
     auto& solution = stok_vecs["solution"];
     auto& error    = stok_vecs["error"];
 
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg;
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg_r;
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg_e;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg_r;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg_e;
 
     for ( size_t level = 0; level < num_levels; level++ )
     {
@@ -487,7 +487,7 @@ test( int    min_level,
     using Restriction  = fe::wedge::operators::shell::RestrictionVecConstant< ScalarType >;
 
     // Constant viscosity k = nu = 1.0
-    VectorQ1Scalar< ScalarType > k( "k", domains[velocity_level], mask_data[velocity_level] );
+    VectorW1Scalar< ScalarType > k( "k", domains[velocity_level], mask_data[velocity_level] );
 
     util::logroot << "Interpolating k (constant viscosity = " << assess_solution::nu << ") ...\n";
     Kokkos::parallel_for(
@@ -532,12 +532,12 @@ test( int    min_level,
     std::vector< Prolongation > P;
     std::vector< Restriction >  R;
 
-    std::vector< VectorQ1Vec< ScalarType > > inverse_diagonals;
+    std::vector< VectorW1Vec< ScalarType > > inverse_diagonals;
 
     util::logroot << "MG hierarchy ...\n";
     for ( size_t level = 0; level < num_levels; level++ )
     {
-        VectorQ1Scalar< ScalarType > k_c( "k_c", domains[level], mask_data[level] );
+        VectorW1Scalar< ScalarType > k_c( "k_c", domains[level], mask_data[level] );
         Kokkos::parallel_for(
             "constant viscosity interpolation (mg)",
             local_domain_md_range_policy_nodes( domains[level] ),
@@ -613,7 +613,7 @@ test( int    min_level,
         inverse_diagonals.emplace_back(
             "inverse_diagonal_" + std::to_string( level ), domains[level], mask_data[level] );
 
-        VectorQ1Vec< ScalarType > tmp(
+        VectorW1Vec< ScalarType > tmp(
             "inverse_diagonal_tmp" + std::to_string( level ), domains[level], mask_data[level] );
 
         linalg::assign( tmp, 1.0 );
@@ -636,7 +636,7 @@ test( int    min_level,
         constexpr int chebyshev_order      = 2;
         constexpr int chebyshev_iterations = 3;
 
-        std::vector< VectorQ1Vec< ScalarType > > cheby_tmps;
+        std::vector< VectorW1Vec< ScalarType > > cheby_tmps;
         cheby_tmps.emplace_back( "cheby_tmp_0_" + std::to_string( level ), domains[level], mask_data[level] );
         cheby_tmps.emplace_back( "cheby_tmp_1_" + std::to_string( level ), domains[level], mask_data[level] );
 
@@ -648,7 +648,7 @@ test( int    min_level,
 
     using CoarseGridSolver = linalg::solvers::PCG< Viscous >;
 
-    std::vector< VectorQ1Vec< ScalarType > > coarse_grid_tmps;
+    std::vector< VectorW1Vec< ScalarType > > coarse_grid_tmps;
     for ( int i = 0; i < 4; i++ )
     {
         coarse_grid_tmps.emplace_back( "tmp_coarse_grid", domains[0], mask_data[0] );
@@ -666,7 +666,7 @@ test( int    min_level,
         P, R, A_c, tmp_mg_r, tmp_mg_e, tmp_mg, smoothers, smoothers, coarse_grid_solver, num_mg_cycles, 1e-8 );
 
     // Schur complement preconditioner: inverse lumped mass with k_inv = 1/nu = 1
-    VectorQ1Scalar< ScalarType > k_pm( "k_pm", domains[max_level - min_level], mask_data[max_level - min_level] );
+    VectorW1Scalar< ScalarType > k_pm( "k_pm", domains[max_level - min_level], mask_data[max_level - min_level] );
     assign( k_pm, k );
     linalg::invert_entries( k_pm );
 
@@ -675,10 +675,10 @@ test( int    min_level,
         domains[pressure_level], coords_shell[pressure_level], coords_radii[pressure_level], k_pm.grid_data(), false );
     pmass.set_lumped_diagonal( true );
 
-    VectorQ1Scalar< ScalarType > lumped_diagonal_pmass(
+    VectorW1Scalar< ScalarType > lumped_diagonal_pmass(
         "lumped_diagonal_pmass", domains[pressure_level], mask_data[pressure_level] );
     {
-        VectorQ1Scalar< ScalarType > tmp(
+        VectorW1Scalar< ScalarType > tmp(
             "inverse_diagonal_tmp" + std::to_string( pressure_level ),
             domains[pressure_level],
             mask_data[pressure_level] );
@@ -693,7 +693,7 @@ test( int    min_level,
         linalg::solvers::BlockTriangularPreconditioner2x2<
             Stokes, Viscous, PressureMass, Gradient, PrecVisc, PrecSchur >;
 
-    VectorQ1IsoQ2Q1< ScalarType > triangular_prec_tmp(
+    VectorW1IsoW2W1< ScalarType > triangular_prec_tmp(
         "triangular_prec_tmp",
         domains[velocity_level],
         domains[pressure_level],
@@ -705,7 +705,7 @@ test( int    min_level,
     constexpr int fgmres_restart    = 30;
     constexpr int fgmres_max_iters  = 200;
 
-    std::vector< VectorQ1IsoQ2Q1< ScalarType > > tmp_fgmres;
+    std::vector< VectorW1IsoW2W1< ScalarType > > tmp_fgmres;
     for ( int i = 0; i < 2 * fgmres_restart + 4; ++i )
     {
         tmp_fgmres.emplace_back(

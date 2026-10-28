@@ -3,7 +3,7 @@
 
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -14,8 +14,8 @@ class Zero
     linalg::OperatorApplyMode operator_apply_mode_;
 
   public:
-    using SrcVectorType = linalg::VectorQ1Scalar< ScalarT >;
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using SrcVectorType = linalg::VectorW1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
     explicit Zero( linalg::OperatorApplyMode operator_apply_mode = linalg::OperatorApplyMode::Replace )

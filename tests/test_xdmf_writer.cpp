@@ -1,6 +1,6 @@
 #include <fstream>
 #include <iomanip>
-#include <linalg/vector_q1.hpp>
+#include <linalg/vector_w1.hpp>
 #include <optional>
 
 #include "terra/grid/shell/spherical_shell.hpp"
@@ -119,8 +119,8 @@ int main( int argc, char** argv )
 
     auto rank = terra::grid::shell::allocate_scalar_grid< double >( "rank_data", domain );
 
-    terra::linalg::VectorQ1Scalar< double > data_scalar( "scalar_data", domain, mask_data );
-    terra::linalg::VectorQ1Vec< double >    data_vec( "vec_data", domain, mask_data );
+    terra::linalg::VectorW1Scalar< double > data_scalar( "scalar_data", domain, mask_data );
+    terra::linalg::VectorW1Vec< double >    data_vec( "vec_data", domain, mask_data );
 
     terra::util::prepare_empty_directory( "test_xdmf_writer_output" );
 

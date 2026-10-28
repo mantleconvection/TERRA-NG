@@ -4,7 +4,7 @@
 
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "parameters.hpp"
 #include "terra/plates/plate_velocity_calculator.hpp"
 #include "terra/plates/plate_velocity_provider.hpp"

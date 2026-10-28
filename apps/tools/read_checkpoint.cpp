@@ -2,7 +2,7 @@
 #include <bit>
 #include <fstream>
 #include <iomanip>
-#include <linalg/vector_q1.hpp>
+#include <linalg/vector_w1.hpp>
 #include <optional>
 
 #include "terra/grid/shell/spherical_shell.hpp"
@@ -151,7 +151,7 @@ int main( int argc, char** argv )
                 {
                     if ( grid_data_file.scalar_bytes == 4 )
                     {
-                        terra::linalg::VectorQ1Scalar< float > vec(
+                        terra::linalg::VectorW1Scalar< float > vec(
                             grid_data_file.grid_name_string, domain, mask_data );
                         const auto result = terra::io::read_xdmf_checkpoint_grid(
                             checkpoint_directory, grid_data_file.grid_name_string, 0, domain, vec.grid_data() );
@@ -165,7 +165,7 @@ int main( int argc, char** argv )
                     }
                     else if ( grid_data_file.scalar_bytes == 8 )
                     {
-                        terra::linalg::VectorQ1Scalar< double > vec(
+                        terra::linalg::VectorW1Scalar< double > vec(
                             grid_data_file.grid_name_string, domain, mask_data );
                         const auto result = terra::io::read_xdmf_checkpoint_grid(
                             checkpoint_directory, grid_data_file.grid_name_string, 0, domain, vec.grid_data() );

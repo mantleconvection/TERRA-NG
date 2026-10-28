@@ -9,7 +9,7 @@
 #include "grid/shell/bit_masks.hpp"
 #include "linalg/solvers/pminres.hpp"
 #include "linalg/solvers/richardson.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "terra/dense/mat.hpp"
 #include "terra/fe/wedge/operators/shell/mass.hpp"
 #include "terra/grid/grid_types.hpp"
@@ -29,9 +29,9 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using grid::shell::BoundaryConditions;
 using grid::shell::BoundaryConditionFlag::DIRICHLET;
 using grid::shell::BoundaryConditionFlag::FREESLIP;
@@ -240,22 +240,22 @@ std::pair< double, double > test( int level, const std::shared_ptr< util::Table 
 
     // K w = b
 
-    VectorQ1IsoQ2Q1< ScalarType > w( "w", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > g( "g", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > Kdiagg( "Kdiagg", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > tmp( "tmp", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > solution( "solution", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > error( "error", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > b( "b", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > r( "r", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > w( "w", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > g( "g", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > Kdiagg( "Kdiagg", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > tmp( "tmp", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > solution( "solution", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > error( "error", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > b( "b", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > r( "r", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
 
-    VectorQ1IsoQ2Q1< ScalarType > tmp_0( "tmp_0", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > tmp_1( "tmp_1", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > tmp_2( "tmp_2", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > tmp_3( "tmp_3", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > tmp_4( "tmp_4", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > tmp_5( "tmp_5", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
-    VectorQ1IsoQ2Q1< ScalarType > tmp_6( "tmp_6", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > tmp_0( "tmp_0", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > tmp_1( "tmp_1", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > tmp_2( "tmp_2", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > tmp_3( "tmp_3", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > tmp_4( "tmp_4", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > tmp_5( "tmp_5", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
+    VectorW1IsoW2W1< ScalarType > tmp_6( "tmp_6", domain_fine, domain_coarse, mask_data_fine, mask_data_coarse );
 
     const auto num_dofs_velocity =
         3 * kernels::common::count_masked< long >( mask_data_fine, grid::NodeOwnershipFlag::OWNED );

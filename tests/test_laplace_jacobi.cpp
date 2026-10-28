@@ -24,7 +24,7 @@ using grid::Grid4DDataScalar;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1Scalar;
+using linalg::VectorW1Scalar;
 
 struct SolutionInterpolator
 {
@@ -118,15 +118,15 @@ double test( int level, const std::shared_ptr< util::Table >& table )
     auto mask_data = grid::setup_node_ownership_mask_data( domain );
     auto boundary_mask_data = grid::shell::setup_boundary_mask_data( domain );
 
-    VectorQ1Scalar< ScalarType > u( "u", domain, mask_data );
-    VectorQ1Scalar< ScalarType > g( "g", domain, mask_data );
-    VectorQ1Scalar< ScalarType > Adiagg( "Adiagg", domain, mask_data );
-    VectorQ1Scalar< ScalarType > tmp( "tmp", domain, mask_data );
-    VectorQ1Scalar< ScalarType > solution( "solution", domain, mask_data );
-    VectorQ1Scalar< ScalarType > error( "error", domain, mask_data );
-    VectorQ1Scalar< ScalarType > b( "b", domain, mask_data );
-    VectorQ1Scalar< ScalarType > r( "r", domain, mask_data );
-    VectorQ1Scalar< ScalarType > inv_diag( "inv_diag", domain, mask_data );
+    VectorW1Scalar< ScalarType > u( "u", domain, mask_data );
+    VectorW1Scalar< ScalarType > g( "g", domain, mask_data );
+    VectorW1Scalar< ScalarType > Adiagg( "Adiagg", domain, mask_data );
+    VectorW1Scalar< ScalarType > tmp( "tmp", domain, mask_data );
+    VectorW1Scalar< ScalarType > solution( "solution", domain, mask_data );
+    VectorW1Scalar< ScalarType > error( "error", domain, mask_data );
+    VectorW1Scalar< ScalarType > b( "b", domain, mask_data );
+    VectorW1Scalar< ScalarType > r( "r", domain, mask_data );
+    VectorW1Scalar< ScalarType > inv_diag( "inv_diag", domain, mask_data );
 
     const auto num_dofs = kernels::common::count_masked< long >( mask_data, grid::NodeOwnershipFlag::OWNED );
 

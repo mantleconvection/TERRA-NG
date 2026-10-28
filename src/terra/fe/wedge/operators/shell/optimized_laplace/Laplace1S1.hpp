@@ -7,7 +7,7 @@
 #include "fe/wedge/kernel_helpers.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "quadrature.hpp"
 #include "util/timer.hpp"
 
@@ -17,8 +17,8 @@ template < typename ScalarT, typename QuadRule = quadrature::QuadRuleWedge6Point
 class Laplace1S1
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Scalar< ScalarT >;
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using SrcVectorType = linalg::VectorW1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
   private:

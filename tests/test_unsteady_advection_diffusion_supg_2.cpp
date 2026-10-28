@@ -37,8 +37,8 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 using ScalarType = double;
 
@@ -256,20 +256,20 @@ SweepResult test( int level, ScalarType kappa, const std::shared_ptr< util::Tabl
     auto mask_data          = grid::setup_node_ownership_mask_data( domain );
     auto boundary_mask_data = grid::shell::setup_boundary_mask_data( domain );
 
-    VectorQ1Scalar< ScalarType > T( "T", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data );      // for EV ∂_t E
-    VectorQ1Scalar< ScalarType > nu_h_nodal( "nu_h_nodal", domain, mask_data );
-    VectorQ1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
-    VectorQ1Scalar< ScalarType > kappa_nodal( "kappa_nodal", domain, mask_data );    // EV: κ as a Q1 field for DivKGrad
-    VectorQ1Scalar< ScalarType > M_lumped( "M_lumped", domain, mask_data );          // EV: lumped mass diagonal
-    VectorQ1Scalar< ScalarType > ones_vec( "ones", domain, mask_data );              // EV: helper for M_lumped
-    VectorQ1Scalar< ScalarType > lap_T( "lap_T", domain, mask_data );                // EV: -κ∇²T (pointwise, projected)
-    VectorQ1Scalar< ScalarType > g( "g", domain, mask_data );
-    VectorQ1Scalar< ScalarType > f_strong( "f_strong", domain, mask_data );
-    VectorQ1Scalar< ScalarType > f( "f", domain, mask_data );
-    VectorQ1Vec< ScalarType >    u( "u", domain, mask_data );
-    VectorQ1Scalar< ScalarType > solution( "solution", domain, mask_data );
-    VectorQ1Scalar< ScalarType > error( "error", domain, mask_data );
+    VectorW1Scalar< ScalarType > T( "T", domain, mask_data );
+    VectorW1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data );      // for EV ∂_t E
+    VectorW1Scalar< ScalarType > nu_h_nodal( "nu_h_nodal", domain, mask_data );
+    VectorW1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
+    VectorW1Scalar< ScalarType > kappa_nodal( "kappa_nodal", domain, mask_data );    // EV: κ as a W1 field for DivKGrad
+    VectorW1Scalar< ScalarType > M_lumped( "M_lumped", domain, mask_data );          // EV: lumped mass diagonal
+    VectorW1Scalar< ScalarType > ones_vec( "ones", domain, mask_data );              // EV: helper for M_lumped
+    VectorW1Scalar< ScalarType > lap_T( "lap_T", domain, mask_data );                // EV: -κ∇²T (pointwise, projected)
+    VectorW1Scalar< ScalarType > g( "g", domain, mask_data );
+    VectorW1Scalar< ScalarType > f_strong( "f_strong", domain, mask_data );
+    VectorW1Scalar< ScalarType > f( "f", domain, mask_data );
+    VectorW1Vec< ScalarType >    u( "u", domain, mask_data );
+    VectorW1Scalar< ScalarType > solution( "solution", domain, mask_data );
+    VectorW1Scalar< ScalarType > error( "error", domain, mask_data );
 
     // Per-cell ν_h field.  Cell extents: (n_sub, N-1, N-1, N_r-1).
     const auto num_sub = static_cast< long long >( domain.subdomains().size() );
@@ -288,7 +288,7 @@ SweepResult test( int level, ScalarType kappa, const std::shared_ptr< util::Tabl
     constexpr bool ev_apply = false;
     const fe::wedge::operators::shell::EntropyViscosityParameters< ScalarType > ev_params{};
 
-    std::vector< VectorQ1Scalar< ScalarType > > tmps;
+    std::vector< VectorW1Scalar< ScalarType > > tmps;
     for ( int i = 0; i < 2 * restart + 4; ++i )
     {
         tmps.emplace_back( "tmpp", domain, mask_data );
@@ -557,7 +557,7 @@ SweepResult test( int level, ScalarType kappa, const std::shared_ptr< util::Tabl
         linalg::apply( M, f_strong, tmps[1] );
         // linalg::apply( supg_rhs, tmps[2] );
 
-        // f = M T^n + dt · (M · f_strong + 0)  (VectorQ1Scalar::lincomb supports ≤ 3 inputs).
+        // f = M T^n + dt · (M · f_strong + 0)  (VectorW1Scalar::lincomb supports ≤ 3 inputs).
         lincomb( f, { 1.0, dt, dt }, { tmps[0], tmps[1], tmps[2] } );
 
         // f -= dt · rhs_ev  (explicit EV stabilization, applied in a second pass).

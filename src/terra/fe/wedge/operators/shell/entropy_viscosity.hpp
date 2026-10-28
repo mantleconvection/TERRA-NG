@@ -11,7 +11,7 @@
 #include "grid/shell/bit_masks.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "kernels/common/grid_operations.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -87,7 +87,7 @@ struct EntropyStats
                    ///< normalization factor in the residual branch of ν_h
 };
 
-/// Signed max reduction over owned Q1 nodes.  kernels::common has
+/// Signed max reduction over owned W1 nodes.  kernels::common has
 /// `min_entry` and `max_abs_entry` but not a signed `max_entry`; we provide
 /// one locally so the EV code does not depend on a header edit.
 template < typename ScalarT >
@@ -160,7 +160,7 @@ ScalarT min_entry_owned(
 ///     when T is nearly constant.
 template < typename ScalarT >
 EntropyStats< ScalarT > compute_entropy_stats(
-    const linalg::VectorQ1Scalar< ScalarT >&                 T,
+    const linalg::VectorW1Scalar< ScalarT >&                 T,
     const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& ownership_mask,
     const grid::shell::DistributedDomain&                    domain,
     const grid::Grid3DDataVec< ScalarT, 3 >&                 grid_coords,
@@ -316,7 +316,7 @@ EntropyStats< ScalarT > compute_entropy_stats(
 /// direction in shell convection.  V_wedge^{1/3} mixes lateral and radial
 /// scales and over-inflates ν_E in BL-touching wedges where dr ≪ lateral edge.
 ///
-/// The Lap input is a Q1-nodal field carrying the global lumped-mass
+/// The Lap input is a W1-nodal field carrying the global lumped-mass
 /// projection of −κ∇²T (i.e. (K·T)/M_lumped, with K the global Galerkin
 /// Laplacian and M_lumped the global lumped mass).  Continuity across
 /// element interfaces makes r_E collapse to ≈0 in smooth regions, so ν_h
@@ -326,10 +326,10 @@ EntropyStats< ScalarT > compute_entropy_stats(
 template < typename ScalarT, typename CoeffConfigT >
 void compute_nu_h(
     grid::Grid5DDataScalar< ScalarT >&            nu_h_wedge,
-    const linalg::VectorQ1Scalar< ScalarT >&      T_n,
-    const linalg::VectorQ1Scalar< ScalarT >&      T_nm1,
-    const linalg::VectorQ1Scalar< ScalarT >&      eta,
-    const linalg::VectorQ1Vec< ScalarT, 3 >&      u,
+    const linalg::VectorW1Scalar< ScalarT >&      T_n,
+    const linalg::VectorW1Scalar< ScalarT >&      T_nm1,
+    const linalg::VectorW1Scalar< ScalarT >&      eta,
+    const linalg::VectorW1Vec< ScalarT, 3 >&      u,
     const grid::Grid4DDataScalar< ScalarT >&      lap_data,
     const grid::shell::DistributedDomain&         domain,
     const grid::Grid3DDataVec< ScalarT, 3 >&      grid_coords,
@@ -377,7 +377,7 @@ void compute_nu_h(
             quadrature::quad_felippa_3x2_quad_weights( qw );
 
             // Per-wedge gather of T_n, T_{n-1}, u (3 components), and the
-            // Q1-nodal Lap projection.
+            // W1-nodal Lap projection.
             dense::Vec< ScalarT, num_nodes_per_wedge > eta_w[num_wedges_per_hex_cell];
             dense::Vec< ScalarT, num_nodes_per_wedge > T_w[num_wedges_per_hex_cell];
             dense::Vec< ScalarT, num_nodes_per_wedge > Tp_w[num_wedges_per_hex_cell];

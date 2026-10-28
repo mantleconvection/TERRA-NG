@@ -19,7 +19,7 @@ using grid::Grid4DDataScalar;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1Scalar;
+using linalg::VectorW1Scalar;
 
 struct SomeFunctionInterpolator
 {
@@ -62,8 +62,8 @@ void test_laplace( int level )
     auto mask_data          = grid::setup_node_ownership_mask_data( domain );
     auto boundary_mask_data = grid::shell::setup_boundary_mask_data( domain );
 
-    VectorQ1Scalar< ScalarType > u_src( "u_src", domain, mask_data );
-    VectorQ1Scalar< ScalarType > u_dst( "u_dst", domain, mask_data );
+    VectorW1Scalar< ScalarType > u_src( "u_src", domain, mask_data );
+    VectorW1Scalar< ScalarType > u_dst( "u_dst", domain, mask_data );
 
     const auto subdomain_shell_coords =
         terra::grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
@@ -134,11 +134,11 @@ void test_prolongation( int level )
     auto mask_data_fine   = grid::setup_node_ownership_mask_data( domain_fine );
     auto mask_data_coarse = grid::setup_node_ownership_mask_data( domain_coarse );
 
-    VectorQ1Scalar< ScalarType > u_coarse( "u_coarse", domain_coarse, mask_data_coarse );
-    VectorQ1Scalar< ScalarType > u_fine( "u_fine", domain_fine, mask_data_fine );
+    VectorW1Scalar< ScalarType > u_coarse( "u_coarse", domain_coarse, mask_data_coarse );
+    VectorW1Scalar< ScalarType > u_fine( "u_fine", domain_fine, mask_data_fine );
 
-    VectorQ1Scalar< ScalarType > solution_fine( "solution_fine", domain_fine, mask_data_fine );
-    VectorQ1Scalar< ScalarType > error_fine( "error_fine", domain_fine, mask_data_fine );
+    VectorW1Scalar< ScalarType > solution_fine( "solution_fine", domain_fine, mask_data_fine );
+    VectorW1Scalar< ScalarType > error_fine( "error_fine", domain_fine, mask_data_fine );
 
     const auto subdomain_shell_coords_fine =
         terra::grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain_fine );

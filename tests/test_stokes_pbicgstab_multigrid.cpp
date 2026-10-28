@@ -17,7 +17,7 @@
 #include "linalg/solvers/pcg.hpp"
 #include "linalg/solvers/pminres.hpp"
 #include "linalg/solvers/richardson.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "terra/dense/mat.hpp"
 #include "terra/fe/wedge/operators/shell/mass.hpp"
 #include "terra/grid/grid_types.hpp"
@@ -37,9 +37,9 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using grid::shell::BoundaryConditions;
 using grid::shell::BoundaryConditionFlag::DIRICHLET;
 using grid::shell::BoundaryConditionFlag::FREESLIP;
@@ -255,7 +255,7 @@ std::pair< double, double > test( int min_level, int max_level, const std::share
 
     // Set up Stokes vectors for the finest grid.
 
-    std::map< std::string, VectorQ1IsoQ2Q1< ScalarType > > stok_vecs;
+    std::map< std::string, VectorW1IsoW2W1< ScalarType > > stok_vecs;
     std::vector< std::string >                             stok_vec_names = { "u", "f", "solution", "error" };
     constexpr int                                          num_stok_tmps  = 8;
 
@@ -266,7 +266,7 @@ std::pair< double, double > test( int min_level, int max_level, const std::share
 
     for ( const auto& name : stok_vec_names )
     {
-        stok_vecs[name] = VectorQ1IsoQ2Q1< ScalarType >(
+        stok_vecs[name] = VectorW1IsoW2W1< ScalarType >(
             name,
             domains[velocity_level],
             domains[pressure_level],
@@ -281,9 +281,9 @@ std::pair< double, double > test( int min_level, int max_level, const std::share
 
     // Set up tmp vecs for multigrid.
 
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg;
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg_r;
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg_e;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg_r;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg_e;
 
     for ( int level = 0; level < num_levels; level++ )
     {
@@ -354,7 +354,7 @@ std::pair< double, double > test( int min_level, int max_level, const std::share
     std::vector< Prolongation > P;
     std::vector< Restriction >  R;
 
-    std::vector< VectorQ1Vec< ScalarType > > inverse_diagonals;
+    std::vector< VectorW1Vec< ScalarType > > inverse_diagonals;
 
     for ( int level = 0; level < num_levels; level++ )
     {
@@ -364,7 +364,7 @@ std::pair< double, double > test( int min_level, int max_level, const std::share
         inverse_diagonals.emplace_back(
             "inverse_diagonal_" + std::to_string( level ), domains[level], mask_data[level] );
 
-        VectorQ1Vec< ScalarType > tmp(
+        VectorW1Vec< ScalarType > tmp(
             "inverse_diagonal_tmp" + std::to_string( level ), domains[level], mask_data[level] );
 
         linalg::assign( tmp, 1.0 );
@@ -446,7 +446,7 @@ std::pair< double, double > test( int min_level, int max_level, const std::share
 
     using CoarseGridSolver = linalg::solvers::PCG< Viscous >;
 
-    std::vector< VectorQ1Vec< ScalarType > > coarse_grid_tmps;
+    std::vector< VectorW1Vec< ScalarType > > coarse_grid_tmps;
     for ( int i = 0; i < 4; i++ )
     {
         coarse_grid_tmps.emplace_back( "tmp_coarse_grid", domains[0], mask_data[0] );
@@ -475,7 +475,7 @@ std::pair< double, double > test( int min_level, int max_level, const std::share
 
     linalg::solvers::IterativeSolverParameters solver_params{ 100, 1e-8, 1e-12 };
 
-    std::vector< VectorQ1IsoQ2Q1< ScalarType > > tmp_bicgstab( 8 );
+    std::vector< VectorW1IsoW2W1< ScalarType > > tmp_bicgstab( 8 );
     for ( int i = 0; i < 8; i++ )
     {
         tmp_bicgstab[i] = stok_vecs["tmp_" + std::to_string( i )];

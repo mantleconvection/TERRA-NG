@@ -5,30 +5,30 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "kernels/common/grid_operations.hpp"
 #include "vector.hpp"
-#include "vector_q1.hpp"
+#include "vector_w1.hpp"
 
 namespace terra::linalg {
 
-/// @brief Block vector consisting of a Q1 vector and a Q1 scalar vector on distributed shell grids.
+/// @brief Block vector consisting of a W1 vector and a W1 scalar vector on distributed shell grids.
 ///
 /// Same layout as required for tensor-product wedge elements.
 ///
 /// Satisfies the Block2VectorLike concept (see vector.hpp).
-/// Used for mixed finite element methods (e.g., Q1isoQ2-Q1).
+/// Used for mixed finite element methods (e.g., W1isoW2-W1).
 template < typename ScalarT, int VecDim = 3 >
-class VectorQ1IsoQ2Q1
+class VectorW1IsoW2W1
 {
   public:
     /// @brief Scalar type of the block vector.
     using ScalarType = ScalarT;
 
     /// @brief Type of the first block (vector field).
-    using Block1Type = VectorQ1Vec< ScalarType, VecDim >;
+    using Block1Type = VectorW1Vec< ScalarType, VecDim >;
     /// @brief Type of the second block (scalar field).
-    using Block2Type = VectorQ1Scalar< ScalarType >;
+    using Block2Type = VectorW1Scalar< ScalarType >;
 
     /// @brief Default constructor.
-    VectorQ1IsoQ2Q1() = default;
+    VectorW1IsoW2W1() = default;
 
     /// @brief Construct a block vector with labels, domains, and mask data for both blocks.
     /// @param label Name for the vector.
@@ -36,7 +36,7 @@ class VectorQ1IsoQ2Q1
     /// @param distributed_domain_coarse Distributed shell domain for the scalar block.
     /// @param mask_data_fine Mask data for the vector block.
     /// @param mask_data_coarse Mask data for the scalar block.
-    VectorQ1IsoQ2Q1(
+    VectorW1IsoW2W1(
         const std::string&                                       label,
         const grid::shell::DistributedDomain&                    distributed_domain_fine,
         const grid::shell::DistributedDomain&                    distributed_domain_coarse,
@@ -52,7 +52,7 @@ class VectorQ1IsoQ2Q1
     /// @param x Input block vectors.
     /// @param c0 Scalar to add.
     void
-        lincomb_impl( const std::vector< ScalarType >& c, const std::vector< VectorQ1IsoQ2Q1 >& x, const ScalarType c0 )
+        lincomb_impl( const std::vector< ScalarType >& c, const std::vector< VectorW1IsoW2W1 >& x, const ScalarType c0 )
     {
         std::vector< Block1Type > us;
         std::vector< Block2Type > ps;
@@ -71,7 +71,7 @@ class VectorQ1IsoQ2Q1
     /// Computes: \f$ \text{block}_1 \cdot x.\text{block}_1 + \text{block}_2 \cdot x.\text{block}_2 \f$
     /// @param x Other block vector.
     /// @return Dot product value.
-    ScalarType dot_impl( const VectorQ1IsoQ2Q1& x ) const
+    ScalarType dot_impl( const VectorW1IsoW2W1& x ) const
     {
         return x.block_1().dot_impl( u_ ) + x.block_2().dot_impl( p_ );
     }
@@ -87,7 +87,7 @@ class VectorQ1IsoQ2Q1
     /// @brief Elementwise scaling implementation for Block2VectorLike concept.
     /// Computes: \f$ \text{block}_1 = \text{block}_1 \cdot x.\text{block}_1 \f$, \f$ \text{block}_2 = \text{block}_2 \cdot x.\text{block}_2 \f$
     /// @param x Scaling block vector.
-    void scale_with_vector_impl( const VectorQ1IsoQ2Q1& x )
+    void scale_with_vector_impl( const VectorW1IsoW2W1& x )
     {
         block_1().scale_with_vector_impl( x.block_1() );
         block_2().scale_with_vector_impl( x.block_2() );
@@ -135,7 +135,7 @@ class VectorQ1IsoQ2Q1
     /// @brief Swap implementation for Block2VectorLike concept.
     /// Exchanges the contents of both blocks with another block vector.
     /// @param other Other block vector.
-    void swap_impl( VectorQ1IsoQ2Q1& other )
+    void swap_impl( VectorW1IsoW2W1& other )
     {
         u_.swap_impl( other.u_ );
         p_.swap_impl( other.p_ );
@@ -170,27 +170,27 @@ class VectorQ1IsoQ2Q1
     Block2Type p_; ///< Scalar block (pressure, etc.)
 };
 
-/// @brief Static assertion: VectorQ1IsoQ2Q1 satisfies Block2VectorLike concept.
-static_assert( Block2VectorLike< VectorQ1IsoQ2Q1< double > > );
+/// @brief Static assertion: VectorW1IsoW2W1 satisfies Block2VectorLike concept.
+static_assert( Block2VectorLike< VectorW1IsoW2W1< double > > );
 
 /// @brief Copy a block vector into another of (possibly) different scalar precision.
 /// Elementwise cast on both blocks. Used to keep a low-precision Krylov basis while
 /// the solver/operator run in higher precision.
 template < typename DstScalar, typename SrcScalar, int VecDim >
-void convert( const VectorQ1IsoQ2Q1< SrcScalar, VecDim >& src, VectorQ1IsoQ2Q1< DstScalar, VecDim >& dst )
+void convert( const VectorW1IsoW2W1< SrcScalar, VecDim >& src, VectorW1IsoW2W1< DstScalar, VecDim >& dst )
 {
     kernels::common::copy_convert( src.block_1().grid_data(), dst.block_1().grid_data() );
     kernels::common::copy_convert( src.block_2().grid_data(), dst.block_2().grid_data() );
 }
 
-/// @brief Allocate a VectorQ1IsoQ2Q1 block vector with grid data for both blocks.
+/// @brief Allocate a VectorW1IsoW2W1 block vector with grid data for both blocks.
 /// @param label Name for the vector.
 /// @param distributed_domain_fine Distributed shell domain for the vector block.
 /// @param distributed_domain_coarse Distributed shell domain for the scalar block.
 /// @param level Multigrid level.
-/// @return Allocated VectorQ1IsoQ2Q1 block vector.
+/// @return Allocated VectorW1IsoW2W1 block vector.
 template < typename ValueType, int VecDim = 3 >
-VectorQ1IsoQ2Q1< ValueType, VecDim > allocate_vector_q1isoq2_q1(
+VectorW1IsoW2W1< ValueType, VecDim > allocate_vector_q1isoq2_q1(
     const std::string                     label,
     const grid::shell::DistributedDomain& distributed_domain_fine,
     const grid::shell::DistributedDomain& distributed_domain_coarse,
@@ -210,7 +210,7 @@ VectorQ1IsoQ2Q1< ValueType, VecDim > allocate_vector_q1isoq2_q1(
         distributed_domain_coarse.domain_info().subdomain_num_nodes_per_side_laterally(),
         distributed_domain_coarse.domain_info().subdomain_num_nodes_radially() );
 
-    VectorQ1IsoQ2Q1< ValueType, VecDim > vector_q1isoq2_q1;
+    VectorW1IsoW2W1< ValueType, VecDim > vector_q1isoq2_q1;
     vector_q1isoq2_q1.block_1().add_grid_data( grid_data_fine, level );
     vector_q1isoq2_q1.block_2().add_grid_data( grid_data_coarse, level );
     return vector_q1isoq2_q1;

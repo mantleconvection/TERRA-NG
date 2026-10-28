@@ -287,7 +287,7 @@ struct StokesSolverParameters
 };
 
 /// Time-discretization scheme for the energy (temperature) equation.
-///   SUPG : implicit SUPG-stabilised Galerkin advection-diffusion on the Q1 mesh,
+///   SUPG : implicit SUPG-stabilised Galerkin advection-diffusion on the W1 mesh,
 ///          solved by FGMRES.  Unconditionally stable (dt only bounded by the
 ///          *advection* CFL for accuracy), so allows much larger dt at moderate Pe.
 ///          Linear-solver convergence degrades at high Pe (Ra >> 1e6).

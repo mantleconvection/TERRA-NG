@@ -34,7 +34,7 @@ using grid::Grid4DDataScalar;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1Scalar;
+using linalg::VectorW1Scalar;
 
 struct SolutionInterpolator
 {
@@ -136,18 +136,18 @@ double
     std::vector< Grid4DDataScalar< grid::NodeOwnershipFlag > >        mask_data;
     std::vector< Grid4DDataScalar< grid::shell::ShellBoundaryFlag > > boundary_mask_data;
 
-    std::vector< VectorQ1Scalar< ScalarType > > tmp_r_c;
-    std::vector< VectorQ1Scalar< ScalarType > > tmp_e_c;
-    std::vector< VectorQ1Scalar< ScalarType > > tmp;
+    std::vector< VectorW1Scalar< ScalarType > > tmp_r_c;
+    std::vector< VectorW1Scalar< ScalarType > > tmp_e_c;
+    std::vector< VectorW1Scalar< ScalarType > > tmp;
     std::vector< Laplace >                      A_c;
     std::vector< Prolongation >                 P_additive;
     std::vector< Restriction >                  R;
 
     std::vector< Smoother > smoothers;
 
-    std::vector< VectorQ1Scalar< ScalarType > > coarse_grid_tmps;
+    std::vector< VectorW1Scalar< ScalarType > > coarse_grid_tmps;
 
-    std::vector< VectorQ1Scalar< ScalarType > > tmp_bicgstab;
+    std::vector< VectorW1Scalar< ScalarType > > tmp_bicgstab;
 
     for ( int level = 0; level <= max_level; level++ )
     {
@@ -167,9 +167,9 @@ double
     {
         tmp.emplace_back( "tmp_level_" + std::to_string( level ), domains[level], mask_data[level] );
 
-        VectorQ1Scalar< ScalarType > tmp_smoother(
+        VectorW1Scalar< ScalarType > tmp_smoother(
             "tmp_smoothers_level_" + std::to_string( level ), domains[level], mask_data[level] );
-        VectorQ1Scalar< ScalarType > inverse_diagonal(
+        VectorW1Scalar< ScalarType > inverse_diagonal(
             "inv_diag_level_" + std::to_string( level ), domains[level], mask_data[level] );
         Laplace A_diag(
             domains[level],
@@ -238,10 +238,10 @@ double
         }
     }
 
-    VectorQ1Scalar< ScalarType > u( "u", domains.back(), mask_data.back() );
-    VectorQ1Scalar< ScalarType > f( "f", domains.back(), mask_data.back() );
-    VectorQ1Scalar< ScalarType > solution( "solution", domains.back(), mask_data.back() );
-    VectorQ1Scalar< ScalarType > error( "error", domains.back(), mask_data.back() );
+    VectorW1Scalar< ScalarType > u( "u", domains.back(), mask_data.back() );
+    VectorW1Scalar< ScalarType > f( "f", domains.back(), mask_data.back() );
+    VectorW1Scalar< ScalarType > solution( "solution", domains.back(), mask_data.back() );
+    VectorW1Scalar< ScalarType > error( "error", domains.back(), mask_data.back() );
 
     const auto num_dofs = kernels::common::count_masked< long >( mask_data.back(), grid::NodeOwnershipFlag::OWNED );
     std::cout << "num_dofs = " << num_dofs << std::endl;

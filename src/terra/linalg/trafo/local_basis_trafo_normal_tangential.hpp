@@ -1,6 +1,6 @@
 #pragma once
 
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/dense/mat.hpp"
 #include "terra/dense/vec.hpp"
 #include "terra/kokkos/kokkos_wrapper.hpp"
@@ -100,7 +100,7 @@ KOKKOS_INLINE_FUNCTION dense::Mat< ScalarType, 3, 3 >
 
 template < std::floating_point ScalarType, std::floating_point ScalarTypeGrid, util::FlagLike FlagType >
 void cartesian_to_normal_tangential_in_place(
-    VectorQ1Vec< ScalarType, 3 >&                   vec_cartesian,
+    VectorW1Vec< ScalarType, 3 >&                   vec_cartesian,
     const grid::Grid3DDataVec< ScalarTypeGrid, 3 >& coords_shell,
     const grid::Grid4DDataScalar< FlagType >        mask_data,
     const FlagType&                                 flag )
@@ -144,7 +144,7 @@ void cartesian_to_normal_tangential_in_place(
 
 template < std::floating_point ScalarType, std::floating_point ScalarTypeGrid, util::FlagLike FlagType >
 void normal_tangential_to_cartesian_in_place(
-    VectorQ1Vec< ScalarType, 3 >&                   vec_normal_tangential,
+    VectorW1Vec< ScalarType, 3 >&                   vec_normal_tangential,
     const grid::Grid3DDataVec< ScalarTypeGrid, 3 >& coords_shell,
     const grid::Grid4DDataScalar< FlagType >        mask_data,
     const FlagType&                                 flag )

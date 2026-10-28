@@ -38,8 +38,8 @@
 #include "linalg/solvers/pcg.hpp"
 #include "linalg/solvers/power_iteration.hpp"
 #include "linalg/solvers/velocity_prec_handle.hpp"
-#include "linalg/vector_q1.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "low_prec_vcycle.hpp"
 #include "mpi/level_comms.hpp"
 #include "mpi/mpi.hpp"
@@ -175,7 +175,7 @@ class StokesContext
     // no half arithmetic is instantiated; entries (~6e-5) are covered by FP16 denorms.
     // (BF16 would need Kokkos >= 5.1.0 and gives no benefit here -- fewer mantissa
     //  bits, and FP16's range proved sufficient.)
-    using BasisVectorType = linalg::VectorQ1IsoQ2Q1< Kokkos::Experimental::bhalf_t, 3 >;
+    using BasisVectorType = linalg::VectorW1IsoW2W1< Kokkos::Experimental::bhalf_t, 3 >;
     using FGMRESDouble    = linalg::solvers::FGMRES< Stokes, PrecStokes >;
     using FGMRESFloat     = linalg::solvers::FGMRESLowMem< Stokes, BasisVectorType, PrecStokes >;
 
@@ -210,9 +210,9 @@ class StokesContext
                                                                             prm.mesh_parameters.refinement_level_subdomains;
         const auto& agglom_factors = agglom.factors();
         using grid::shell::DistributedDomain;
-        using linalg::VectorQ1IsoQ2Q1;
-        using linalg::VectorQ1Scalar;
-        using linalg::VectorQ1Vec;
+        using linalg::VectorW1IsoW2W1;
+        using linalg::VectorW1Scalar;
+        using linalg::VectorW1Vec;
         using util::logroot;
 
         num_dofs_pressure_ =
@@ -225,7 +225,7 @@ class StokesContext
         std::vector< std::string > stok_vec_names = { "u", "f", "u_prev" };
         for ( const auto& name : stok_vec_names )
         {
-            stok_vecs_[name] = VectorQ1IsoQ2Q1< ScalarType >(
+            stok_vecs_[name] = VectorW1IsoW2W1< ScalarType >(
                 name,
                 *domains_[velocity_level_],
                 *domains_[pressure_level_],
@@ -234,7 +234,7 @@ class StokesContext
         }
 
         // ---------------- Viscosity ----------------
-        // Radial profile (constant or CSV-driven), then projected into Q1 on every level.
+        // Radial profile (constant or CSV-driven), then projected into W1 on every level.
         std::vector< grid::Grid2DDataScalar< ScalarType > > radial_viscosity_profile;
         radial_viscosity_profile.reserve( num_levels_ );
         if ( prm_.physics_parameters.viscosity_parameters.viscosity_profile_csv_path.empty() )
@@ -285,7 +285,7 @@ class StokesContext
         eta_profile_ = radial_viscosity_profile[velocity_level_];
 
         // ---------------- GCA element selection ----------------
-        GCAElements_  = VectorQ1Scalar< ScalarType >( "GCAElements", *domains_[0], ownership_mask_[0] );
+        GCAElements_  = VectorW1Scalar< ScalarType >( "GCAElements", *domains_[0], ownership_mask_[0] );
         const int gca = prm_.stokes_solver_parameters.gca;
         if ( gca > 0 && std::any_of( agglom_factors.begin(), agglom_factors.end(), []( int f ) { return f > 1; } ) )
         {
@@ -430,7 +430,7 @@ class StokesContext
                 if ( domains_[level]->comm() == MPI_COMM_NULL )
                     continue;
 
-                VectorQ1Vec< ScalarType > tmp(
+                VectorW1Vec< ScalarType > tmp(
                     "inverse_diagonal_tmp" + std::to_string( level ), *domains_[level], ownership_mask_[level] );
                 linalg::assign( tmp, ScalarType( 1 ) );
                 if ( level == num_levels_ - 1 )
@@ -453,7 +453,7 @@ class StokesContext
             smoothers_.reserve( num_levels_ );
             for ( int level = 0; level < num_levels_; level++ )
             {
-                std::vector< VectorQ1Vec< ScalarType > > smoother_tmps;
+                std::vector< VectorW1Vec< ScalarType > > smoother_tmps;
                 smoother_tmps.push_back( tmp_mg_[level] );
                 smoother_tmps.push_back( tmp_mg_2_[level] );
 
@@ -474,8 +474,8 @@ class StokesContext
                     if ( domains_[level]->comm() == MPI_COMM_NULL )
                         continue;
 
-                    VectorQ1Vec< ScalarType > tmp_pi_it( "cheby_est_tmpIt", *domains_[level], ownership_mask_[level] );
-                    VectorQ1Vec< ScalarType > tmp_pi_aux(
+                    VectorW1Vec< ScalarType > tmp_pi_it( "cheby_est_tmpIt", *domains_[level], ownership_mask_[level] );
+                    VectorW1Vec< ScalarType > tmp_pi_aux(
                         "cheby_est_tmpAux", *domains_[level], ownership_mask_[level] );
                     const auto log_level = prm_.mesh_parameters.refinement_level_mesh_min + level;
                     auto&      A_lvl     = ( level == num_levels_ - 1 ) ? K_->block_11() : A_c_[level];
@@ -508,8 +508,8 @@ class StokesContext
             const int num_mg_levels = num_levels_;
 
             std::vector< Redistribute >              redistribute_down;
-            std::vector< VectorQ1Vec< ScalarType > > tmp_mg_r_fine;
-            std::vector< VectorQ1Vec< ScalarType > > tmp_mg_e_fine;
+            std::vector< VectorW1Vec< ScalarType > > tmp_mg_r_fine;
+            std::vector< VectorW1Vec< ScalarType > > tmp_mg_e_fine;
 
             if ( !agglom_factors.empty() )
             {
@@ -608,7 +608,7 @@ class StokesContext
 
         // ---------------- Schur preconditioner ----------------
         logroot << "Setting up Schur complement preconditioner ..." << std::endl;
-        k_pm_ = VectorQ1Scalar< ScalarType >( "k_pm", *domains_[pressure_level_], ownership_mask_[pressure_level_] );
+        k_pm_ = VectorW1Scalar< ScalarType >( "k_pm", *domains_[pressure_level_], ownership_mask_[pressure_level_] );
         assign( k_pm_, eta_[pressure_level_] );
         linalg::invert_entries( k_pm_ );
 
@@ -620,10 +620,10 @@ class StokesContext
             false );
         pmass_->set_lumped_diagonal( true );
 
-        lumped_diagonal_pmass_ = VectorQ1Scalar< ScalarType >(
+        lumped_diagonal_pmass_ = VectorW1Scalar< ScalarType >(
             "lumped_diagonal_pmass", *domains_[pressure_level_], ownership_mask_[pressure_level_] );
         {
-            VectorQ1Scalar< ScalarType > tmp(
+            VectorW1Scalar< ScalarType > tmp(
                 "inverse_diagonal_tmp" + std::to_string( pressure_level_ ),
                 *domains_[pressure_level_],
                 ownership_mask_[pressure_level_] );
@@ -634,7 +634,7 @@ class StokesContext
 
         // ---------------- Outer block-triangular preconditioner ----------------
         logroot << "Setting up outer block-preconditioner ..." << std::endl;
-        triangular_prec_tmp_ = VectorQ1IsoQ2Q1< ScalarType >(
+        triangular_prec_tmp_ = VectorW1IsoW2W1< ScalarType >(
             "triangular_prec_tmp",
             *domains_[velocity_level_],
             *domains_[pressure_level_],
@@ -747,8 +747,8 @@ class StokesContext
 
     // Public accessors needed by the rest of the app.
 
-    linalg::VectorQ1IsoQ2Q1< ScalarType >& solution() { return stok_vecs_["u"]; }
-    linalg::VectorQ1Scalar< ScalarType >&  eta_fine() { return eta_[velocity_level_]; }
+    linalg::VectorW1IsoW2W1< ScalarType >& solution() { return stok_vecs_["u"]; }
+    linalg::VectorW1Scalar< ScalarType >&  eta_fine() { return eta_[velocity_level_]; }
     long                                   num_dofs_pressure() const { return num_dofs_pressure_; }
     const grid::shell::BoundaryConditions& boundary_conditions() const { return bcs_; }
 
@@ -756,7 +756,7 @@ class StokesContext
     /// configured viscosity law. No-op for ViscosityLaw::CONSTANT. Coarse-
     /// level eta (used by MG smoothing/coarse solves) is intentionally not
     /// touched, matching the pre-refactor behavior.
-    void update_viscosity( const linalg::VectorQ1Scalar< ScalarType >& T )
+    void update_viscosity( const linalg::VectorW1Scalar< ScalarType >& T )
     {
         if ( prm_.physics_parameters.viscosity_parameters.law == ViscosityLaw::CONSTANT )
             return;
@@ -785,8 +785,8 @@ class StokesContext
     /// in either case the table is cleared at the end of the call.
     template < typename RhoFieldType >
     void solve(
-        const linalg::VectorQ1Scalar< ScalarType >&                   T_for_buoyancy,
-        const std::optional< linalg::VectorQ1IsoQ2Q1< ScalarType > >& u_dirichlet,
+        const linalg::VectorW1Scalar< ScalarType >&                   T_for_buoyancy,
+        const std::optional< linalg::VectorW1IsoW2W1< ScalarType > >& u_dirichlet,
         const RhoFieldType&                                           rho,
         const grid::Grid2DDataScalar< ScalarType >&                   alpha,
         bool                                                          compressible,
@@ -913,19 +913,19 @@ class StokesContext
     // Owned per-level state. Order matters: data members declared earlier are
     // destroyed later, so things that other members hold by-reference (eta_,
     // stok_vecs_, *_tmp_*) must come first.
-    std::vector< linalg::VectorQ1Scalar< ScalarType > >            eta_;
-    linalg::VectorQ1Scalar< ScalarType >                           GCAElements_;
-    std::map< std::string, linalg::VectorQ1IsoQ2Q1< ScalarType > > stok_vecs_;
-    std::vector< linalg::VectorQ1IsoQ2Q1< ScalarType > >           stokes_tmp_fgmres_;   // double path
-    std::vector< linalg::VectorQ1IsoQ2Q1< ScalarType > >           stokes_work_fgmres_;  // float-basis path: scratch
+    std::vector< linalg::VectorW1Scalar< ScalarType > >            eta_;
+    linalg::VectorW1Scalar< ScalarType >                           GCAElements_;
+    std::map< std::string, linalg::VectorW1IsoW2W1< ScalarType > > stok_vecs_;
+    std::vector< linalg::VectorW1IsoW2W1< ScalarType > >           stokes_tmp_fgmres_;   // double path
+    std::vector< linalg::VectorW1IsoW2W1< ScalarType > >           stokes_work_fgmres_;  // float-basis path: scratch
     std::vector< BasisVectorType >                                 stokes_basis_fgmres_; // float-basis path: basis
-    linalg::VectorQ1Scalar< ScalarType >                           tala_rhs_tmp_;
-    std::vector< linalg::VectorQ1Vec< ScalarType > >               tmp_mg_;
-    std::vector< linalg::VectorQ1Vec< ScalarType > >               tmp_mg_2_;
-    std::vector< linalg::VectorQ1Vec< ScalarType > >               tmp_mg_r_;
-    std::vector< linalg::VectorQ1Vec< ScalarType > >               tmp_mg_e_;
-    std::vector< linalg::VectorQ1Vec< ScalarType > >               inverse_diagonals_;
-    std::vector< linalg::VectorQ1Vec< ScalarType > >               coarse_grid_tmps_;
+    linalg::VectorW1Scalar< ScalarType >                           tala_rhs_tmp_;
+    std::vector< linalg::VectorW1Vec< ScalarType > >               tmp_mg_;
+    std::vector< linalg::VectorW1Vec< ScalarType > >               tmp_mg_2_;
+    std::vector< linalg::VectorW1Vec< ScalarType > >               tmp_mg_r_;
+    std::vector< linalg::VectorW1Vec< ScalarType > >               tmp_mg_e_;
+    std::vector< linalg::VectorW1Vec< ScalarType > >               inverse_diagonals_;
+    std::vector< linalg::VectorW1Vec< ScalarType > >               coarse_grid_tmps_;
 
     // Heavy operators / solvers held via unique_ptr so we can construct in
     // body order (rather than fighting member-init order).
@@ -946,14 +946,14 @@ class StokesContext
     std::unique_ptr< PrecVisc > prec_11_;
 
     // Schur preconditioner pieces.
-    linalg::VectorQ1Scalar< ScalarType > k_pm_;
+    linalg::VectorW1Scalar< ScalarType > k_pm_;
     std::unique_ptr< PressureMass >      pmass_;
-    linalg::VectorQ1Scalar< ScalarType > lumped_diagonal_pmass_;
+    linalg::VectorW1Scalar< ScalarType > lumped_diagonal_pmass_;
     std::unique_ptr< PrecSchur >         inv_lumped_pmass_;
 
     // Outer Stokes preconditioner / solver. Exactly one of the two FGMRES variants
     // is allocated, selected by use_float_basis_ (--stokes-float-krylov-basis).
-    linalg::VectorQ1IsoQ2Q1< ScalarType > triangular_prec_tmp_;
+    linalg::VectorW1IsoW2W1< ScalarType > triangular_prec_tmp_;
     std::unique_ptr< PrecStokes >         prec_stokes_;
     bool                                  use_float_basis_ = false;
     std::unique_ptr< FGMRESDouble >       stokes_fgmres_double_;

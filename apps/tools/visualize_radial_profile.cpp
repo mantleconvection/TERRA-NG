@@ -1,7 +1,7 @@
 
 #include <fstream>
 #include <iomanip>
-#include <linalg/vector_q1.hpp>
+#include <linalg/vector_w1.hpp>
 #include <optional>
 
 #include "shell/radial_profiles.hpp"

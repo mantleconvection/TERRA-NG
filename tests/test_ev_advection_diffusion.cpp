@@ -9,7 +9,7 @@
 //   LHS:  (M + dt·A_pureGalerkin) · T^{n+1} = f        (kerngen A, set_supg_enabled(false))
 //   RHS:  f = M·T^n  -  dt·∫ ν_h ∇T^n · ∇φ_i dx          (per-wedge EV diffusion)
 //   ν_h:  computed each step via per-wedge compute_nu_h    (new API)
-//   lap_T (Q1-nodal): (A_kappa · T) / M_lumped, Dirichlet zeroed
+//   lap_T (W1-nodal): (A_kappa · T) / M_lumped, Dirichlet zeroed
 //   T_{n-1}: rotated from T BEFORE the solve overwrites T
 //   Dirichlet BCs: time-dependent, set from the exact rotated-Gaussian solution.
 //
@@ -47,8 +47,8 @@ using grid::Grid4DDataScalar;
 using grid::Grid4DDataVec;
 using grid::Grid5DDataScalar;
 using grid::shell::DistributedDomain;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 using ScalarType = double;
 
@@ -218,16 +218,16 @@ int test( const int level, const ScalarType kappa )
     auto mask_data          = grid::setup_node_ownership_mask_data( domain );
     auto boundary_mask_data = grid::shell::setup_boundary_mask_data( domain );
 
-    VectorQ1Scalar< ScalarType > T( "T", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data );
-    VectorQ1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
-    VectorQ1Scalar< ScalarType > M_lumped( "M_lumped", domain, mask_data );
-    VectorQ1Scalar< ScalarType > lap_T( "lap_T", domain, mask_data );
-    VectorQ1Scalar< ScalarType > g( "g", domain, mask_data );
-    VectorQ1Scalar< ScalarType > f( "f", domain, mask_data );
-    VectorQ1Vec< ScalarType >    u( "u", domain, mask_data );
-    VectorQ1Scalar< ScalarType > solution( "solution", domain, mask_data );
-    VectorQ1Scalar< ScalarType > error( "error", domain, mask_data );
+    VectorW1Scalar< ScalarType > T( "T", domain, mask_data );
+    VectorW1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data );
+    VectorW1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
+    VectorW1Scalar< ScalarType > M_lumped( "M_lumped", domain, mask_data );
+    VectorW1Scalar< ScalarType > lap_T( "lap_T", domain, mask_data );
+    VectorW1Scalar< ScalarType > g( "g", domain, mask_data );
+    VectorW1Scalar< ScalarType > f( "f", domain, mask_data );
+    VectorW1Vec< ScalarType >    u( "u", domain, mask_data );
+    VectorW1Scalar< ScalarType > solution( "solution", domain, mask_data );
+    VectorW1Scalar< ScalarType > error( "error", domain, mask_data );
 
     // Per-wedge ν_h and κ_wedge for the new EV API.
     const auto num_sub = static_cast< long long >( domain.subdomains().size() );
@@ -240,12 +240,12 @@ int test( const int level, const ScalarType kappa )
         "kappa_wedge", num_sub, nx_c, nx_c, nr_c );
     kernels::common::set_constant( kappa_wedge, kappa );
 
-    VectorQ1Scalar< ScalarType > eta_test_wedge( "eta_test_wedge", domain, mask_data );
+    VectorW1Scalar< ScalarType > eta_test_wedge( "eta_test_wedge", domain, mask_data );
     linalg::assign( eta_test_wedge, ScalarType( 0 ) );
 
     const fe::wedge::operators::shell::EntropyViscosityParameters< ScalarType > ev_params{};
 
-    std::vector< VectorQ1Scalar< ScalarType > > tmps;
+    std::vector< VectorW1Scalar< ScalarType > > tmps;
     tmps.reserve( 2 * restart + 4 );
     for ( int i = 0; i < 2 * restart + 4; ++i )
         tmps.emplace_back( "tmpp", domain, mask_data );
@@ -274,7 +274,7 @@ int test( const int level, const ScalarType kappa )
 
     // M_lumped = M · 1.
     {
-        VectorQ1Scalar< ScalarType > ones( "ones", domain, mask_data );
+        VectorW1Scalar< ScalarType > ones( "ones", domain, mask_data );
         linalg::assign( ones, ScalarType( 1 ) );
         linalg::assign( M_lumped, ScalarType( 0 ) );
         linalg::apply( M, ones, M_lumped );

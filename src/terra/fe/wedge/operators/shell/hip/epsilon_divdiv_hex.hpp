@@ -9,8 +9,8 @@
 //   - team_shmem_size_dn_hex() helper for scratch sizing
 //   - run_team_fast_dirichlet_neumann_hex<Diagonal>() team entry point
 //
-// Full 2x2x2 Gauss integration on the trilinear Q1 hex (no wedge subdivision).
-// 1-pt Gauss on Q1 hex is rank-deficient (hourglass modes) and unsuitable as a
+// Full 2x2x2 Gauss integration on the trilinear W1 hex (no wedge subdivision).
+// 1-pt Gauss on W1 hex is rank-deficient (hourglass modes) and unsuitable as a
 // standalone matvec kernel for an iterative solver. 2x2x2 is the standard
 // minimum "fully integrated" rule that gives a full-rank local stiffness on
 // any non-degenerate hex.

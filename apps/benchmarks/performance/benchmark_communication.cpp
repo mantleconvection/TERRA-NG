@@ -32,7 +32,7 @@
 #include "fe/wedge/operators/shell/vector_laplace_simple.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/dense/mat.hpp"
 #include "terra/dense/vec.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
@@ -48,9 +48,9 @@ using linalg::apply;
 using linalg::DstOf;
 using linalg::OperatorLike;
 using linalg::SrcOf;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using terra::grid::shell::BoundaryConditions;
 using util::logroot;
 

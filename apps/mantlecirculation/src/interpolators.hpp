@@ -14,8 +14,8 @@ using grid::Grid3DDataVec;
 using grid::Grid4DDataScalar;
 using grid::Grid4DDataVec;
 
-// Interpolate from radial profile to Q1 field
-struct RadialProfileToQ1
+// Interpolate from radial profile to W1 field
+struct RadialProfileToW1
 {
     Grid4DDataScalar< ScalarType > data_;
     Grid2DDataScalar< ScalarType > radial_profile_;
@@ -42,7 +42,7 @@ struct SubtractRadialProfile
     }
 };
 
-/// Initial condition for Q1 temperature (conductive profile + spherical harmonic perturbation):
+/// Initial condition for W1 temperature (conductive profile + spherical harmonic perturbation):
 /// T = T_cond(r) + eps * Y_l^m(theta, phi)
 /// where T_cond is the steady-state spherical conduction solution:
 ///   T_cond(r) = r_min * r_max / r  -  r_min

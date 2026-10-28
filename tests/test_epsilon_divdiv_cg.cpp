@@ -33,8 +33,8 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using grid::shell::BoundaryConditions;
 using grid::shell::BoundaryConditionFlag::DIRICHLET;
 using grid::shell::BoundaryConditionFlag::FREESLIP;
@@ -241,15 +241,15 @@ double test( int level, int level_subdomains, const std::shared_ptr< util::Table
     auto mask_data          = grid::setup_node_ownership_mask_data( domain );
     auto boundary_mask_data = grid::shell::setup_boundary_mask_data( domain );
 
-    VectorQ1Vec< ScalarType >    u( "u", domain, mask_data );
-    VectorQ1Vec< ScalarType >    g( "g", domain, mask_data );
-    VectorQ1Vec< ScalarType >    Adiagg( "Adiagg", domain, mask_data );
-    VectorQ1Vec< ScalarType >    tmp( "tmp", domain, mask_data );
-    VectorQ1Vec< ScalarType >    solution( "solution", domain, mask_data );
-    VectorQ1Vec< ScalarType >    error( "error", domain, mask_data );
-    VectorQ1Vec< ScalarType >    b( "b", domain, mask_data );
-    VectorQ1Vec< ScalarType >    r( "r", domain, mask_data );
-    VectorQ1Scalar< ScalarType > k( "k", domain, mask_data );
+    VectorW1Vec< ScalarType >    u( "u", domain, mask_data );
+    VectorW1Vec< ScalarType >    g( "g", domain, mask_data );
+    VectorW1Vec< ScalarType >    Adiagg( "Adiagg", domain, mask_data );
+    VectorW1Vec< ScalarType >    tmp( "tmp", domain, mask_data );
+    VectorW1Vec< ScalarType >    solution( "solution", domain, mask_data );
+    VectorW1Vec< ScalarType >    error( "error", domain, mask_data );
+    VectorW1Vec< ScalarType >    b( "b", domain, mask_data );
+    VectorW1Vec< ScalarType >    r( "r", domain, mask_data );
+    VectorW1Scalar< ScalarType > k( "k", domain, mask_data );
 
     const auto num_dofs = kernels::common::count_masked< long >( mask_data, grid::NodeOwnershipFlag::OWNED );
 

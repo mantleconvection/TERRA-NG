@@ -8,7 +8,7 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/linear_form.hpp"
 #include "linalg/operator.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::fe::wedge::linearforms::shell {
 
@@ -29,7 +29,7 @@ template < typename ScalarT, int VelocityVecDim = 3 >
 class SUPGRHS
 {
   public:
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
   private:
@@ -38,8 +38,8 @@ class SUPGRHS
     grid::Grid3DDataVec< ScalarT, 3 > grid_;
     grid::Grid2DDataScalar< ScalarT > radii_;
 
-    linalg::VectorQ1Scalar< ScalarT >              f_;
-    linalg::VectorQ1Vec< ScalarT, VelocityVecDim > velocity_;
+    linalg::VectorW1Scalar< ScalarT >              f_;
+    linalg::VectorW1Vec< ScalarT, VelocityVecDim > velocity_;
 
     ScalarT diffusivity_;
 
@@ -58,8 +58,8 @@ class SUPGRHS
         const grid::shell::DistributedDomain&                 domain,
         const grid::Grid3DDataVec< ScalarT, 3 >&              grid,
         const grid::Grid2DDataScalar< ScalarT >&              radii,
-        const linalg::VectorQ1Scalar< ScalarT >&              f,
-        const linalg::VectorQ1Vec< ScalarT, VelocityVecDim >& velocity,
+        const linalg::VectorW1Scalar< ScalarT >&              f,
+        const linalg::VectorW1Vec< ScalarT, VelocityVecDim >& velocity,
         const ScalarT                                         diffusivity,
 
         const linalg::OperatorApplyMode         operator_apply_mode = linalg::OperatorApplyMode::Replace,

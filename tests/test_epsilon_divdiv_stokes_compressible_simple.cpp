@@ -62,7 +62,7 @@
 #include "linalg/solvers/pcg.hpp"
 #include "linalg/solvers/pminres.hpp"
 #include "linalg/solvers/richardson.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "terra/dense/mat.hpp"
 #include "terra/fe/wedge/operators/shell/mass.hpp"
 #include "terra/grid/grid_types.hpp"
@@ -95,9 +95,9 @@ using grid::shell::ShellBoundaryFlag::BOUNDARY;
 using grid::shell::ShellBoundaryFlag::CMB;
 using grid::shell::ShellBoundaryFlag::SURFACE;
 using linalg::DiagonallyScaledOperator;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using linalg::solvers::DiagonalSolver;
 using linalg::solvers::power_iteration;
 using linalg::solvers::TwoGridGCA;
@@ -336,7 +336,7 @@ std::tuple< double, double, int > test(
     const auto velocity_level = num_levels - 1;
     const auto pressure_level = num_levels - 2;
 
-    std::map< std::string, VectorQ1IsoQ2Q1< ScalarType > > stok_vecs;
+    std::map< std::string, VectorW1IsoW2W1< ScalarType > > stok_vecs;
     std::vector< std::string >                             stok_vec_names = { "u", "f", "solution", "error" };
     constexpr int                                          num_stok_tmps  = 8;
 
@@ -348,7 +348,7 @@ std::tuple< double, double, int > test(
 
     for ( const auto& name : stok_vec_names )
     {
-        stok_vecs[name] = VectorQ1IsoQ2Q1< ScalarType >(
+        stok_vecs[name] = VectorW1IsoW2W1< ScalarType >(
             name,
             domains[velocity_level],
             domains[pressure_level],
@@ -361,9 +361,9 @@ std::tuple< double, double, int > test(
     auto& solution = stok_vecs["solution"];
     auto& error    = stok_vecs["error"];
 
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg;
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg_r;
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg_e;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg_r;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg_e;
 
     for ( int level = 0; level < num_levels; level++ )
     {
@@ -398,12 +398,12 @@ std::tuple< double, double, int > test(
     using Prolongation = fe::wedge::operators::shell::ProlongationVecConstant< ScalarType >;
     using Restriction  = fe::wedge::operators::shell::RestrictionVecConstant< ScalarType >;
 
-    VectorQ1Scalar< ScalarType > k( "k", domains[velocity_level], mask_data[velocity_level] );
+    VectorW1Scalar< ScalarType > k( "k", domains[velocity_level], mask_data[velocity_level] );
 
     util::logroot << "Interpolating k ...\n";
     linalg::assign( k, 1.0 );
 
-    VectorQ1Scalar< ScalarType > GCAElements( "GCAElements", domains[0], mask_data[0] );
+    VectorW1Scalar< ScalarType > GCAElements( "GCAElements", domains[0], mask_data[0] );
     if ( gca == 2 )
     {
         linalg::assign( GCAElements, 0 );
@@ -454,12 +454,12 @@ std::tuple< double, double, int > test(
     std::vector< Prolongation > P;
     std::vector< Restriction >  R;
 
-    std::vector< VectorQ1Vec< ScalarType > > inverse_diagonals;
+    std::vector< VectorW1Vec< ScalarType > > inverse_diagonals;
 
     util::logroot << "MG hierarchy ...\n";
     for ( int level = 0; level < num_levels; level++ )
     {
-        VectorQ1Scalar< ScalarType > k_c( "k_c", domains[level], mask_data[level] );
+        VectorW1Scalar< ScalarType > k_c( "k_c", domains[level], mask_data[level] );
         linalg::assign( k_c, 1.0 );
 
         A_diag.emplace_back(
@@ -531,12 +531,12 @@ std::tuple< double, double, int > test(
     // auto& rho     = stok_vecs["tmp_3"].block_2();
     // auto& drho_dt = stok_vecs["tmp_4"].block_2();
 
-    VectorQ1Scalar< double > drho_dt( "drho_dt", domains[velocity_level], mask_data[velocity_level] );
+    VectorW1Scalar< double > drho_dt( "drho_dt", domains[velocity_level], mask_data[velocity_level] );
 
-    // VectorQ1Vec< double, 3 > pressure_level_velocity(
+    // VectorW1Vec< double, 3 > pressure_level_velocity(
     //     "pressure_level_velocity", domains[pressure_level], mask_data[pressure_level] );
 
-    VectorQ1Vec< double, 3 > fine_level_velocity(
+    VectorW1Vec< double, 3 > fine_level_velocity(
         "fine_level_velocity", domains[velocity_level], mask_data[velocity_level] );
 
     Kokkos::parallel_for(
@@ -558,7 +558,7 @@ std::tuple< double, double, int > test(
     auto& pda_additional_term = stok_vecs["tmp_2"].block_2();
 
     // Always assemble 3-D rho, we need it for InvRhoDrhoDt.
-    VectorQ1Scalar< double > rho( "rho", domains[velocity_level], mask_data[velocity_level] );
+    VectorW1Scalar< double > rho( "rho", domains[velocity_level], mask_data[velocity_level] );
 
     Kokkos::parallel_for(
         "rho interpolation",
@@ -669,7 +669,7 @@ std::tuple< double, double, int > test(
         inverse_diagonals.emplace_back(
             "inverse_diagonal_" + std::to_string( level ), domains[level], mask_data[level] );
 
-        VectorQ1Vec< ScalarType > tmp(
+        VectorW1Vec< ScalarType > tmp(
             "inverse_diagonal_tmp" + std::to_string( level ), domains[level], mask_data[level] );
 
         linalg::assign( tmp, 1.0 );
@@ -690,8 +690,8 @@ std::tuple< double, double, int > test(
         linalg::invert_entries( inverse_diagonals.back() );
 
         constexpr auto            smoother_prepost = 3;
-        VectorQ1Vec< ScalarType > tmp_pi_0( "tmp_pi_0" + std::to_string( level ), domains[level], mask_data[level] );
-        VectorQ1Vec< ScalarType > tmp_pi_1( "tmp_pi_1" + std::to_string( level ), domains[level], mask_data[level] );
+        VectorW1Vec< ScalarType > tmp_pi_0( "tmp_pi_0" + std::to_string( level ), domains[level], mask_data[level] );
+        VectorW1Vec< ScalarType > tmp_pi_1( "tmp_pi_1" + std::to_string( level ), domains[level], mask_data[level] );
         double                    max_ev = 0.0;
 
         if ( level == num_levels - 1 )
@@ -713,7 +713,7 @@ std::tuple< double, double, int > test(
 
     using CoarseGridSolver = linalg::solvers::PCG< Viscous >;
 
-    std::vector< VectorQ1Vec< ScalarType > > coarse_grid_tmps;
+    std::vector< VectorW1Vec< ScalarType > > coarse_grid_tmps;
     for ( int i = 0; i < 4; i++ )
     {
         coarse_grid_tmps.emplace_back( "tmp_coarse_grid", domains[0], mask_data[0] );
@@ -729,7 +729,7 @@ std::tuple< double, double, int > test(
     PrecVisc prec_11(
         P, R, A_c, tmp_mg_r, tmp_mg_e, tmp_mg, smoothers, smoothers, coarse_grid_solver, num_mg_cycles, 1e-8 );
 
-    VectorQ1Scalar< ScalarType > k_pm( "k_pm", domains[max_level - min_level], mask_data[max_level - min_level] );
+    VectorW1Scalar< ScalarType > k_pm( "k_pm", domains[max_level - min_level], mask_data[max_level - min_level] );
     assign( k_pm, k );
     linalg::invert_entries( k_pm );
 
@@ -738,10 +738,10 @@ std::tuple< double, double, int > test(
         domains[pressure_level], coords_shell[pressure_level], coords_radii[pressure_level], k_pm.grid_data(), false );
     pmass.set_lumped_diagonal( true );
 
-    VectorQ1Scalar< ScalarType > lumped_diagonal_pmass(
+    VectorW1Scalar< ScalarType > lumped_diagonal_pmass(
         "lumped_diagonal_pmass", domains[pressure_level], mask_data[pressure_level] );
     {
-        VectorQ1Scalar< ScalarType > tmp(
+        VectorW1Scalar< ScalarType > tmp(
             "inverse_diagonal_tmp" + std::to_string( pressure_level ),
             domains[pressure_level],
             mask_data[pressure_level] );
@@ -755,7 +755,7 @@ std::tuple< double, double, int > test(
     using PrecStokes = linalg::solvers::
         BlockTriangularPreconditioner2x2< Stokes, Viscous, PressureMass, Gradient, PrecVisc, PrecSchur >;
 
-    VectorQ1IsoQ2Q1< ScalarType > triangular_prec_tmp(
+    VectorW1IsoW2W1< ScalarType > triangular_prec_tmp(
         "triangular_prec_tmp",
         domains[velocity_level],
         domains[pressure_level],
@@ -767,7 +767,7 @@ std::tuple< double, double, int > test(
     const int iters = 20;
 
     constexpr auto                               num_tmps_fgmres = iters;
-    std::vector< VectorQ1IsoQ2Q1< ScalarType > > tmp_fgmres;
+    std::vector< VectorW1IsoW2W1< ScalarType > > tmp_fgmres;
     for ( int i = 0; i < 2 * num_tmps_fgmres + 4; ++i )
     {
         tmp_fgmres.emplace_back(
@@ -845,7 +845,7 @@ std::tuple< double, double, int > test(
     terra::linalg::trafo::cartesian_to_normal_tangential_in_place< ScalarType, ScalarType >(
         u.block_1(), coords_shell[velocity_level], boundary_mask_data[velocity_level], CMB );
 
-    VectorQ1Scalar< ScalarType > normals( "normals", domains[velocity_level], mask_data[velocity_level] );
+    VectorW1Scalar< ScalarType > normals( "normals", domains[velocity_level], mask_data[velocity_level] );
     terra::kernels::common::extract_vector_component( normals.grid_data(), u.block_1().grid_data(), 0 );
 
     auto radii     = domains[velocity_level].domain_info().radii();

@@ -1,8 +1,8 @@
 
 #pragma once
 
-#include "linalg/vector_q1.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "terra/linalg/operator.hpp"
 
 namespace terra::fe {
@@ -27,9 +27,9 @@ template < typename ScalarType, linalg::OperatorLike OperatorType, typename Flag
 void strong_algebraic_dirichlet_enforcement_poisson_like(
     OperatorType&                               A_neumann,
     OperatorType&                               A_neumann_diag,
-    const linalg::VectorQ1Scalar< ScalarType >& g,
-    linalg::VectorQ1Scalar< ScalarType >&       tmp,
-    linalg::VectorQ1Scalar< ScalarType >&       b,
+    const linalg::VectorW1Scalar< ScalarType >& g,
+    linalg::VectorW1Scalar< ScalarType >&       tmp,
+    linalg::VectorW1Scalar< ScalarType >&       b,
     const grid::Grid4DDataScalar< FlagType >&   mask_data,
     const FlagType&                             dirichlet_boundary_mask )
 {
@@ -50,9 +50,9 @@ template < typename ScalarType, linalg::OperatorLike OperatorType, typename Flag
 void strong_algebraic_dirichlet_enforcement_vectorlaplace_like(
     OperatorType&                               A_neumann,
     OperatorType&                               A_neumann_diag,
-    const linalg::VectorQ1Vec< ScalarType >& g,
-    linalg::VectorQ1Vec< ScalarType >&       tmp,
-    linalg::VectorQ1Vec< ScalarType >&       b,
+    const linalg::VectorW1Vec< ScalarType >& g,
+    linalg::VectorW1Vec< ScalarType >&       tmp,
+    linalg::VectorW1Vec< ScalarType >&       b,
     const grid::Grid4DDataScalar< FlagType >&   mask_data,
     const FlagType&                             dirichlet_boundary_mask )
 {
@@ -75,7 +75,7 @@ void strong_algebraic_dirichlet_enforcement_vectorlaplace_like(
 /// Still requires solving \f$ A_\mathrm{elim} x = b_\mathrm{elim} \f$after this.
 template < typename ScalarType, util::FlagLike FlagType >
 void strong_algebraic_homogeneous_dirichlet_enforcement_poisson_like(
-    linalg::VectorQ1Scalar< ScalarType >&     b,
+    linalg::VectorW1Scalar< ScalarType >&     b,
     const grid::Grid4DDataScalar< FlagType >& mask_data,
     const FlagType&                           dirichlet_boundary_mask )
 {
@@ -89,9 +89,9 @@ template < typename ScalarType, linalg::OperatorLike OperatorType, util::FlagLik
 void strong_algebraic_velocity_dirichlet_enforcement_stokes_like(
     OperatorType&                                K_neumann,
     OperatorType&                                K_neumann_diag,
-    const linalg::VectorQ1IsoQ2Q1< ScalarType >& g,
-    linalg::VectorQ1IsoQ2Q1< ScalarType >&       tmp,
-    linalg::VectorQ1IsoQ2Q1< ScalarType >&       b,
+    const linalg::VectorW1IsoW2W1< ScalarType >& g,
+    linalg::VectorW1IsoW2W1< ScalarType >&       tmp,
+    linalg::VectorW1IsoW2W1< ScalarType >&       b,
     const grid::Grid4DDataScalar< FlagType >&    mask_data,
     const FlagType&                              dirichlet_boundary_mask )
 {
@@ -113,7 +113,7 @@ void strong_algebraic_velocity_dirichlet_enforcement_stokes_like(
 /// (with strong enforcement of zero velocity boundary conditions).
 template < typename ScalarType, util::FlagLike FlagType >
 void strong_algebraic_homogeneous_velocity_dirichlet_enforcement_stokes_like(
-    linalg::VectorQ1IsoQ2Q1< ScalarType >&    b,
+    linalg::VectorW1IsoW2W1< ScalarType >&    b,
     const grid::Grid4DDataScalar< FlagType >& mask_data,
     const FlagType&                           dirichlet_boundary_mask )
 {
