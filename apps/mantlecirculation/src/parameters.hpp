@@ -369,9 +369,6 @@ struct DeveloperOptions
     bool extended_diagnostics         = true; // Extended logging of solver diagnostics, memory footprint, etc.
     bool print_parameter_descriptions = true;
 
-    // Diagnostic: K·[0; 1] (zero iff constant pressure is an exact null mode of the Stokes operator).
-    bool output_pressure_nullspace_residual = false;
-
     // Free-slip normals consistent with the discrete gradient (Bᵀ·1); false: r̂.
     bool consistent_freeslip_normals = true;
 };
@@ -1013,15 +1010,6 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         add_flag_with_default( app, "--extended-diagnostics", parameters.devel_parameters.extended_diagnostics )
             ->group( "Developer settings" )
             ->description( "Log detailed diagnostics on solver setup, memory footprint, etc." );
-        add_flag_with_default(
-            app,
-            "--output-pressure-nullspace-residual",
-            parameters.devel_parameters.output_pressure_nullspace_residual )
-            ->group( "Developer settings" )
-            ->description(
-                "Compute K·[0; 1] (Stokes operator with BCs applied to zero velocity and constant pressure), log its "
-                "norms and write its velocity block to XDMF as 'K_p1'. Zero iff constant pressure is an exact null "
-                "mode of the discrete Stokes operator." );
         add_flag_with_default(
             app,
             "--consistent-freeslip-normals,!--consistent-freeslip-normals-off",

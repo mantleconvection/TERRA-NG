@@ -9,15 +9,22 @@
 ///        Free-slip projected with n_BT1 makes constant pressure an exact null mode (P·Bᵀ·1 = 0);
 ///        with n_rhat it is only approximately one.
 ///
+///        It then applies the free-slip Stokes operator K (isoviscous, free-slip at both boundaries) to
+///        [u = 0; p = 1] with each normal. The velocity block K·[0; 1] = P·Bᵀ·1 vanishes iff constant
+///        pressure is an exact null mode of K; its norm is printed relative to the unconstrained
+///        (Neumann) Bᵀ·1. The test fails if it is not zero (to round-off) with the consistent normals.
+///
 ///        Output (directory test_freeslip_normals_output/): vector fields n_rhat, n_BT1, scalar field
-///        angle_deg (angle between them), all zero away from the two boundaries. Max/mean angle per
-///        boundary are printed. Usage: test_freeslip_normals [level=5]
+///        angle_deg (angle between them), all zero away from the two boundaries, and the velocity
+///        blocks K_p1_rhat, K_p1_consistent. Usage: test_freeslip_normals [level=5]
 
 #include <mpi.h>
 
 #include <cstdlib>
 #include <iostream>
 
+#include "fe/solver_utils.hpp"
+#include "fe/wedge/operators/shell/epsilon_divdiv_stokes.hpp"
 #include "fe/wedge/operators/shell/gradient_kerngen.hpp"
 #include "linalg/vector_w1.hpp"
 #include "terra/grid/grid_types.hpp"
@@ -32,11 +39,43 @@ using namespace terra;
 using grid::shell::BoundaryConditions;
 using grid::shell::DistributedDomain;
 using grid::shell::ShellBoundaryFlag;
+using grid::shell::BoundaryConditionFlag::FREESLIP;
 using grid::shell::BoundaryConditionFlag::NEUMANN;
 using grid::shell::ShellBoundaryFlag::CMB;
 using grid::shell::ShellBoundaryFlag::SURFACE;
 using linalg::VectorW1Scalar;
 using linalg::VectorW1Vec;
+
+using Stokes = fe::wedge::operators::shell::EpsDivDivStokes< double >;
+
+/// out = velocity block of K·[0; 1]; returns its norm relative to the same product with K_neumann.
+double pressure_nullspace_residual(
+    Stokes&                                                  K,
+    Stokes&                                                  K_neumann,
+    const DistributedDomain&                                 domain_u,
+    const DistributedDomain&                                 domain_p,
+    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask_u,
+    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask_p,
+    VectorW1Vec< double, 3 >&                                out,
+    const char*                                              label )
+{
+    linalg::VectorW1IsoW2W1< double > dst( "nullspace_dst", domain_u, domain_p, mask_u, mask_p );
+
+    fe::apply_to_constant_pressure< double >( K_neumann, domain_u, domain_p, mask_u, mask_p, dst );
+    const double ref_norm = linalg::norm_2( dst.block_1() );
+
+    fe::apply_to_constant_pressure< double >( K, domain_u, domain_p, mask_u, mask_p, dst );
+    const double norm   = linalg::norm_2( dst.block_1() );
+    const double maxabs = linalg::max_abs_entry( dst.block_1() );
+    const double p_max  = linalg::max_abs_entry( dst.block_2() );
+
+    linalg::assign( out, dst.block_1() );
+
+    util::logroot << "K·[0; 1] with " << label << ": ||u||_2 " << norm << " (Neumann ref " << ref_norm
+                  << ", ratio " << norm / ref_norm << "), max|u| " << maxabs << ", max|p| " << p_max
+                  << " (expected 0)" << std::endl;
+    return norm / ref_norm;
+}
 
 int main( int argc, char** argv )
 {
@@ -137,11 +176,38 @@ int main( int argc, char** argv )
         ok = ok && std::isfinite( gmax ) && gmax < 1.0;
     }
 
+    // K·[0; 1] with free-slip at both boundaries: r̂ vs consistent normals (isoviscous).
+    BoundaryConditions bcs_freeslip = { { CMB, FREESLIP }, { SURFACE, FREESLIP } };
+    VectorW1Scalar< double > eta( "eta", domain_fine, mask_fine );
+    linalg::assign( eta, 1.0 );
+
+    Stokes K_neumann( domain_fine, domain_coarse, coords, radii, boundary_mask, eta.grid_data(), bcs_neumann, false );
+    Stokes K_rhat( domain_fine, domain_coarse, coords, radii, boundary_mask, eta.grid_data(), bcs_freeslip, false );
+    Stokes K_consistent(
+        domain_fine, domain_coarse, coords, radii, boundary_mask, eta.grid_data(), bcs_freeslip, false );
+
+    const auto [normals_cmb, normals_surface] = fe::consistent_freeslip_normals< double >(
+        K_neumann, domain_fine, domain_coarse, mask_fine, mask_coarse, coords, boundary_mask, bcs_freeslip );
+    K_consistent.set_freeslip_normals( normals_cmb, normals_surface );
+
+    VectorW1Vec< double, 3 > K_p1_rhat( "K_p1_rhat", domain_fine, mask_fine );
+    VectorW1Vec< double, 3 > K_p1_consistent( "K_p1_consistent", domain_fine, mask_fine );
+    const double ratio_rhat = pressure_nullspace_residual(
+        K_rhat, K_neumann, domain_fine, domain_coarse, mask_fine, mask_coarse, K_p1_rhat, "r̂ normals" );
+    const double ratio_consistent = pressure_nullspace_residual(
+        K_consistent, K_neumann, domain_fine, domain_coarse, mask_fine, mask_coarse, K_p1_consistent,
+        "consistent normals" );
+
+    // Consistent normals: exact null mode (round-off). r̂: only approximate, so clearly larger.
+    ok = ok && ratio_consistent < 1e-12 && ratio_rhat > 1e3 * ratio_consistent;
+
     util::prepare_empty_directory( "test_freeslip_normals_output" );
     io::XDMFOutput xdmf( "test_freeslip_normals_output", domain_fine, coords, radii );
     xdmf.add( n_rhat.grid_data() );
     xdmf.add( n_bt1.grid_data() );
     xdmf.add( angle.grid_data() );
+    xdmf.add( K_p1_rhat.grid_data() );
+    xdmf.add( K_p1_consistent.grid_data() );
     xdmf.write( 0 );
     util::logroot << "Wrote test_freeslip_normals_output/step_0.xmf (level " << level_fine << ")" << std::endl;
 

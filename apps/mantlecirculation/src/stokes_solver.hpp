@@ -780,18 +780,6 @@ class StokesContext
 
     linalg::VectorW1IsoW2W1< ScalarType >& solution() { return stok_vecs_["u"]; }
 
-    /// Diagnostic K·[0; 1] on the fine level, see pressure_nullspace_residual().
-    void compute_pressure_nullspace_residual( linalg::VectorW1Vec< ScalarType >& out )
-    {
-        fe::pressure_nullspace_residual< ScalarType >(
-            *K_,
-            *K_neumann_,
-            *domains_[velocity_level_],
-            *domains_[pressure_level_],
-            ownership_mask_[velocity_level_],
-            ownership_mask_[pressure_level_],
-            out );
-    }
     linalg::VectorW1Scalar< ScalarType >&  eta_fine() { return eta_[velocity_level_]; }
     long                                   num_dofs_pressure() const { return num_dofs_pressure_; }
     const grid::shell::BoundaryConditions& boundary_conditions() const { return bcs_; }
