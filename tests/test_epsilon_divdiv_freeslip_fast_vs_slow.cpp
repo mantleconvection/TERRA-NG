@@ -294,10 +294,11 @@ void compare_epsilon_divdiv_path_comparison( int level, bool diagonal, int repea
               << ", inf = " << inf_slow_vs_dd << std::endl;
 }
 
-// User-set free-slip normals: fast-path timing with custom normals vs. the default r̂ normals, for
-// free-slip at the CMB, the surface and both (the last one uses separate CMB/surface shared-memory
-// tiles in the fast path). Each operator is timed twice in alternating order and the faster round
-// is kept, so that neither one systematically pays for warm-up effects.
+// User-set free-slip normals: timing of the fast and slow paths with custom normals and of the fast
+// path with the default r̂ normals, for free-slip at the CMB, the surface and both (the last one uses
+// separate CMB/surface shared-memory tiles in the fast path). Each operator is timed twice, the
+// second round in reverse order, and the faster round is kept, so that no operator systematically
+// pays for warm-up effects.
 template < typename ScalarT >
 void compare_timing_custom_normals( int level, bool diagonal, int repeats )
 {
@@ -317,6 +318,7 @@ void compare_timing_custom_normals( int level, bool diagonal, int repeats )
     VectorW1Vec< ScalarT >    src( "src", domain, mask_data );
     VectorW1Vec< ScalarT >    dst( "dst", domain, mask_data );
     VectorW1Scalar< ScalarT > k_coeff( "k", domain, mask_data );
+    VectorW1Scalar< ScalarT > gca_elements( "gca_elements", domain, mask_data );
 
     Kokkos::parallel_for(
         "interpolate src",
@@ -326,7 +328,7 @@ void compare_timing_custom_normals( int level, bool diagonal, int repeats )
         "interpolate k",
         local_domain_md_range_policy_nodes( domain ),
         ScalarCoeffInterpolator( coords_shell, coords_radii, k_coeff.grid_data() ) );
-
+    assign( gca_elements, 0 );
     Kokkos::fence();
 
     struct BCSet
@@ -358,10 +360,14 @@ void compare_timing_custom_normals( int level, bool diagonal, int repeats )
                 linalg::OperatorStoredMatrixMode::Off );
         };
 
-        Op op_fast = make_op(); // fast free-slip path, custom normals
+        Op op_fast      = make_op(); // fast free-slip path, custom normals
+        Op op_slow      = make_op(); // slow path (stored-matrix mode with no stored elements), custom normals
         Op op_fast_rhat = make_op(); // fast path, default r̂ normals
 
         op_fast.set_freeslip_normals( normals_cmb, normals_surface );
+        op_slow.set_freeslip_normals( normals_cmb, normals_surface );
+        op_slow.set_stored_matrix_mode(
+            linalg::OperatorStoredMatrixMode::Selective, /*level_range=*/0, gca_elements.grid_data() );
 
         auto time = [&]( Op& op ) {
             linalg::apply( op, src, dst ); // warmup
@@ -374,12 +380,17 @@ void compare_timing_custom_normals( int level, bool diagonal, int repeats )
         };
 
         double t_fast      = time( op_fast );
+        double t_slow      = time( op_slow );
         double t_fast_rhat = time( op_fast_rhat );
         t_fast_rhat        = std::min( t_fast_rhat, time( op_fast_rhat ) );
+        t_slow             = std::min( t_slow, time( op_slow ) );
         t_fast             = std::min( t_fast, time( op_fast ) );
 
         std::cout << "  " << bc.name << "  fast(custom) = " << t_fast << " s/apply"
+                  << "  slow(custom) = " << t_slow << " s/apply"
                   << "  fast(rhat) = " << t_fast_rhat << " s/apply";
+        if ( t_fast > 0.0 )
+            std::cout << "  slow/fast = " << ( t_slow / t_fast ) << "x";
         if ( t_fast_rhat > 0.0 )
             std::cout << "  custom/rhat = " << ( t_fast / t_fast_rhat ) << "x";
         std::cout << std::endl;
