@@ -371,6 +371,9 @@ struct DeveloperOptions
 
     // Diagnostic: K·[0; 1] (zero iff constant pressure is an exact null mode of the Stokes operator).
     bool output_pressure_nullspace_residual = false;
+
+    // Free-slip normals consistent with the discrete gradient (Bᵀ·1); false: r̂.
+    bool consistent_freeslip_normals = true;
 };
 
 struct Parameters
@@ -1019,6 +1022,13 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
                 "Compute K·[0; 1] (Stokes operator with BCs applied to zero velocity and constant pressure), log its "
                 "norms and write its velocity block to XDMF as 'K_p1'. Zero iff constant pressure is an exact null "
                 "mode of the discrete Stokes operator." );
+        add_flag_with_default(
+            app,
+            "--consistent-freeslip-normals,!--consistent-freeslip-normals-off",
+            parameters.devel_parameters.consistent_freeslip_normals )
+            ->group( "Developer settings" )
+            ->description( "Use free-slip normals consistent with the discrete gradient (Bᵀ·1) on the fine-level "
+                           "Stokes operator. Use --consistent-freeslip-normals-off for r̂." );
     }
 
     try

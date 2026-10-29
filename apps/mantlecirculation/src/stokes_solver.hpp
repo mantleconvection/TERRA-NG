@@ -373,16 +373,32 @@ class StokesContext
 
         // Consistent (Bᵀ·1) free-slip normals on the fine level, see consistent_freeslip_normals().
         // Must precede everything that copies K_'s blocks (MG, smoothers, block preconditioner).
-        std::tie( freeslip_normals_cmb_, freeslip_normals_surface_ ) = fe::consistent_freeslip_normals< ScalarType >(
-            *K_neumann_,
-            *domains_[velocity_level_],
-            *domains_[pressure_level_],
-            ownership_mask_[velocity_level_],
-            ownership_mask_[pressure_level_],
-            coords_shell_[velocity_level_],
-            boundary_mask_[velocity_level_],
-            bcs_ );
-        K_->set_freeslip_normals( freeslip_normals_cmb_, freeslip_normals_surface_ );
+        // Only with a free-slip boundary (the custom-normals path costs extra shared memory in the
+        // epsilon fast path even when no boundary uses it) and unless disabled; otherwise r̂.
+        const bool has_freeslip =
+            grid::shell::get_boundary_condition_flag( bcs_, grid::shell::ShellBoundaryFlag::CMB ) ==
+                grid::shell::BoundaryConditionFlag::FREESLIP ||
+            grid::shell::get_boundary_condition_flag( bcs_, grid::shell::ShellBoundaryFlag::SURFACE ) ==
+                grid::shell::BoundaryConditionFlag::FREESLIP;
+        if ( has_freeslip && prm_.devel_parameters.consistent_freeslip_normals )
+        {
+            std::tie( freeslip_normals_cmb_, freeslip_normals_surface_ ) =
+                fe::consistent_freeslip_normals< ScalarType >(
+                    *K_neumann_,
+                    *domains_[velocity_level_],
+                    *domains_[pressure_level_],
+                    ownership_mask_[velocity_level_],
+                    ownership_mask_[pressure_level_],
+                    coords_shell_[velocity_level_],
+                    boundary_mask_[velocity_level_],
+                    bcs_ );
+            K_->set_freeslip_normals( freeslip_normals_cmb_, freeslip_normals_surface_ );
+        }
+        else
+        {
+            freeslip_normals_cmb_     = coords_shell_[velocity_level_];
+            freeslip_normals_surface_ = coords_shell_[velocity_level_];
+        }
 
         M_ = std::make_unique< ViscousMass >(
             *domains_[velocity_level_], coords_shell_[velocity_level_], coords_radii_[velocity_level_], false );
