@@ -461,7 +461,7 @@ Result<> run( const Parameters& prm )
             stokes.solve_pda(
                 pda->density(),
                 pda->drho_dt(), // No density history yet, this should be zeroes.
-                std::nullopt,
+                plate_velocities,
                 /*log_convergence=*/true );
 
         else
@@ -469,7 +469,7 @@ Result<> run( const Parameters& prm )
                 Tdev,
                 rho_profile,
                 alpha_profile,
-                std::nullopt,
+                plate_velocities,
                 prm.physics_parameters.compressible,
                 /*log_convergence=*/true );
 
@@ -621,7 +621,7 @@ Result<> run( const Parameters& prm )
         } );
         radial_label = "depth";
     }
-    
+
     // Same logic as initial xdmf write-out.
     if ( !prm.io_parameters.no_radial_profiles && !( is_continue && same_dir ) )
     {
