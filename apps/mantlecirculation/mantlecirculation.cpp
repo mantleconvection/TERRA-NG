@@ -478,16 +478,33 @@ Result<> run( const Parameters& prm )
     }
 
     int        timestep_initial  = 0;
-    ScalarType simulated_time    = ScalarType( 0 );
-    ScalarType simulated_time_Ma = ScalarType( 0 );
-    ScalarType last_output_time  = ScalarType( 0 ); // Needed if we want to write out every x Ma.
+    ScalarType simulated_time    = 0;
+    ScalarType simulated_time_Ma = 0;
+    ScalarType last_output_time  = 0; // Needed if we want to write out every x Ma.
+
+    // If we have plate velocities applied, output in Ma is labelled with plate
+    // age, running backwards from initial_plate_age towards 0 Ma.
+    // Without plate velocities, output is labelled with forward-running model
+    // time.
+    ScalarType output_time = prm.boundary_parameters.plate_parameters.apply_plate_velocities ?
+                                 std::ceil( plate_age_Ma ) :
+                                 std::floor( simulated_time_Ma );
+
+    if ( prm.boundary_parameters.plate_parameters.apply_plate_velocities )
+    {
+        last_output_time = output_time;
+    }
 
     if ( is_continue )
     {
         timestep_initial  = timestep_from_checkpoint;
         simulated_time_Ma = model_time_from_checkpoint;
         simulated_time    = simulated_time_Ma / prm.physics_parameters.calc_time_Ma;
-        last_output_time  = std::floor( simulated_time_Ma );
+
+        if ( !prm.boundary_parameters.plate_parameters.apply_plate_velocities )
+        {
+            last_output_time = std::floor( simulated_time_Ma );
+        }
     }
 
     // We need some global h. Let's, for simplicity (does not need to be too accurate) just choose the smallest h in
@@ -590,7 +607,7 @@ Result<> run( const Parameters& prm )
             xdmf_output,
             xdmf_output_pressure,
             timestep_initial,
-            simulated_time_Ma,
+            output_time,
             prm.io_parameters.output_per_Ma,
             prm.devel_parameters.output_dimensional,
             fields.scalar_fields,
@@ -830,13 +847,17 @@ Result<> run( const Parameters& prm )
 
         table->add_row( {} );
 
+        ScalarType output_time = prm.boundary_parameters.plate_parameters.apply_plate_velocities ?
+                                     std::ceil( plate_age_Ma ) :
+                                     std::floor( simulated_time_Ma );
+
         bool write_output = false;
         if ( prm.io_parameters.output_per_Ma )
         {
-            if ( std::floor( simulated_time_Ma ) - last_output_time >= prm.io_parameters.output_frequency )
+            if ( std::abs( output_time - last_output_time ) >= prm.io_parameters.output_frequency )
             {
                 write_output     = true;
-                last_output_time = std::floor( simulated_time_Ma );
+                last_output_time = output_time;
             }
         }
         else
@@ -853,7 +874,7 @@ Result<> run( const Parameters& prm )
                 xdmf_output,
                 xdmf_output_pressure,
                 timestep,
-                simulated_time_Ma,
+                output_time,
                 prm.io_parameters.output_per_Ma,
                 prm.devel_parameters.output_dimensional,
                 fields.scalar_fields,
