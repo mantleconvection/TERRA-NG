@@ -789,7 +789,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->transform( CLI::CheckedTransformer( init_temp_perturbation_map, CLI::ignore_case ) )
         ->default_val( "spherical-harmonics" )
         ->group( "Initial Temperature" )
-        ->description( "'noise', 'spherical-harmonics' / 'sph' or 'spherical-harmonics-superposition' / 'sph-superposition' perturbation." );
+        ->description(
+            "'noise', 'spherical-harmonics' / 'sph' or 'spherical-harmonics-superposition' / 'sph-superposition' perturbation." );
 
     add_option_with_default(
         app, "--perturbation-amplitude", parameters.physics_parameters.initial_temperature.perturbation_amplitude )
@@ -808,22 +809,26 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->description( "Spherical harmonic order m for initial temperature perturbation. "
                        "Maximum |m| for 'sph-superposition' / 'spherical-harmonics-superposition'." );
 
-    add_option_with_default(
-        app, "--initial-temperature-sph-degree-2", parameters.physics_parameters.initial_temperature.sph_degree_l_2 )
-        ->group( "Initial Temperature" )
-        ->description( "Optional second spherical harmonic degree l2 (0 = none). For combined modes." );
+    if ( parameters.devel_parameters.extended_parameters )
+    {
+        add_option_with_default(
+            app,
+            "--initial-temperature-sph-degree-2",
+            parameters.physics_parameters.initial_temperature.sph_degree_l_2 )
+            ->group( "Initial Temperature" )
+            ->description( "Optional second spherical harmonic degree l2 (0 = none). For combined modes." );
 
-    add_option_with_default(
-        app, "--initial-temperature-sph-order-2", parameters.physics_parameters.initial_temperature.sph_order_m_2 )
-        ->group( "Initial Temperature" )
-        ->description( "Optional second spherical harmonic order m2." );
+        add_option_with_default(
+            app, "--initial-temperature-sph-order-2", parameters.physics_parameters.initial_temperature.sph_order_m_2 )
+            ->group( "Initial Temperature" )
+            ->description( "Optional second spherical harmonic order m2." );
 
-    add_option_with_default(
-        app, "--initial-temperature-sph-factor-2", parameters.physics_parameters.initial_temperature.sph_factor_2 )
-        ->group( "Initial Temperature" )
-        ->description(
-            "Weight factor for second spherical harmonic: T += eps * envelope * (Y_l1^m1 + factor_2 * Y_l2^m2)." );
-
+        add_option_with_default(
+            app, "--initial-temperature-sph-factor-2", parameters.physics_parameters.initial_temperature.sph_factor_2 )
+            ->group( "Initial Temperature" )
+            ->description(
+                "Weight factor for second spherical harmonic: T += eps * envelope * (Y_l1^m1 + factor_2 * Y_l2^m2)." );
+    }
     ///////////////////////////
     /// Time discretization ///
     ///////////////////////////

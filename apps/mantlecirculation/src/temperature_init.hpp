@@ -55,7 +55,6 @@ struct ComputePowerLawProfile
     }
 };
 
-/// Set T (W1) from the configured initial-condition profile,
 /// Random superposition sum_{l = 1}^{l_max} sum_{|m| <= min(l, m_max)} a_lm * Y_l^m, with a_lm uniform in [-1, 1].
 /// The seed is fixed, so all ranks draw the same weights.
 template < typename ScalarType >
@@ -90,6 +89,7 @@ grid::Grid3DDataScalar< ScalarType > random_sph_superposition(
     return sum;
 }
 
+/// Set T (W1) from the configured initial-condition profile,
 /// and add an optional noise or spherical-harmonic perturbation of maximum size
 /// parameters.physics_parameters.initial_temperature.perturbation_amplitude.
 ///
