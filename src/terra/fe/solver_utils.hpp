@@ -30,11 +30,57 @@ void apply_to_constant_pressure(
     linalg::apply( K, src, dst );
 }
 
+namespace detail {
+
+/// Unit normals n = g / |g| (oriented like r̂) at the nodes of radial layer `r` that carry the
+/// `boundary` flag; r̂ (coords) everywhere else. Returns a new lateral field shaped like coords.
+template < typename ScalarType >
+grid::Grid3DDataVec< ScalarType, 3 > layer_normals(
+    const grid::Grid4DDataVec< ScalarType, 3 >&                     g,
+    const grid::Grid3DDataVec< ScalarType, 3 >&                     coords,
+    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
+    const int                                                       r,
+    const grid::shell::ShellBoundaryFlag                            boundary,
+    const char*                                                     label )
+{
+    grid::Grid3DDataVec< ScalarType, 3 > n( label, coords.extent( 0 ), coords.extent( 1 ), coords.extent( 2 ) );
+    Kokkos::deep_copy( n, coords );
+
+    const auto mask = boundary_mask;
+    const auto c    = coords;
+    Kokkos::parallel_for(
+        label,
+        Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 0, 0 }, { n.extent( 0 ), n.extent( 1 ), n.extent( 2 ) } ),
+        KOKKOS_LAMBDA( const int s, const int x, const int y ) {
+            if ( !util::has_flag( mask( s, x, y, r ), boundary ) )
+                return;
+
+            const ScalarType gx   = g( s, x, y, r, 0 );
+            const ScalarType gy   = g( s, x, y, r, 1 );
+            const ScalarType gz   = g( s, x, y, r, 2 );
+            const ScalarType norm = Kokkos::sqrt( gx * gx + gy * gy + gz * gz );
+            if ( norm == ScalarType( 0 ) )
+                return;
+
+            // Orient like r̂ (sign is irrelevant for the projection, kept for readability).
+            const ScalarType dot = gx * c( s, x, y, 0 ) + gy * c( s, x, y, 1 ) + gz * c( s, x, y, 2 );
+            const ScalarType sc  = ( dot < 0 ? ScalarType( -1 ) : ScalarType( 1 ) ) / norm;
+            n( s, x, y, 0 )      = sc * gx;
+            n( s, x, y, 1 )      = sc * gy;
+            n( s, x, y, 2 )      = sc * gz;
+        } );
+    Kokkos::fence();
+    return n;
+}
+
+} // namespace detail
+
 /// Free-slip normals consistent with the discrete gradient: n_i = g_i / |g_i| with g = Bᵀ_Neumann·1
 /// (oriented like r̂). With these, P·Bᵀ·1 = 0, so constant pressure is an exact null mode of K;
 /// with r̂ it is only approximately one (see pressure_nullspace_residual()). Returns {cmb, surface}
 /// normal fields, laterally shaped like coords_shell; nodes off the respective boundary keep r̂.
-/// If neither boundary is free-slip, both fields are r̂ (coords_shell itself).
+/// A field is only allocated for a free-slip boundary; for any other boundary it is r̂ (coords_shell
+/// itself, no copy).
 template < typename ScalarType, typename StokesOperator >
 std::pair< grid::Grid3DDataVec< ScalarType, 3 >, grid::Grid3DDataVec< ScalarType, 3 > > consistent_freeslip_normals(
     StokesOperator&                                                   K_neumann,
@@ -46,59 +92,28 @@ std::pair< grid::Grid3DDataVec< ScalarType, 3 >, grid::Grid3DDataVec< ScalarType
     const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >&   boundary_mask,
     const grid::shell::BoundaryConditions&                            bcs )
 {
-    const bool has_freeslip =
-        grid::shell::get_boundary_condition_flag( bcs, grid::shell::ShellBoundaryFlag::CMB ) ==
-            grid::shell::BoundaryConditionFlag::FREESLIP ||
-        grid::shell::get_boundary_condition_flag( bcs, grid::shell::ShellBoundaryFlag::SURFACE ) ==
-            grid::shell::BoundaryConditionFlag::FREESLIP;
-    if ( !has_freeslip )
+    using grid::shell::BoundaryConditionFlag;
+    using grid::shell::ShellBoundaryFlag;
+
+    const bool fs_cmb  = grid::shell::get_boundary_condition_flag( bcs, ShellBoundaryFlag::CMB ) ==
+                        BoundaryConditionFlag::FREESLIP;
+    const bool fs_surf = grid::shell::get_boundary_condition_flag( bcs, ShellBoundaryFlag::SURFACE ) ==
+                         BoundaryConditionFlag::FREESLIP;
+    if ( !fs_cmb && !fs_surf )
         return { coords, coords };
 
     // g = Bᵀ_Neumann · 1 (velocity block of K_neumann · [0; 1]).
     linalg::VectorW1IsoW2W1< ScalarType > dst( "normals_dst", domain_u, domain_p, mask_u, mask_p );
     apply_to_constant_pressure( K_neumann, domain_u, domain_p, mask_u, mask_p, dst );
-
-    using NormalField = grid::Grid3DDataVec< ScalarType, 3 >;
-    const NormalField n_cmb( "freeslip_normals_cmb", coords.extent( 0 ), coords.extent( 1 ), coords.extent( 2 ) );
-    const NormalField n_surf( "freeslip_normals_surface", coords.extent( 0 ), coords.extent( 1 ), coords.extent( 2 ) );
-    Kokkos::deep_copy( n_cmb, coords );
-    Kokkos::deep_copy( n_surf, coords );
-
     const auto g     = dst.block_1().grid_data();
-    const auto mask  = boundary_mask;
-    const auto c     = coords;
     const int  r_top = static_cast< int >( g.extent( 3 ) ) - 1;
 
-    Kokkos::parallel_for(
-        "consistent_freeslip_normals",
-        Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 0, 0 }, { g.extent( 0 ), g.extent( 1 ), g.extent( 2 ) } ),
-        KOKKOS_LAMBDA( const int s, const int x, const int y ) {
-            for ( int b = 0; b < 2; ++b )
-            {
-                const int  r    = ( b == 0 ) ? 0 : r_top;
-                const auto flag =
-                    ( b == 0 ) ? grid::shell::ShellBoundaryFlag::CMB : grid::shell::ShellBoundaryFlag::SURFACE;
-                if ( !util::has_flag( mask( s, x, y, r ), flag ) )
-                    continue;
-
-                const ScalarType gx   = g( s, x, y, r, 0 );
-                const ScalarType gy   = g( s, x, y, r, 1 );
-                const ScalarType gz   = g( s, x, y, r, 2 );
-                const ScalarType norm = Kokkos::sqrt( gx * gx + gy * gy + gz * gz );
-                if ( norm == ScalarType( 0 ) )
-                    continue;
-
-                // Orient like r̂ (sign is irrelevant for the projection, kept for readability).
-                const ScalarType dot = gx * c( s, x, y, 0 ) + gy * c( s, x, y, 1 ) + gz * c( s, x, y, 2 );
-                const ScalarType sc  = ( dot < 0 ? ScalarType( -1 ) : ScalarType( 1 ) ) / norm;
-                const auto&      n   = ( b == 0 ) ? n_cmb : n_surf;
-                n( s, x, y, 0 )      = sc * gx;
-                n( s, x, y, 1 )      = sc * gy;
-                n( s, x, y, 2 )      = sc * gz;
-            }
-        } );
-    Kokkos::fence();
-
+    const auto n_cmb = fs_cmb ? detail::layer_normals( g, coords, boundary_mask, 0, ShellBoundaryFlag::CMB,
+                                                       "freeslip_normals_cmb" ) :
+                                coords;
+    const auto n_surf = fs_surf ? detail::layer_normals( g, coords, boundary_mask, r_top, ShellBoundaryFlag::SURFACE,
+                                                         "freeslip_normals_surface" ) :
+                                  coords;
     return { n_cmb, n_surf };
 }
 
