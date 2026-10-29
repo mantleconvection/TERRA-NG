@@ -356,8 +356,6 @@ struct IOParameters
 
     bool no_xdmf            = false;
     bool no_radial_profiles = false;
-
-    bool output_pressure_nullspace_residual = false;
 };
 
 // This struct holds options that might be useful for debugging, benchmarking, etc., but are not intended to appear at the surface for 'standard' use.
@@ -370,6 +368,9 @@ struct DeveloperOptions
     bool extended_parameters = false; // If false, hide some of the parameters that are not relevant for 'standard' use.
     bool extended_diagnostics         = true; // Extended logging of solver diagnostics, memory footprint, etc.
     bool print_parameter_descriptions = true;
+
+    // Diagnostic: K·[0; 1] (zero iff constant pressure is an exact null mode of the Stokes operator).
+    bool output_pressure_nullspace_residual = false;
 };
 
 struct Parameters
@@ -980,13 +981,6 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "I/O" )
         ->description( "Disable radial profile output." );
 
-    add_flag_with_default(
-        app, "--output-pressure-nullspace-residual", parameters.io_parameters.output_pressure_nullspace_residual )
-        ->group( "I/O" )
-        ->description( "Compute K·[0; 1] (Stokes operator with BCs applied to zero velocity and constant pressure), "
-                       "log its norms and write its velocity block to XDMF as 'K_p1'. Zero iff constant pressure "
-                       "is an exact null mode of the discrete Stokes operator." );
-
     //////////////////////////
     /// Developer settings ///
     //////////////////////////
@@ -1016,6 +1010,15 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         add_flag_with_default( app, "--extended-diagnostics", parameters.devel_parameters.extended_diagnostics )
             ->group( "Developer settings" )
             ->description( "Log detailed diagnostics on solver setup, memory footprint, etc." );
+        add_flag_with_default(
+            app,
+            "--output-pressure-nullspace-residual",
+            parameters.devel_parameters.output_pressure_nullspace_residual )
+            ->group( "Developer settings" )
+            ->description(
+                "Compute K·[0; 1] (Stokes operator with BCs applied to zero velocity and constant pressure), log its "
+                "norms and write its velocity block to XDMF as 'K_p1'. Zero iff constant pressure is an exact null "
+                "mode of the discrete Stokes operator." );
     }
 
     try
