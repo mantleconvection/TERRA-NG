@@ -153,7 +153,7 @@ inline Result<> compute_and_write_radial_profiles(
     const Grid2DDataScalar< int >&      subdomain_shell_idx,
     const std::vector< double >&        radial_coords,
     const Parameters&                   prm,
-    const int                           out_step,
+    const int                           out_tag,
     const ScalarType                    field_scale  = ScalarType( 1 ),
     const std::string&                  radial_label = "radius" )
 {
@@ -167,7 +167,7 @@ inline Result<> compute_and_write_radial_profiles(
     {
         std::ofstream out(
             prm.io_parameters.outdir + "/" + prm.io_parameters.radial_profiles_out_dir + "/radial_profiles_" +
-            scalar_function.grid_data().label() + "_" + std::to_string( out_step ) + ".csv" );
+            scalar_function.grid_data().label() + "_" + std::to_string( out_tag ) + ".csv" );
         profiles.print_csv( out );
     }
 
@@ -186,7 +186,7 @@ inline Result<> compute_and_write_velocity_radial_profiles(
     const std::vector< double >&                             radial_coords,
     const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& mask,
     const Parameters&                                        prm,
-    const int                                                out_step,
+    const int                                                out_tag,
     const ScalarType                                         field_scale  = ScalarType( 1 ),
     const std::string&                                       radial_label = "radius" )
 {
@@ -217,22 +217,22 @@ inline Result<> compute_and_write_velocity_radial_profiles(
     Kokkos::fence();
 
     auto res1 = compute_and_write_radial_profiles(
-        u_r, subdomain_shell_idx, radial_coords, prm, out_step, field_scale, radial_label );
+        u_r, subdomain_shell_idx, radial_coords, prm, out_tag, field_scale, radial_label );
     if ( res1.is_err() )
     {
         return res1;
     }
     return compute_and_write_radial_profiles(
-        u_t, subdomain_shell_idx, radial_coords, prm, out_step, field_scale, radial_label );
+        u_t, subdomain_shell_idx, radial_coords, prm, out_tag, field_scale, radial_label );
 }
 
-inline Result<> write_timer_tree( const IOParameters& io_parameters, const int out_step )
+inline Result<> write_timer_tree( const IOParameters& io_parameters, const int out_tag )
 {
     util::TimerTree::instance().aggregate_mpi();
     if ( mpi::rank() == 0 )
     {
         const auto timer_tree_file = io_parameters.outdir + "/" + io_parameters.timer_trees_dir + "/timer_tree_" +
-                                     std::to_string( out_step ) + ".json";
+                                     std::to_string( out_tag ) + ".json";
         logroot << "Writing timer tree to " << timer_tree_file << std::endl;
         std::ofstream out( timer_tree_file );
         out << util::TimerTree::instance().json_aggregate();

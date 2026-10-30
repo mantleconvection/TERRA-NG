@@ -309,7 +309,7 @@ class XDMFOutput
         std::string out_str;
         if ( output_in_Ma )
         {
-            out_str = std::to_string( static_cast< int >( time ) );
+            out_str = std::to_string( static_cast< int >( std::round( time ) ) );
         }
         else
         {

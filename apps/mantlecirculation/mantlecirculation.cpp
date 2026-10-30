@@ -259,7 +259,7 @@ Result<> run( const Parameters& prm )
 
     // Loading checkpoint
     int        timestep_from_checkpoint   = 0;
-    ScalarType model_time_from_checkpoint = ScalarType( 0 );
+    ScalarType model_time_from_checkpoint = 0;
     if ( prm.io_parameters.load_checkpoint )
     {
         load_temperature_checkpoint(
@@ -409,11 +409,6 @@ Result<> run( const Parameters& prm )
     }
 
     // Initialise and update plates, if applicable
-
-    // Model age for plate data; only dimensional needed
-    ScalarType plate_age_Ma = static_cast< ScalarType >( prm.boundary_parameters.plate_parameters.initial_plate_age );
-    int        last_plate_update_time = prm.boundary_parameters.plate_parameters.initial_plate_age;
-
     const ScalarType plate_velocity_nondim_scale =
         ScalarType( 1 ) / ( prm.physics_parameters.characteristic_velocity *
                             prm.boundary_parameters.plate_parameters.plate_velocity_scaling );
@@ -437,7 +432,7 @@ Result<> run( const Parameters& prm )
 
         // Extract plate velocities at initial_plate_age and pass to stokes solve for dirichlet boundary enforcement.
         extract_plate_velocities(
-            plate_age_Ma,
+            static_cast< ScalarType >( prm.boundary_parameters.plate_parameters.initial_plate_age ),
             plate_velocities->block_1().grid_data(),
             *oracle,
             coords_shell[velocity_level],
@@ -477,33 +472,54 @@ Result<> run( const Parameters& prm )
             log_hbm( "after first Stokes solve (peak)" );
     }
 
-    int        timestep_initial  = 0;
-    ScalarType simulated_time    = 0;
-    ScalarType simulated_time_Ma = 0;
-    ScalarType last_output_time  = 0; // Needed if we want to write out every x Ma.
+    // Initialise and set timestep and time/age counters.
+    // A simulation with plate velocities applied will count plate age
+    // backwards in time (from intial_plate_age towards present-day),
+    // a simulation without plates will count model time forward in time
+    // (starting at 0 or the checkpoint time).
+    int        timestep_initial         = 0;
+    ScalarType model_time_or_age_nondim = 0;
+    ScalarType model_time_or_age_Ma     = 0;
 
-    // If we have plate velocities applied, output in Ma is labelled with plate
-    // age, running backwards from initial_plate_age towards 0 Ma.
-    // Without plate velocities, output is labelled with forward-running model
-    // time.
-    ScalarType output_time = prm.boundary_parameters.plate_parameters.apply_plate_velocities ?
-                                 std::ceil( plate_age_Ma ) :
-                                 std::floor( simulated_time_Ma );
+    int output_time      = 0;
+    int last_output_time = 0; // Needed if we want to write out every x Ma.
+    int last_plate_update_time =
+        prm.boundary_parameters.plate_parameters.initial_plate_age; // Needed for discrete plate update intervals
 
+    // Time gets set to initial_plate_age, timestep counter continues if
+    // is_continue.
     if ( prm.boundary_parameters.plate_parameters.apply_plate_velocities )
     {
-        last_output_time = output_time;
+        model_time_or_age_Ma = static_cast< ScalarType >( prm.boundary_parameters.plate_parameters.initial_plate_age );
+        model_time_or_age_nondim = model_time_or_age_Ma / prm.physics_parameters.calc_time_Ma;
+
+        if ( is_continue )
+        {
+            timestep_initial = timestep_from_checkpoint;
+        }
+
+        if ( prm.io_parameters.output_per_Ma )
+        {
+            output_time      = prm.boundary_parameters.plate_parameters.initial_plate_age;
+            last_output_time = output_time;
+        }
     }
 
-    if ( is_continue )
+    // Time and timestep continue for is_continue.
+    // Both start from 0 otherwise.
+    else
     {
-        timestep_initial  = timestep_from_checkpoint;
-        simulated_time_Ma = model_time_from_checkpoint;
-        simulated_time    = simulated_time_Ma / prm.physics_parameters.calc_time_Ma;
-
-        if ( !prm.boundary_parameters.plate_parameters.apply_plate_velocities )
+        if ( is_continue )
         {
-            last_output_time = std::floor( simulated_time_Ma );
+            timestep_initial         = timestep_from_checkpoint;
+            model_time_or_age_Ma     = model_time_from_checkpoint;
+            model_time_or_age_nondim = model_time_or_age_Ma / prm.physics_parameters.calc_time_Ma;
+        }
+
+        if ( prm.io_parameters.output_per_Ma )
+        {
+            output_time      = static_cast< int >( std::floor( model_time_or_age_Ma ) );
+            last_output_time = output_time;
         }
     }
 
@@ -607,7 +623,7 @@ Result<> run( const Parameters& prm )
             xdmf_output,
             xdmf_output_pressure,
             timestep_initial,
-            output_time,
+            model_time_or_age_Ma,
             prm.io_parameters.output_per_Ma,
             prm.devel_parameters.output_dimensional,
             fields.scalar_fields,
@@ -642,11 +658,12 @@ Result<> run( const Parameters& prm )
     // Same logic as initial xdmf write-out.
     if ( !prm.io_parameters.no_radial_profiles && !( is_continue && same_dir ) )
     {
+        int out_tag = prm.io_parameters.output_per_Ma ? output_time : timestep_initial;
+
         logroot << "Writing initial radial profiles ..." << std::endl;
+        compute_and_write_radial_profiles( T, subdomain_shell_idx, radial_coords, prm, out_tag, T_scale, radial_label );
         compute_and_write_radial_profiles(
-            T, subdomain_shell_idx, radial_coords, prm, timestep_initial, T_scale, radial_label );
-        compute_and_write_radial_profiles(
-            stokes.eta_fine(), subdomain_shell_idx, radial_coords, prm, timestep_initial, eta_scale, radial_label );
+            stokes.eta_fine(), subdomain_shell_idx, radial_coords, prm, out_tag, eta_scale, radial_label );
         compute_and_write_velocity_radial_profiles(
             u.block_1(),
             coords_shell[velocity_level],
@@ -655,7 +672,7 @@ Result<> run( const Parameters& prm )
             radial_coords,
             ownership_mask_data[velocity_level],
             prm,
-            timestep_initial,
+            out_tag,
             u_scale,
             radial_label );
 
@@ -665,7 +682,7 @@ Result<> run( const Parameters& prm )
         if ( auto* hw_view = energy->h_w_diag_view() )
         {
             compute_and_write_radial_profiles(
-                *hw_view, subdomain_shell_idx, domains[velocity_level]->domain_info().radii(), prm, timestep_initial );
+                *hw_view, subdomain_shell_idx, domains[velocity_level]->domain_info().radii(), prm, out_tag );
         }
     }
 
@@ -726,20 +743,20 @@ Result<> run( const Parameters& prm )
         ScalarType dt = energy->compute_dt( timestep );
 
         // Plate data extraction before picard loop, will then be written to velocity field every picard iteration.
-        // Update plate_age here already for plate update
-        bool end_simulation_after_solve = false;
+        bool       end_simulation_after_solve = false;
+        ScalarType new_plate_age              = 0;
         if ( prm.boundary_parameters.plate_parameters.apply_plate_velocities )
         {
             // plate_age should never go beyond the specified final_plate_age
             const ScalarType dt_to_final_age =
-                ( plate_age_Ma - prm.boundary_parameters.plate_parameters.final_plate_age ) /
+                ( model_time_or_age_Ma - prm.boundary_parameters.plate_parameters.final_plate_age ) /
                 prm.physics_parameters.calc_time_Ma;
 
             // Explicit last step to deal with floating-point rounding errors around zero
             if ( dt >= dt_to_final_age )
             {
-                dt           = dt_to_final_age;
-                plate_age_Ma = prm.boundary_parameters.plate_parameters.final_plate_age;
+                dt            = dt_to_final_age;
+                new_plate_age = prm.boundary_parameters.plate_parameters.final_plate_age;
 
                 logroot << "Last timestep changed to " << dt * prm.physics_parameters.calc_time_Ma
                         << " Ma to hit final plate age." << std::endl;
@@ -748,7 +765,8 @@ Result<> run( const Parameters& prm )
             }
             else
             {
-                plate_age_Ma -= dt * prm.physics_parameters.calc_time_Ma;
+                new_plate_age = model_time_or_age_Ma - ( prm.energy_solver_parameters.energy_substeps * dt *
+                                                         prm.physics_parameters.calc_time_Ma );
             }
 
             // Update plates every timestep if interpolate_plates_in_time, else update every 1 Ma.
@@ -756,10 +774,10 @@ Result<> run( const Parameters& prm )
             if ( !prm.boundary_parameters.plate_parameters.interpolate_plates_in_time )
             {
                 // Don't update if we have not passed at least 1 Ma since last update.
-                if ( std::ceil( plate_age_Ma ) < last_plate_update_time )
+                if ( std::ceil( new_plate_age ) < last_plate_update_time )
                 {
                     plate_update           = true;
-                    last_plate_update_time = static_cast< int >( std::ceil( plate_age_Ma ) );
+                    last_plate_update_time = static_cast< int >( std::ceil( new_plate_age ) );
                 }
                 else
                     plate_update = false;
@@ -767,7 +785,7 @@ Result<> run( const Parameters& prm )
             if ( plate_update )
             {
                 extract_plate_velocities(
-                    plate_age_Ma,
+                    new_plate_age,
                     plate_velocities->block_1().grid_data(),
                     *oracle,
                     coords_shell[velocity_level],
@@ -833,11 +851,21 @@ Result<> run( const Parameters& prm )
 
         } // end Picard loop
 
-        simulated_time += prm.energy_solver_parameters.energy_substeps * dt;
-        simulated_time_Ma = simulated_time * prm.physics_parameters.calc_time_Ma;
+        // Progress time variables
+        // Backwards with plates, forwards without
+        if ( prm.boundary_parameters.plate_parameters.apply_plate_velocities )
+        {
+            model_time_or_age_Ma = new_plate_age;
+            // Nondimensional age is not actually used.
+        }
+        else
+        {
+            model_time_or_age_nondim += prm.energy_solver_parameters.energy_substeps * dt;
+            model_time_or_age_Ma = model_time_or_age_nondim * prm.physics_parameters.calc_time_Ma;
+        }
 
         // Update density history and store previous timestep length for pda
-        dt_prev = dt;
+        dt_prev = prm.energy_solver_parameters.energy_substeps * dt;
         if ( pda_form )
         {
             pda->shift_history();
@@ -847,9 +875,9 @@ Result<> run( const Parameters& prm )
 
         table->add_row( {} );
 
-        ScalarType output_time = prm.boundary_parameters.plate_parameters.apply_plate_velocities ?
-                                     std::ceil( plate_age_Ma ) :
-                                     std::floor( simulated_time_Ma );
+        output_time = prm.boundary_parameters.plate_parameters.apply_plate_velocities ?
+                          static_cast< int >( std::ceil( model_time_or_age_Ma ) ) :
+                          static_cast< int >( std::floor( model_time_or_age_Ma ) );
 
         bool write_output = false;
         if ( prm.io_parameters.output_per_Ma )
@@ -862,7 +890,7 @@ Result<> run( const Parameters& prm )
         }
         else
         {
-            write_output = ( timestep % prm.io_parameters.output_frequency == 0 );
+            write_output = ( ( timestep - timestep_initial ) % prm.io_parameters.output_frequency == 0 );
         }
 
         if ( write_output && !prm.io_parameters.no_xdmf )
@@ -874,7 +902,7 @@ Result<> run( const Parameters& prm )
                 xdmf_output,
                 xdmf_output_pressure,
                 timestep,
-                output_time,
+                model_time_or_age_Ma,
                 prm.io_parameters.output_per_Ma,
                 prm.devel_parameters.output_dimensional,
                 fields.scalar_fields,
@@ -882,21 +910,23 @@ Result<> run( const Parameters& prm )
                 fields.pressure_field );
         }
 
+        int out_tag = prm.io_parameters.output_per_Ma ? output_time : timestep;
+
         // Energy-solver-specific diagnostics dump first — refreshes EV
         // diagnostic views (lap_diag_) so the radial-profile pass below sees
         // up-to-date data.
         if ( write_output )
         {
-            energy->dump_diagnostics( timestep, prm.io_parameters.outdir );
+            energy->dump_diagnostics( out_tag, prm.io_parameters.outdir );
         }
 
         if ( write_output && !prm.io_parameters.no_radial_profiles )
         {
             logroot << "Writing radial profiles ..." << std::endl;
             compute_and_write_radial_profiles(
-                T, subdomain_shell_idx, radial_coords, prm, timestep, T_scale, radial_label );
+                T, subdomain_shell_idx, radial_coords, prm, out_tag, T_scale, radial_label );
             compute_and_write_radial_profiles(
-                stokes.eta_fine(), subdomain_shell_idx, radial_coords, prm, timestep, eta_scale, radial_label );
+                stokes.eta_fine(), subdomain_shell_idx, radial_coords, prm, out_tag, eta_scale, radial_label );
             compute_and_write_velocity_radial_profiles(
                 u.block_1(),
                 coords_shell[velocity_level],
@@ -905,7 +935,7 @@ Result<> run( const Parameters& prm )
                 radial_coords,
                 ownership_mask_data[velocity_level],
                 prm,
-                timestep,
+                out_tag,
                 u_scale,
                 radial_label );
 
@@ -913,12 +943,12 @@ Result<> run( const Parameters& prm )
             if ( auto* lap_view = energy->lap_diag_view() )
             {
                 compute_and_write_radial_profiles(
-                    *lap_view, subdomain_shell_idx, domains[velocity_level]->domain_info().radii(), prm, timestep );
+                    *lap_view, subdomain_shell_idx, domains[velocity_level]->domain_info().radii(), prm, out_tag );
             }
             if ( auto* hw_view = energy->h_w_diag_view() )
             {
                 compute_and_write_radial_profiles(
-                    *hw_view, subdomain_shell_idx, domains[velocity_level]->domain_info().radii(), prm, timestep );
+                    *hw_view, subdomain_shell_idx, domains[velocity_level]->domain_info().radii(), prm, out_tag );
             }
         }
 
@@ -959,7 +989,8 @@ Result<> run( const Parameters& prm )
                 {
                     out << "timestep,sim_time,Nu_top_W1,V_rms\n";
                 }
-                const double t_end_of_step = simulated_time + prm.energy_solver_parameters.energy_substeps * dt;
+                const double t_end_of_step =
+                    model_time_or_age_nondim + prm.energy_solver_parameters.energy_substeps * dt;
                 out << timestep << "," << t_end_of_step << "," << Nu_top << ","
                     << "," << V_rms << "\n";
             }
@@ -968,10 +999,10 @@ Result<> run( const Parameters& prm )
         // Log time progress
         if ( prm.boundary_parameters.plate_parameters.apply_plate_velocities )
         {
-            logroot << "Model plate age: " << plate_age_Ma << " Ma" << std::endl;
+            logroot << "Model plate age: " << model_time_or_age_Ma << " Ma" << std::endl;
             logroot << " Stopping at " << prm.boundary_parameters.plate_parameters.final_plate_age << " Ma, "
                     << std::round(
-                           ( prm.boundary_parameters.plate_parameters.initial_plate_age - plate_age_Ma ) /
+                           ( prm.boundary_parameters.plate_parameters.initial_plate_age - model_time_or_age_Ma ) /
                            ( prm.boundary_parameters.plate_parameters.initial_plate_age -
                              prm.boundary_parameters.plate_parameters.final_plate_age ) *
                            1000.0 ) /
@@ -982,16 +1013,16 @@ Result<> run( const Parameters& prm )
         {
             if ( prm.devel_parameters.output_dimensional )
             {
-                logroot << "Simulated time: " << simulated_time_Ma << " Ma" << std::endl;
+                logroot << "Simulated time: " << model_time_or_age_Ma << " Ma" << std::endl;
                 logroot << "  Stopping at " << prm.time_stepping_parameters.t_end_Ma << " Ma, ";
             }
             else
             {
-                logroot << "Simulated time: " << simulated_time << std::endl;
+                logroot << "Simulated time: " << model_time_or_age_nondim << std::endl;
                 logroot << "Stopping at nondimensional time " << prm.time_stepping_parameters.t_end << ", ";
             }
-            logroot << std::round( simulated_time / prm.time_stepping_parameters.t_end * 1000.0 ) / 10.0 << "% done."
-                    << std::endl;
+            logroot << std::round( model_time_or_age_nondim / prm.time_stepping_parameters.t_end * 1000.0 ) / 10.0
+                    << "% done." << std::endl;
         }
 
         // Memory footprint
@@ -1003,7 +1034,7 @@ Result<> run( const Parameters& prm )
 
         if ( write_output )
         {
-            write_timer_tree( prm.io_parameters, timestep );
+            write_timer_tree( prm.io_parameters, out_tag );
         }
 
         if ( prm.boundary_parameters.plate_parameters.apply_plate_velocities )
@@ -1017,7 +1048,7 @@ Result<> run( const Parameters& prm )
                 break;
             }
         }
-        else if ( simulated_time >= prm.time_stepping_parameters.t_end )
+        else if ( model_time_or_age_nondim >= prm.time_stepping_parameters.t_end )
         {
             break;
         }
