@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -9,6 +11,7 @@
 #include "io.hpp"
 #include "kokkos/kokkos_wrapper.hpp"
 #include "linalg/vector_w1.hpp"
+#include "mpi/mpi.hpp"
 #include "parameters.hpp"
 #include "shell/spherical_harmonics.hpp"
 #include "util/logging.hpp"
@@ -51,6 +54,40 @@ struct ComputePowerLawProfile
         radial_profile_( id, r ) = T_min_ + ( T_max_ - T_min_ ) * Kokkos::pow( frac, exponent_ );
     }
 };
+
+/// Random superposition sum_{l = 1}^{l_max} sum_{|m| <= min(l, m_max)} a_lm * Y_l^m, with a_lm uniform in [-1, 1].
+/// The seed is fixed, so all ranks draw the same weights.
+template < typename ScalarType >
+grid::Grid3DDataScalar< ScalarType > random_sph_superposition(
+    const int                                   l_max,
+    const int                                   m_max,
+    const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell )
+{
+    grid::Grid3DDataScalar< ScalarType > sum(
+        "sph_superposition", coords_shell.extent( 0 ), coords_shell.extent( 1 ), coords_shell.extent( 2 ) );
+
+    std::mt19937                                 rng( 42 );
+    std::uniform_real_distribution< ScalarType > weight( -1, 1 );
+
+    for ( int l = 1; l <= l_max; ++l )
+    {
+        for ( int m = -std::min( l, m_max ); m <= std::min( l, m_max ); ++m )
+        {
+            const auto Y_lm =
+                shell::spherical_harmonics_coefficients_grid< ScalarType, ScalarType >( l, m, coords_shell );
+            const ScalarType a_lm = weight( rng );
+
+            Kokkos::parallel_for(
+                "add Y_lm",
+                Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >(
+                    { 0, 0, 0 }, { sum.extent( 0 ), sum.extent( 1 ), sum.extent( 2 ) } ),
+                KOKKOS_LAMBDA( int id, int x, int y ) { sum( id, x, y ) += a_lm * Y_lm( id, x, y ); } );
+        }
+    }
+    Kokkos::fence();
+
+    return sum;
+}
 
 /// Set T (W1) from the configured initial-condition profile,
 /// and add an optional noise or spherical-harmonic perturbation of maximum size
@@ -153,21 +190,25 @@ void initialize_temperature_fields(
         communication::shell::send_recv( domain, T.grid_data(), communication::CommunicationReduction::MAX );
     }
 
-    else if ( init_temp.perturbation == InitialPerturbation::SPHERICAL_HARMONICS )
+    else if (
+        init_temp.perturbation == InitialPerturbation::SPHERICAL_HARMONICS ||
+        init_temp.perturbation == InitialPerturbation::SPHERICAL_HARMONICS_SUPERPOSITION )
     {
-        const bool sph = ( init_temp.sph_degree_l > 0 && init_temp.perturbation_amplitude != 0.0 );
+        const bool superpose = ( init_temp.perturbation == InitialPerturbation::SPHERICAL_HARMONICS_SUPERPOSITION );
+        const bool sph       = ( init_temp.sph_degree_l > 0 && init_temp.perturbation_amplitude != 0.0 );
         const bool sph_2 =
-            ( init_temp.sph_degree_l_2 > 0 && init_temp.sph_factor_2 != 0.0 &&
+            ( !superpose && init_temp.sph_degree_l_2 > 0 && init_temp.sph_factor_2 != 0.0 &&
               init_temp.perturbation_amplitude != 0.0 );
 
         if ( sph )
         {
-            util::logroot << "Adding spherical harmonic perturbation..." << std::endl;
+            util::logroot << "Adding spherical harmonic " << ( superpose ? "superposition " : "" ) << "perturbation..."
+                          << std::endl;
 
-            grid::Grid3DDataScalar< ScalarType > sph_coeffs;
-
-            sph_coeffs = shell::spherical_harmonics_coefficients_grid< ScalarType, ScalarType >(
-                init_temp.sph_degree_l, init_temp.sph_order_m, coords_shell );
+            grid::Grid3DDataScalar< ScalarType > sph_coeffs =
+                superpose ? random_sph_superposition( init_temp.sph_degree_l, init_temp.sph_order_m, coords_shell ) :
+                            shell::spherical_harmonics_coefficients_grid< ScalarType, ScalarType >(
+                                init_temp.sph_degree_l, init_temp.sph_order_m, coords_shell );
 
             if ( sph_2 )
             {
@@ -202,6 +243,9 @@ void initialize_temperature_fields(
                     max_tmp = Kokkos::max( max_tmp, Kokkos::abs( sph_coeffs( id, x, y ) ) );
                 },
                 Kokkos::Max< ScalarType >( max_abs_sph ) );
+
+            // Use the global maximum, so that all subdomains are scaled by the same factor
+            MPI_Allreduce( MPI_IN_PLACE, &max_abs_sph, 1, mpi::mpi_datatype< ScalarType >(), MPI_MAX, MPI_COMM_WORLD );
 
             // Normalize in-place
             Kokkos::parallel_for(
