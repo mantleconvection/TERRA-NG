@@ -73,6 +73,7 @@ void initialize_temperature_fields(
     const Parameters&                                               prm )
 {
     using util::logroot;
+
     const auto& init_temp = prm.physics_parameters.initial_temperature;
 
     if ( init_temp.profile == InitialTemperatureProfile::FROM_FILE )
@@ -93,6 +94,7 @@ void initialize_temperature_fields(
     {
         util::logroot << "Computing conductive reference temperature profile" << std::endl;
 
+        // Compute conductive temperature profile
         Kokkos::parallel_for(
             "ComputeConductiveProfile",
             grid::shell::local_domain_md_range_policy_radial( domain ),
@@ -120,7 +122,7 @@ void initialize_temperature_fields(
                 T_ref } );
     }
 
-    // Broadcast reference profile to W1 nodes
+    // Broadcast reference temperature profile to W1 nodes
     Kokkos::parallel_for(
         "RadialProfileToW1",
         grid::shell::local_domain_md_range_policy_nodes( domain ),
@@ -238,6 +240,7 @@ void initialize_temperature_fields(
 // Fill radially constant otherwise.
 template < typename ScalarType >
 void radial_profile_init(
+    grid::Grid2DDataScalar< ScalarType >&       temperature_profile,
     grid::Grid2DDataScalar< ScalarType >&       rho_profile,
     grid::Grid2DDataScalar< ScalarType >&       alpha_profile,
     grid::Grid2DDataScalar< ScalarType >&       cp_profile,
@@ -245,7 +248,54 @@ void radial_profile_init(
     const grid::Grid2DDataScalar< ScalarType >& coords_radii,
     const Parameters&                           prm )
 {
-    const auto& phys = prm.physics_parameters;
+    const auto& phys      = prm.physics_parameters;
+    const auto& init_temp = prm.physics_parameters.initial_temperature;
+
+    // Reference temperature profile
+    if ( init_temp.profile == InitialTemperatureProfile::FROM_FILE )
+    {
+        util::logroot << "Reading reference temperature from: '" << init_temp.Tref_profile_csv_path << "'" << std::endl;
+
+        // Read and populate reference temperature profile
+        temperature_profile = shell::interpolate_radial_profile_into_subdomains_from_csv(
+            init_temp.Tref_profile_csv_path,
+            phys.radial_profiles_radii_key,
+            init_temp.Tref_profile_value_key,
+            coords_radii,
+            ScalarType( 1 ) / prm.mesh_parameters.mantle_thickness_m,
+            ScalarType( 1 ) / prm.boundary_parameters.delta_T_K );
+    }
+
+    else if ( init_temp.profile == InitialTemperatureProfile::CONDUCTIVE )
+    {
+        util::logroot << "Computing conductive reference temperature profile" << std::endl;
+
+        Kokkos::parallel_for(
+            "ComputeConductiveProfile",
+            grid::shell::local_domain_md_range_policy_radial( domain ),
+            ComputeConductiveProfile{
+                prm.mesh_parameters.radius_min,
+                prm.mesh_parameters.radius_max,
+                prm.boundary_parameters.temperature_min,
+                coords_radii,
+                temperature_profile } );
+    }
+
+    else if ( init_temp.profile == InitialTemperatureProfile::POWER_LAW )
+    {
+        util::logroot << "Computing power-law reference temperature profile" << std::endl;
+
+        Kokkos::parallel_for(
+            "ComputePowerLawProfile",
+            grid::shell::local_domain_md_range_policy_radial( domain ),
+            ComputePowerLawProfile{
+                prm.mesh_parameters.radius_min,
+                prm.mesh_parameters.radius_max,
+                prm.boundary_parameters.temperature_min,
+                prm.boundary_parameters.temperature_max,
+                coords_radii,
+                temperature_profile } );
+    }
 
     // Density
     if ( !phys.density_profile_csv_path.empty() )
@@ -363,6 +413,8 @@ template < typename ScalarType >
 void load_temperature_checkpoint(
     linalg::VectorW1Vec< ScalarType, 3 >&       u_velocity,
     linalg::VectorW1Scalar< ScalarType >&       T,
+    int&                                        return_timestep,
+    ScalarType&                                 return_model_time,
     const grid::shell::DistributedDomain&       domain,
     const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
     const grid::Grid2DDataScalar< ScalarType >& coords_radii,
@@ -370,11 +422,25 @@ void load_temperature_checkpoint(
 {
     using util::logroot;
 
-    logroot << "Loading checkpoint from " << prm.io_parameters.checkpoint_dir << " at simulation step "
-            << prm.io_parameters.checkpoint_step << std::endl;
+    // Append xdmf-subdirectory to checkpoint_dir name
+    std::string checkpoint_dir = prm.io_parameters.checkpoint_dir + "/xdmf";
+
+    // This assumes consistency regarding param "output_per_Ma" between the
+    // checkpoint and the current simulation. Otherwise, the wording of the log
+    // message will be inaccurate, no further consequences.
+    if ( prm.io_parameters.output_per_Ma )
+    {
+        logroot << "Loading checkpoint from " << checkpoint_dir << " at model age " << prm.io_parameters.checkpoint_step
+                << " Ma." << std::endl;
+    }
+    else
+    {
+        logroot << "Loading checkpoint from " << checkpoint_dir << " at simulation step "
+                << prm.io_parameters.checkpoint_step << "." << std::endl;
+    }
 
     // Checking if checkpoint is dimensional or nondimensional
-    auto metadata_result = io::read_xdmf_checkpoint_metadata( prm.io_parameters.checkpoint_dir );
+    auto metadata_result = io::read_xdmf_checkpoint_metadata( checkpoint_dir );
     if ( metadata_result.is_err() )
     {
         Kokkos::abort( metadata_result.error().c_str() );
@@ -405,26 +471,24 @@ void load_temperature_checkpoint(
     }
 
     auto success_vel = io::read_xdmf_checkpoint_grid(
-        prm.io_parameters.checkpoint_dir,
-        std::string( "u_u" ),
-        prm.io_parameters.checkpoint_step,
-        domain,
-        u_velocity.grid_data() );
+        checkpoint_dir, std::string( "u_u" ), prm.io_parameters.checkpoint_step, domain, u_velocity.grid_data() );
     if ( success_vel.is_err() )
     {
         Kokkos::abort( success_vel.error().c_str() );
     }
 
     auto success_temp = io::read_xdmf_checkpoint_grid(
-        prm.io_parameters.checkpoint_dir,
-        std::string( "T" ),
-        prm.io_parameters.checkpoint_step,
-        domain,
-        T.grid_data() );
+        checkpoint_dir, std::string( "T" ), prm.io_parameters.checkpoint_step, domain, T.grid_data() );
     if ( success_temp.is_err() )
     {
         Kokkos::abort( success_temp.error().c_str() );
     }
+
+    // Read checkpoint model time and timestep. We read both, because
+    // prm.io_parameters.checkpoint_step might be either model_time or timestep.
+    if ( prm.io_parameters.continue_simulation )
+        io::read_xdmf_step_and_time(
+            checkpoint_dir, prm.io_parameters.checkpoint_step, return_timestep, return_model_time );
 
     // Nondimensionalise checkpoint, if necessary
     if ( metadata.is_dimensional )
