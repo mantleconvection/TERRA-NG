@@ -40,22 +40,48 @@ using ScalarType = double;
 
 namespace terra::mantlecirculation {
 
-inline Result<> create_directories( const IOParameters& io_parameters )
+/// @brief Creates output directories according to I/O parameters
+///
+/// Collective: must be called by every rank in MPI_COMM_WORLD, however directory checks
+/// and creation are only performed on MPI rank 0
+inline Result<> create_output_directories( const IOParameters& io_parameters )
 {
     const auto xdmf_dir            = io_parameters.outdir + "/" + io_parameters.xdmf_dir;
     const auto radial_profiles_dir = io_parameters.outdir + "/" + io_parameters.radial_profiles_out_dir;
     const auto timer_trees_dir     = io_parameters.outdir + "/" + io_parameters.timer_trees_dir;
 
-    if ( !io_parameters.overwrite && std::filesystem::exists( io_parameters.outdir ) )
+    bool        success = true;
+    std::string error_message;
+
+    // Only perform directory checks and creation on rank 0
+    if ( mpi::rank() == 0 )
     {
-        return { "Will not overwrite existing directory (to not accidentally delete old simulation data). "
-                 "Use -h for help and look for an overwrite option or choose a different output dir name." };
+        if ( !io_parameters.overwrite && std::filesystem::exists( io_parameters.outdir ) )
+        {
+            success = false;
+            error_message =
+                "Will not overwrite files in existing directory (to not accidentally delete old simulation data)."
+                "Use -h for help and look for an overwrite option or choose a different output dir name.";
+        }
+
+        success &= util::prepare_empty_directory( io_parameters.outdir, true, io_parameters.overwrite );
+        success &= util::prepare_empty_directory( xdmf_dir, true, io_parameters.overwrite );
+        success &= util::prepare_empty_directory( radial_profiles_dir, true, io_parameters.overwrite );
+        success &= util::prepare_empty_directory( timer_trees_dir, true, io_parameters.overwrite );
     }
 
-    util::prepare_empty_directory( io_parameters.outdir );
-    util::prepare_empty_directory( xdmf_dir );
-    util::prepare_empty_directory( radial_profiles_dir );
-    util::prepare_empty_directory( timer_trees_dir );
+    // make all MPI ranks aware of successful directory creation on rank 0
+    MPI_Bcast( &success, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD );
+
+    if ( !success )
+    {
+        if ( error_message.empty() )
+        {
+            error_message = "Failed to prepare output directories.";
+        }
+
+        return { error_message };
+    }
 
     return { Ok{} };
 }
