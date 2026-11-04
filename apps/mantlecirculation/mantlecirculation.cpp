@@ -86,7 +86,7 @@ Result<> run( const Parameters& prm )
 {
     auto table = std::make_shared< util::Table >();
 
-    if ( const auto create_directories_result = create_directories( prm.io_parameters );
+    if ( const auto create_directories_result = create_output_directories( prm.io_parameters );
          create_directories_result.is_err() )
     {
         return create_directories_result.error();
