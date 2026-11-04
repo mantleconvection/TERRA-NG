@@ -56,7 +56,7 @@ inline Result<> create_output_directories( const IOParameters& io_parameters )
     // Only perform directory checks and creation on rank 0
     if ( mpi::rank() == 0 )
     {
-        if ( !io_parameters.overwrite && std::filesystem::exists( io_parameters.outdir ) )
+        if ( !io_parameters.outfiles_overwrite && std::filesystem::exists( io_parameters.outdir ) )
         {
             success = false;
             error_message =
@@ -64,10 +64,10 @@ inline Result<> create_output_directories( const IOParameters& io_parameters )
                 "Use -h for help and look for an overwrite option or choose a different output dir name.";
         }
 
-        success &= util::prepare_empty_directory( io_parameters.outdir, true, io_parameters.overwrite );
-        success &= util::prepare_empty_directory( xdmf_dir, true, io_parameters.overwrite );
-        success &= util::prepare_empty_directory( radial_profiles_dir, true, io_parameters.overwrite );
-        success &= util::prepare_empty_directory( timer_trees_dir, true, io_parameters.overwrite );
+        success &= util::prepare_empty_directory( io_parameters.outdir, true, io_parameters.outfiles_overwrite );
+        success &= util::prepare_empty_directory( xdmf_dir, true, io_parameters.outfiles_overwrite );
+        success &= util::prepare_empty_directory( radial_profiles_dir, true, io_parameters.outfiles_overwrite );
+        success &= util::prepare_empty_directory( timer_trees_dir, true, io_parameters.outfiles_overwrite );
     }
 
     // make all MPI ranks aware of successful directory creation on rank 0
