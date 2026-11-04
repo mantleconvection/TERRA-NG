@@ -970,7 +970,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     //////////////////////
 
     add_option_with_default( app, "--outdir", parameters.io_parameters.outdir )->group( "I/O" );
-    add_flag_with_default( app, "--outdir-overwrite", parameters.io_parameters.overwrite )->group( "I/O" );
+    add_flag_with_default( app, "--outfiles-overwrite", parameters.io_parameters.overwrite )->group( "I/O" );
     add_option_with_default( app, "--output-pressure", parameters.io_parameters.output_pressure )->group( "I/O" );
 
     // Checkpoint loading

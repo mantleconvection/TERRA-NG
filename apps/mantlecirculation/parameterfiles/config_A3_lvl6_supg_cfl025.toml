@@ -46,5 +46,5 @@ stokes-viscous-pc-agglom-factors=[]
 
 ## I/O
 outdir="./output_A3_lvl6_supg_cfl025"
-outdir-overwrite=1
+outfiles-overwrite=1
 output-frequency=100

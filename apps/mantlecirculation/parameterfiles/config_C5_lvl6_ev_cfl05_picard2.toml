@@ -47,7 +47,7 @@ stokes-viscous-pc-agglom-factors=[]
 
 ## I/O
 outdir="./output_C5_lvl6_ev_cfl05_picard2"
-outdir-overwrite=1
+outfiles-overwrite=1
 output-frequency=100
 
 ## Entropy viscosity
