@@ -2819,17 +2819,6 @@ inline Kokkos::RangePolicy<>
             ( distributed_domain.domain_info().subdomain_num_nodes_radially() - 1 ) );
 }
 
-inline Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >
-    local_domain_md_range_policy_cells_fv_skip_ghost_layers( const DistributedDomain& distributed_domain )
-{
-    return Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
-        { 0, 1, 1, 1 },
-        { static_cast< long long >( distributed_domain.subdomains().size() ),
-          distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1 - 1,
-          distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1 - 1,
-          distributed_domain.domain_info().subdomain_num_nodes_radially() + 1 - 1 } );
-}
-
 /// @brief Returns an initialized grid with the coordinates of all subdomains' nodes projected to the unit sphere.
 ///
 /// The layout is
