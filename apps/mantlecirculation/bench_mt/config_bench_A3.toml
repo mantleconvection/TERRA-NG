@@ -36,7 +36,7 @@ stokes-viscous-pc-num-smoothing-steps-prepost=3
 stokes-viscous-pc-num-power-iterations=10
 stokes-viscous-pc-agglom-factors=[]
 
-outdir-overwrite=1
+outfiles-overwrite=1
 output-frequency=1000
 
 ev-dump-nu-h=false

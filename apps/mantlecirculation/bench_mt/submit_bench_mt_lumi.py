@@ -368,7 +368,7 @@ chmod +x ${{SELECT_GPU}}
 mkdir -p {out_path}
 cd {out_path}
 
-srun --cpu-bind={cpu_bind} ${{SELECT_GPU}} {BINARY} --config {config} {app_args} --outdir {out_path} --outdir-overwrite
+srun --cpu-bind={cpu_bind} ${{SELECT_GPU}} {BINARY} --config {config} {app_args} --outdir {out_path} --outfiles-overwrite
 
 rm -f ${{SELECT_GPU}}
 """

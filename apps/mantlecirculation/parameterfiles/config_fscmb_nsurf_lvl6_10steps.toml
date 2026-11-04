@@ -48,7 +48,7 @@ stokes-viscous-pc-agglom-factors=[]
 
 ## I/O
 outdir="./output_fscmb_nsurf_lvl6_10steps"
-outdir-overwrite=1
+outfiles-overwrite=1
 output-frequency=1
 
 ## Entropy viscosity

@@ -395,7 +395,7 @@ ulimit -c 0
 mkdir -p {out_path}
 cd {out_path}
 
-srun --gpu-bind=closest {BINARY} --config {config} {app_args} --outdir {out_path} --outdir-overwrite
+srun --gpu-bind=closest {BINARY} --config {config} {app_args} --outdir {out_path} --outfiles-overwrite
 """
     job_path.write_text(script)
     job_path.chmod(0o755)

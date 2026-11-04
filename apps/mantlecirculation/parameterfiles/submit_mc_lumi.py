@@ -79,7 +79,7 @@ export OMP_NUM_THREADS=1
 ulimit -c 0
 
 srun --cpu-bind=${{CPU_BIND}} ${{SELECT_GPU}} {binary} \\
-    --config {config} --outdir {outdir} --outdir-overwrite
+    --config {config} --outdir {outdir} --outfiles-overwrite
 
 rm -f ${{SELECT_GPU}}
 """
