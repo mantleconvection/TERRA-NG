@@ -8,8 +8,17 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Enable verbose makefile output
+# Disable verbose compiled output
 set(CMAKE_VERBOSE_MAKEFILE OFF)
+
+# Set default build type, if user did not specify it and
+# this is not a multi-configuration case
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(default_build_type "Release")
+  message(STATUS "Setting build type to '${default_build_type}' as none was specified.")
+  set(CMAKE_BUILD_TYPE "${default_build_type}" CACHE STRING "Choose the type of build." FORCE)
+endif()
+set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "16.0" )
   message( FATAL_ERROR "TERRA-NG requires at least version 16 of Clang. Found: ${CMAKE_CXX_COMPILER_VERSION}" )
