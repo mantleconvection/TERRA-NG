@@ -46,44 +46,31 @@ namespace terra::mantlecirculation {
 /// and creation are only performed on MPI rank 0
 inline Result<> create_output_directories( const IOParameters& io_parameters )
 {
-    const auto xdmf_dir            = io_parameters.outdir + "/" + io_parameters.xdmf_dir;
-    const auto radial_profiles_dir = io_parameters.outdir + "/" + io_parameters.radial_profiles_out_dir;
-    const auto timer_trees_dir     = io_parameters.outdir + "/" + io_parameters.timer_trees_dir;
+    std::array< std::string, 4 > directory_names;
+    directory_names[0] = io_parameters.outdir;
+    directory_names[1] = io_parameters.outdir + "/" + io_parameters.xdmf_dir;
+    directory_names[2] = io_parameters.outdir + "/" + io_parameters.radial_profiles_out_dir;
+    directory_names[3] = io_parameters.outdir + "/" + io_parameters.timer_trees_dir;
 
     bool        success = true;
     std::string error_message;
 
-    // Only perform directory checks and creation on rank 0
-    if ( mpi::rank() == 0 )
+    // Make directories
+    for ( const std::string& dir_name : directory_names )
     {
-        if ( !io_parameters.outfiles_overwrite && std::filesystem::exists( io_parameters.outdir ) )
+        auto [status_operation, status_message] =
+            util::prepare_empty_directory( dir_name, true, io_parameters.outfiles_overwrite );
+        if ( status_operation == false )
         {
-            success = false;
-            error_message =
-                "Will not overwrite files in existing directory (to not accidentally delete old simulation data)."
-                "Use -h for help and look for an overwrite option or choose a different output dir name.";
+            error_message += status_message + '\n';
         }
-
-        success &= util::prepare_empty_directory( io_parameters.outdir, true, io_parameters.outfiles_overwrite );
-        success &= util::prepare_empty_directory( xdmf_dir, true, io_parameters.outfiles_overwrite );
-        success &= util::prepare_empty_directory( radial_profiles_dir, true, io_parameters.outfiles_overwrite );
-        success &= util::prepare_empty_directory( timer_trees_dir, true, io_parameters.outfiles_overwrite );
+        success &= status_operation;
     }
 
-    // make all MPI ranks aware of successful directory creation on rank 0
+    // make all MPI ranks aware of status of directory creation on rank 0
     MPI_Bcast( &success, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD );
 
-    if ( !success )
-    {
-        if ( error_message.empty() )
-        {
-            error_message = "Failed to prepare output directories.";
-        }
-
-        return { error_message };
-    }
-
-    return { Ok{} };
+    return success ? Result< Ok >( Ok{} ) : Result<>( error_message );
 }
 
 // Xdmf output bundle
