@@ -121,7 +121,11 @@ KOKKOS_INLINE_FUNCTION void add( const FixedPoint& fp, T* addr, const V v )
                     Kokkos::atomic_store( fp.overflow, 1 );
                 return;
             }
-            Kokkos::atomic_add( reinterpret_cast< long long* >( addr ), static_cast< long long >( Kokkos::round( s ) ) );
+            // unsigned: the only 64-bit integer with a native CUDA/HIP atomic add in Kokkos (signed long long
+            // falls back to a compare-and-swap loop); two's complement makes the wrap-around harmless.
+            const long long iv = static_cast< long long >( Kokkos::round( s ) );
+            Kokkos::atomic_add(
+                reinterpret_cast< unsigned long long* >( addr ), static_cast< unsigned long long >( iv ) );
             return;
         }
     }
