@@ -124,8 +124,14 @@ KOKKOS_INLINE_FUNCTION void add( const FixedPoint& fp, T* addr, const V v )
             // unsigned: the only 64-bit integer with a native CUDA/HIP atomic add in Kokkos (signed long long
             // falls back to a compare-and-swap loop); two's complement makes the wrap-around harmless.
             const long long iv = static_cast< long long >( Kokkos::round( s ) );
+#if defined( __CUDA_ARCH__ ) || defined( __HIP_DEVICE_COMPILE__ )
+            // The vendor intrinsic: a single fire-and-forget RED instruction. Through Kokkos::atomic_add the
+            // same add compiled to a compare-and-swap loop (ncu: ~19 ATOM per contribution, 17x slower).
+            atomicAdd( reinterpret_cast< unsigned long long* >( addr ), static_cast< unsigned long long >( iv ) );
+#else
             Kokkos::atomic_add(
                 reinterpret_cast< unsigned long long* >( addr ), static_cast< unsigned long long >( iv ) );
+#endif
             return;
         }
     }
