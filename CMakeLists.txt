@@ -77,11 +77,6 @@ if (MPI_FOUND)
 endif ()
 
 
-option(TERRA_ENABLE_PYTHON "Build terra::ml::NeuralSolver against an embedded CPython" OFF)
-if (TERRA_ENABLE_PYTHON)
-    find_package(Python3 REQUIRED COMPONENTS Development.Embed)
-    message(STATUS "terra::ml: embedding Python from ${Python3_LIBRARIES}")
-endif ()
 set(EIGEN_DIR extern/eigen-3.4.0 CACHE PATH "eigen path")
 include_directories(SYSTEM ${EIGEN_DIR})
 link_directories(${EIGEN_DIR})

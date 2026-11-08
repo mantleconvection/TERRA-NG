@@ -24,61 +24,32 @@
 /// \f[
 ///   \partial_t T + \mathbf{u} \cdot \nabla T = 0, \qquad t \in [t^n, t^{n+1}]
 /// \f]
-/// exactly along characteristics: for every node \f$ x_i \f$ the characteristic is traced **backwards** by
-/// integrating \f$ \mathrm{d}X/\mathrm{d}s = -\hat{\mathbf{u}}(X, s) \f$ from \f$ X(0) = x_i \f$ over
-/// \f$ s \in [0, \Delta t] \f$, and the new value is the old field evaluated at the foot point,
-/// \f$ T^{n+1}_i = T^n(X(\Delta t)) \f$.
+/// exactly along characteristics: every node \f$ x_i \f$ is traced **backwards** by integrating
+/// \f$ \mathrm{d}X/\mathrm{d}s = -\hat{\mathbf{u}}(X, s) \f$ from \f$ X(0) = x_i \f$ over \f$ s \in [0, \Delta t] \f$,
+/// and the new value is the old field at the foot point, \f$ T^{n+1}_i = T^n(X(\Delta t)) \f$. Velocity is
+/// interpolated linearly in time; backwards integration maps pseudo-time \f$ s \f$ to \f$ t^{n+1} - s \f$.
 ///
-/// The velocity is interpolated linearly in time between the two given fields. Because the integration runs
-/// backwards, pseudo-time \f$ s \f$ maps to physical time \f$ t^{n+1} - s \f$, so a stage at
-/// \f$ \tau = s / \Delta t \f$ uses \f$ (1 - \tau) \mathbf{u}^{n+1} + \tau \mathbf{u}^{n} \f$.
+/// @note With multiple substeps the time-interpolation weight must be tracked in *global* pseudo-time,
+///       \f$ \tau = (m + c_k)/M \f$; reusing the raw stage weight \f$ c_k \f$ per substep drops the order to first.
 ///
-/// @note With more than one substep the interpolation weight is tracked in *global* pseudo-time,
-///       \f$ \tau = (m + c_k) / M \f$ for substep \f$ m \f$ of \f$ M \f$ and stage \f$ k \f$. Reusing the raw
-///       stage weight \f$ c_k \f$ in every substep -- as some implementations do -- would interpolate as if each
-///       substep spanned the whole timestep and silently drop the temporal order back to first order.
+/// Advectively unconditionally stable (no CFL from the tracing); the implementation is bounded by the ghost-layer
+/// width, since a foot point must stay inside the subdomain plus its ghosts.
+/// \ref MMOCTransport::recommended_substeps converts a Courant number into a substep count within that budget.
 ///
-/// The scheme is unconditionally stable in the advective sense: there is no CFL restriction from the
-/// characteristic tracing itself. The *implementation* is bounded by the ghost layer width, since a foot point
-/// must remain inside the local subdomain plus its ghost layer. \ref MMOCTransport::recommended_substeps
-/// converts a Courant number into the number of substeps that keeps every substep inside that budget.
+/// **Interpolation.** The foot-point value uses \ref terra::fe::wedge::sl::evaluate_cubic_scalar over the
+/// structured index stencil (not the Q1 wedge shape functions, which are only second order and dominate the
+/// numerical diffusion). A six-node stencil gives a quintic where a centred window fits, stepping down the
+/// cubic/quadratic/linear ladder near diamond seams (see \ref terra::fe::wedge::sl::stencil_window). Results are
+/// Bermejo-Staniforth clipped to the located cell's eight nodes; velocity uses
+/// \ref terra::fe::wedge::sl::evaluate_q1_vec (exact for linear fields).
 ///
-/// **Interpolation.** The field at the foot point is evaluated with
-/// \ref terra::fe::wedge::sl::evaluate_cubic_scalar, which reconstructs it over the structured index stencil
-/// rather than with the Q1 shape functions of the containing wedge: multilinear evaluation is only second order
-/// and pays that error once per timestep, which is the dominant source of numerical diffusion here. The
-/// transport asks for a six-node stencil, so the reconstruction is a quintic where a centred window of that
-/// width fits and steps down to the centred cubic and then to the sliding cubic/quadratic/linear ladder where
-/// it does not -- see \ref terra::fe::wedge::sl::stencil_window, which also says why the reduced band around
-/// each diamond seam is structural. The result is bounded by the Bermejo-Staniforth clip to the located cell's
-/// own eight nodes; the per-sweep PCHIP slope limiter is deliberately not used, for the reason set out at
-/// \ref terra::fe::wedge::sl::evaluate_cubic_scalar. The velocity stays on
-/// \ref terra::fe::wedge::sl::evaluate_q1_vec, which reproduces a linear velocity field to round-off.
-///
-/// Measured on `test_mmoc_rotation`, one full revolution of the cone, against the entropy-viscosity scheme on
-/// the same mesh. Level 6: L2 relative error 0.090 for this scheme against 0.504 for EV, peak 0.691 of the
-/// exact 1.0 against 0.252, in 1609 timesteps against EV's 16086 and about a minute against 40 on one GH200.
-/// Level 5: 0.313 against 0.745. Dropping the stencil to four nodes gives 0.291 and 0.620 on the same two
-/// grids, so the sixth-order stencil is worth roughly a grid refinement.
-///
-/// What error remains is diffusion, not displacement. At level 6 the peak sits at 0.00 degrees of azimuth and
-/// the mass-weighted mean radius at 0.7449 against 0.7449 exact, while the cone is 31% short in amplitude and
-/// 57% too wide along its orbit (12.4 degrees full width at half maximum against 7.9). The broadening is
-/// anisotropic -- 0.5% in radius against 57% in azimuth -- because the foot-point displacement is tangential,
-/// so every step commits its interpolation error along the direction of travel and almost none across it.
+/// Accuracy (test_mmoc_rotation, one revolution of a cone): far less numerical diffusion than entropy viscosity
+/// on the same mesh. The residual error is diffusive, not a phase lag -- amplitude loss and tangential
+/// broadening (the foot-point displacement is tangential); the radius stays essentially exact.
 ///
 /// @warning **Do not reduce the timestep to make this scheme more accurate -- it does the opposite.** The
-///          trajectory is already essentially exact (Q1 reproduces a linear velocity to round-off, and the RK4
-///          error is ~1e-13 per step and cannot accumulate, since X is reset to the node every step), so there
-///          is no temporal error left to reduce and each extra step only commits another interpolation error.
-///          Measured at level 5, one revolution: L2 0.620 at Courant 0.5, 0.741 at 0.25, 0.809 at 0.125, with
-///          the lag growing from 3 to 5.6 degrees. Run at the largest Courant number the ghost layer allows --
-///          see \ref max_courant -- and refine in space, not in time.
-///
-///          Recovering the order properly needs a reconstruction that is exact for polynomials in the physical
-///          coordinates, e.g. a least-squares fit over the stencil in a local tangent frame with the
-///          coefficients precomputed per cell.
-///
+///          trajectory is already essentially exact, so each extra step only commits another interpolation error.
+///          Run at the largest Courant number the ghost layer allows (see \ref max_courant) and refine in space.
 ///
 /// Diffusion is not part of this operator; combine it with an implicit diffusion solve by operator splitting.
 
