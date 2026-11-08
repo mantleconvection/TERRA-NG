@@ -22,6 +22,7 @@
 
 #include <cstdlib>   // for std::getenv (wave-parallel DN path opt-in)
 #include <vector>    // for the interface/interior block partition lists
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -602,6 +603,9 @@ class EpsilonDivDivKerngen
      * This is where the path decision now lives (host), so device code does not branch
      * on `kernel_path_` in the hot path.
      */
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
         util::Timer timer_apply( "epsilon_divdiv_apply" );
@@ -626,112 +630,115 @@ class EpsilonDivDivKerngen
         }
 
         // Host-side dispatch => no per-team path branching in device code
-        if ( kernel_path_ == KernelPath::Slow )
-        {
-            Kokkos::parallel_for(
-                "epsilon_divdiv_apply_kernel_slow", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                    this->run_team_slow( team );
-                } );
-        }
-        else if ( kernel_path_ == KernelPath::FastFreeslip )
-        {
-            if ( diagonal_ )
-            {
-                Kokkos::parallel_for(
-                    "epsilon_divdiv_apply_kernel_fast_fs_diag", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                        this->template run_team_fast_freeslip< true >( team );
-                    } );
-            }
-            else
-            {
-                Kokkos::parallel_for(
-                    "epsilon_divdiv_apply_kernel_fast_fs_matvec", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                        this->template run_team_fast_freeslip< false >( team );
-                    } );
-            }
-        }
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, det::max_abs( src_ ), det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+                if ( kernel_path_ == KernelPath::Slow )
+                {
+                    Kokkos::parallel_for(
+                        "epsilon_divdiv_apply_kernel_slow", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                            this->run_team_slow( team );
+                        } );
+                }
+                else if ( kernel_path_ == KernelPath::FastFreeslip )
+                {
+                    if ( diagonal_ )
+                    {
+                        Kokkos::parallel_for(
+                            "epsilon_divdiv_apply_kernel_fast_fs_diag", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                                this->template run_team_fast_freeslip< true >( team );
+                            } );
+                    }
+                    else
+                    {
+                        Kokkos::parallel_for(
+                            "epsilon_divdiv_apply_kernel_fast_fs_matvec", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                                this->template run_team_fast_freeslip< false >( team );
+                            } );
+                    }
+                }
 #ifdef __HIP_PLATFORM_AMD__
-        else if ( kernel_path_ == KernelPath::FastDirichletNeumannWave )
-        {
-            // Wave-parallel DN path: each wave (60 of 64 lanes active) processes
-            // 10 radial cells via team_size=10 threads × vector_length=6 vector
-            // lanes (one lane per active wedge node).
-            const int r_stacks = ( hex_rad_ + kWaveCellsPerWave - 1 ) / kWaveCellsPerWave;
-            const int wave_blocks =
-                local_subdomains_ * ( hex_lat_ ) * ( hex_lat_ ) * r_stacks;
-            using LB = Kokkos::LaunchBounds< 64, 1 >;
-            Kokkos::TeamPolicy< LB > wv_policy(
-                wave_blocks, /*team_size=*/10, /*vector_length=*/6 );
-            wv_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn_wave() ) );
-            if ( diagonal_ )
-            {
-                Kokkos::parallel_for(
-                    "epsilon_divdiv_apply_kernel_fast_dn_wave_diag", wv_policy,
-                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                        this->template run_team_fast_dirichlet_neumann_wave< true >( team );
-                    } );
-            }
-            else
-            {
-                Kokkos::parallel_for(
-                    "epsilon_divdiv_apply_kernel_fast_dn_wave_matvec", wv_policy,
-                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                        this->template run_team_fast_dirichlet_neumann_wave< false >( team );
-                    } );
-            }
-        }
-        else if ( kernel_path_ == KernelPath::FastDirichletNeumannHex )
-        {
-            // Hex 1-pt Gauss DN path: each wave (64 lanes) processes 16 radial cells
-            // (2 blocks × 8 cells, 8 lanes per hex). league_size: one team per
-            // (subdomain, x_cell, y_cell, r_stack).
-            const int r_stacks = ( hex_rad_ + kHexCellsPerWave - 1 ) / kHexCellsPerWave;
-            const int hex_blocks =
-                local_subdomains_ * ( hex_lat_ ) * ( hex_lat_ ) * r_stacks;
-            using LB = Kokkos::LaunchBounds< 64, 1 >;
-            Kokkos::TeamPolicy< LB > hx_policy(
-                hex_blocks, /*team_size=*/1, /*vector_length=*/64 );
-            hx_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn_hex() ) );
-            if ( diagonal_ )
-            {
-                Kokkos::parallel_for(
-                    "epsilon_divdiv_apply_kernel_fast_dn_hex_diag", hx_policy,
-                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                        this->template run_team_fast_dirichlet_neumann_hex< true >( team );
-                    } );
-            }
-            else
-            {
-                Kokkos::parallel_for(
-                    "epsilon_divdiv_apply_kernel_fast_dn_hex_matvec", hx_policy,
-                    KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                        this->template run_team_fast_dirichlet_neumann_hex< false >( team );
-                    } );
-            }
-        }
+                else if ( kernel_path_ == KernelPath::FastDirichletNeumannWave )
+                {
+                    // Wave-parallel DN path: each wave (60 of 64 lanes active) processes
+                    // 10 radial cells via team_size=10 threads × vector_length=6 vector
+                    // lanes (one lane per active wedge node).
+                    const int r_stacks = ( hex_rad_ + kWaveCellsPerWave - 1 ) / kWaveCellsPerWave;
+                    const int wave_blocks =
+                        local_subdomains_ * ( hex_lat_ ) * ( hex_lat_ ) * r_stacks;
+                    using LB = Kokkos::LaunchBounds< 64, 1 >;
+                    Kokkos::TeamPolicy< LB > wv_policy(
+                        wave_blocks, /*team_size=*/10, /*vector_length=*/6 );
+                    wv_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn_wave() ) );
+                    if ( diagonal_ )
+                    {
+                        Kokkos::parallel_for(
+                            "epsilon_divdiv_apply_kernel_fast_dn_wave_diag", wv_policy,
+                            KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                                this->template run_team_fast_dirichlet_neumann_wave< true >( team );
+                            } );
+                    }
+                    else
+                    {
+                        Kokkos::parallel_for(
+                            "epsilon_divdiv_apply_kernel_fast_dn_wave_matvec", wv_policy,
+                            KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                                this->template run_team_fast_dirichlet_neumann_wave< false >( team );
+                            } );
+                    }
+                }
+                else if ( kernel_path_ == KernelPath::FastDirichletNeumannHex )
+                {
+                    // Hex 1-pt Gauss DN path: each wave (64 lanes) processes 16 radial cells
+                    // (2 blocks × 8 cells, 8 lanes per hex). league_size: one team per
+                    // (subdomain, x_cell, y_cell, r_stack).
+                    const int r_stacks = ( hex_rad_ + kHexCellsPerWave - 1 ) / kHexCellsPerWave;
+                    const int hex_blocks =
+                        local_subdomains_ * ( hex_lat_ ) * ( hex_lat_ ) * r_stacks;
+                    using LB = Kokkos::LaunchBounds< 64, 1 >;
+                    Kokkos::TeamPolicy< LB > hx_policy(
+                        hex_blocks, /*team_size=*/1, /*vector_length=*/64 );
+                    hx_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn_hex() ) );
+                    if ( diagonal_ )
+                    {
+                        Kokkos::parallel_for(
+                            "epsilon_divdiv_apply_kernel_fast_dn_hex_diag", hx_policy,
+                            KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                                this->template run_team_fast_dirichlet_neumann_hex< true >( team );
+                            } );
+                    }
+                    else
+                    {
+                        Kokkos::parallel_for(
+                            "epsilon_divdiv_apply_kernel_fast_dn_hex_matvec", hx_policy,
+                            KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                                this->template run_team_fast_dirichlet_neumann_hex< false >( team );
+                            } );
+                    }
+                }
 #endif
-        else
-        {
-            // A/B test: full revert to cross-branch dispatch (LB<512,2>, no team doubling).
-            // Paired with run_team_fast_dirichlet_neumann calling operator_fast_dirichlet_neumann_path
-            // with w_filter=-1 so each thread sequentially computes both wedges (compile-time loop).
-            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 512, 2 > > dn_policy( blocks_, team_size_ );
-            dn_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn( team_size_ ) ) );
-            if ( diagonal_ )
-            {
-                Kokkos::parallel_for(
-                    "epsilon_divdiv_apply_kernel_fast_dn_diag", dn_policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                        this->template run_team_fast_dirichlet_neumann< true >( team );
-                    } );
-            }
-            else
-            {
-                Kokkos::parallel_for(
-                    "epsilon_divdiv_apply_kernel_fast_dn_matvec", dn_policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                        this->template run_team_fast_dirichlet_neumann< false >( team );
-                    } );
-            }
-        }
+                else
+                {
+                    // A/B test: full revert to cross-branch dispatch (LB<512,2>, no team doubling).
+                    // Paired with run_team_fast_dirichlet_neumann calling operator_fast_dirichlet_neumann_path
+                    // with w_filter=-1 so each thread sequentially computes both wedges (compile-time loop).
+                    Kokkos::TeamPolicy< Kokkos::LaunchBounds< 512, 2 > > dn_policy( blocks_, team_size_ );
+                    dn_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size_dn( team_size_ ) ) );
+                    if ( diagonal_ )
+                    {
+                        Kokkos::parallel_for(
+                            "epsilon_divdiv_apply_kernel_fast_dn_diag", dn_policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                                this->template run_team_fast_dirichlet_neumann< true >( team );
+                            } );
+                    }
+                    else
+                    {
+                        Kokkos::parallel_for(
+                            "epsilon_divdiv_apply_kernel_fast_dn_matvec", dn_policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                                this->template run_team_fast_dirichlet_neumann< false >( team );
+                            } );
+                    }
+                }
+        } );
 
         Kokkos::fence();
         timer_kernel.stop();
@@ -1304,7 +1311,7 @@ class EpsilonDivDivKerngen
             dst_d[1] = dst[1].template slice< 6 >( dimi * num_nodes_per_wedge );
 
             atomically_add_local_wedge_vector_coefficients(
-                dst_, local_subdomain_id, x_cell, y_cell, r_cell, dimi, dst_d );
+                dst_, local_subdomain_id, x_cell, y_cell, r_cell, dimi, dst_d, fp_ );
         }
     }
 
@@ -1621,14 +1628,14 @@ class EpsilonDivDivKerngen
                             const int ddx = WEDGE_NODE_OFF[w][n][0];
                             const int ddy = WEDGE_NODE_OFF[w][n][1];
                             const int ddr = WEDGE_NODE_OFF[w][n][2];
-                            Kokkos::atomic_add(
-                                &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 0 ),
+                            det::add(
+                                fp_, &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 0 ),
                                 kwJ * ( 2.0 * ( g0 * gu00 + g1 * gu10 + g2 * gu20 ) + NEG_TWO_THIRDS * g0 * div_u ) );
-                            Kokkos::atomic_add(
-                                &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 1 ),
+                            det::add(
+                                fp_, &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 1 ),
                                 kwJ * ( 2.0 * ( g0 * gu10 + g1 * gu11 + g2 * gu21 ) + NEG_TWO_THIRDS * g1 * div_u ) );
-                            Kokkos::atomic_add(
-                                &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 2 ),
+                            det::add(
+                                fp_, &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 2 ),
                                 kwJ * ( 2.0 * ( g0 * gu20 + g1 * gu21 + g2 * gu22 ) + NEG_TWO_THIRDS * g2 * div_u ) );
                         }
                     }
@@ -1656,14 +1663,14 @@ class EpsilonDivDivKerngen
                             const int ddx = WEDGE_NODE_OFF[w][n][0];
                             const int ddy = WEDGE_NODE_OFF[w][n][1];
                             const int ddr = WEDGE_NODE_OFF[w][n][2];
-                            Kokkos::atomic_add(
-                                &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 0 ),
+                            det::add(
+                                fp_, &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 0 ),
                                 kwJ * sv0 * ( gg + ONE_THIRD * g0 * g0 ) );
-                            Kokkos::atomic_add(
-                                &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 1 ),
+                            det::add(
+                                fp_, &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 1 ),
                                 kwJ * sv1 * ( gg + ONE_THIRD * g1 * g1 ) );
-                            Kokkos::atomic_add(
-                                &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 2 ),
+                            det::add(
+                                fp_, &dst_( local_subdomain_id, x_cell + ddx, y_cell + ddy, r_cell + ddr, 2 ),
                                 kwJ * sv2 * ( gg + ONE_THIRD * g2 * g2 ) );
                         }
                     }
@@ -2287,21 +2294,21 @@ class EpsilonDivDivKerngen
 #pragma unroll
             for ( int dim_add = 0; dim_add < 3; ++dim_add )
             {
-                Kokkos::atomic_add( &dst_( local_subdomain_id, x_cell, y_cell, r_cell, dim_add ), dst8[dim_add][0] );
-                Kokkos::atomic_add(
-                    &dst_( local_subdomain_id, x_cell + 1, y_cell, r_cell, dim_add ), dst8[dim_add][1] );
-                Kokkos::atomic_add(
-                    &dst_( local_subdomain_id, x_cell, y_cell + 1, r_cell, dim_add ), dst8[dim_add][2] );
-                Kokkos::atomic_add(
-                    &dst_( local_subdomain_id, x_cell, y_cell, r_cell + 1, dim_add ), dst8[dim_add][3] );
-                Kokkos::atomic_add(
-                    &dst_( local_subdomain_id, x_cell + 1, y_cell, r_cell + 1, dim_add ), dst8[dim_add][4] );
-                Kokkos::atomic_add(
-                    &dst_( local_subdomain_id, x_cell, y_cell + 1, r_cell + 1, dim_add ), dst8[dim_add][5] );
-                Kokkos::atomic_add(
-                    &dst_( local_subdomain_id, x_cell + 1, y_cell + 1, r_cell, dim_add ), dst8[dim_add][6] );
-                Kokkos::atomic_add(
-                    &dst_( local_subdomain_id, x_cell + 1, y_cell + 1, r_cell + 1, dim_add ), dst8[dim_add][7] );
+                det::add( fp_, &dst_( local_subdomain_id, x_cell, y_cell, r_cell, dim_add ), dst8[dim_add][0] );
+                det::add(
+                    fp_, &dst_( local_subdomain_id, x_cell + 1, y_cell, r_cell, dim_add ), dst8[dim_add][1] );
+                det::add(
+                    fp_, &dst_( local_subdomain_id, x_cell, y_cell + 1, r_cell, dim_add ), dst8[dim_add][2] );
+                det::add(
+                    fp_, &dst_( local_subdomain_id, x_cell, y_cell, r_cell + 1, dim_add ), dst8[dim_add][3] );
+                det::add(
+                    fp_, &dst_( local_subdomain_id, x_cell + 1, y_cell, r_cell + 1, dim_add ), dst8[dim_add][4] );
+                det::add(
+                    fp_, &dst_( local_subdomain_id, x_cell, y_cell + 1, r_cell + 1, dim_add ), dst8[dim_add][5] );
+                det::add(
+                    fp_, &dst_( local_subdomain_id, x_cell + 1, y_cell + 1, r_cell, dim_add ), dst8[dim_add][6] );
+                det::add(
+                    fp_, &dst_( local_subdomain_id, x_cell + 1, y_cell + 1, r_cell + 1, dim_add ), dst8[dim_add][7] );
             }
 
         } // end r_passes loop

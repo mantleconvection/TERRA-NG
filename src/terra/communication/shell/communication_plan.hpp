@@ -11,6 +11,7 @@
 #include "terra/communication/buffer_copy_kernels.hpp"
 #include "terra/communication/shell/communication.hpp"
 #include "util/timer.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::communication::shell {
 
@@ -593,6 +594,16 @@ class ShellBoundaryCommPlan
     {
         util::Timer timer( "ShellBoundaryCommPlan::waitall" );
 
+        if ( terra::det::requested() )
+        {
+            // Nodes on subdomain edges and corners receive contributions from several ranks; with the
+            // deterministic scatter those must be added in the same order in every run, not in message
+            // arrival order.
+            MPI_Waitall( recv_req_count_, data_recv_requests_.data(), MPI_STATUSES_IGNORE );
+            for ( int i = 0; i < recv_req_count_; ++i )
+                unpack_remote_rank_( data, recv_request_ranks_[i], reduction );
+        }
+        else
         for ( int completed = 0; completed < recv_req_count_; ++completed )
         {
             int idx = MPI_UNDEFINED;

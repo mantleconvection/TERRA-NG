@@ -5,6 +5,7 @@
 #include "kokkos/kokkos_wrapper.hpp"
 #include "parameters.hpp"
 #include "util/bit_masking.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::mantlecirculation {
 
@@ -157,7 +158,6 @@ struct NoiseAdder
     Grid2DDataScalar< ScalarType >              radii_;
     Grid4DDataScalar< ScalarType >              data_;
     Grid4DDataScalar< grid::NodeOwnershipFlag > mask_;
-    Kokkos::Random_XorShift64_Pool<>            rand_pool_;
 
     NoiseAdder(
         const ScalarType                                   eps,
@@ -180,7 +180,6 @@ struct NoiseAdder
     , radii_( radii )
     , data_( data )
     , mask_( mask )
-    , rand_pool_( 12345 )
     {}
 
     static constexpr ScalarType taper_width_ = ScalarType( 0.05 );
@@ -188,9 +187,10 @@ struct NoiseAdder
     KOKKOS_INLINE_FUNCTION
     void operator()( const int id, const int x, const int y, const int r ) const
     {
-        auto generator = rand_pool_.get_state();
-
-        const ScalarType perturbation = eps_ * ( 2.0 * generator.drand() - 1.0 );
+        // Hash of the node index, not a random pool: reproducible run to run (see deterministic.hpp).
+        const uint64_t idx =
+            ( ( uint64_t( id ) * data_.extent( 1 ) + x ) * data_.extent( 2 ) + y ) * data_.extent( 3 ) + r;
+        const ScalarType perturbation = eps_ * ( 2.0 * det::hash_to_unit( 12345u, idx ) - 1.0 );
         ScalarType       taper        = ScalarType( 1 );
 
         // apply tapering near top and bottom boundary
@@ -215,8 +215,6 @@ struct NoiseAdder
         {
             data_( id, x, y, r ) = ScalarType( 0 );
         }
-
-        rand_pool_.free_state( generator );
     }
 };
 

@@ -6,6 +6,7 @@
 #include "linalg/vector_w1.hpp"
 #include "util/interpolation.hpp"
 #include "util/table.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::shell {
 
@@ -93,6 +94,16 @@ RadialProfiles< ScalarType > radial_profiles(
 
     Kokkos::fence();
 
+    // TERRA_DETERMINISTIC_SCATTER: the bin sums as fixed point (deterministic.hpp); every node adds at most
+    // max|data| to its shell, so the total is bounded by the node count times that.
+    det::FixedPoint fp_sum, fp_cnt;
+    if ( det::requested() && sizeof( ScalarType ) == sizeof( long long ) )
+    {
+        const double n = static_cast< double >( data_grid.span() );
+        fp_sum         = det::FixedPoint::for_total( n * det::max_abs( data_grid ) );
+        fp_cnt         = det::FixedPoint::for_total( n );
+    }
+
     Kokkos::parallel_for(
         "radial profiles reduction",
         Kokkos::MDRangePolicy(
@@ -110,12 +121,14 @@ RadialProfiles< ScalarType > radial_profiles(
                 &radial_profiles.radial_min_( global_shell_idx ), data_grid( local_subdomain_id, x, y, r ) );
             Kokkos::atomic_max(
                 &radial_profiles.radial_max_( global_shell_idx ), data_grid( local_subdomain_id, x, y, r ) );
-            Kokkos::atomic_add(
-                &radial_profiles.radial_sum_( global_shell_idx ), data_grid( local_subdomain_id, x, y, r ) );
-            Kokkos::atomic_add( &radial_profiles.radial_cnt_( global_shell_idx ), static_cast< ScalarType >( 1 ) );
+            det::add(
+                fp_sum, &radial_profiles.radial_sum_( global_shell_idx ), data_grid( local_subdomain_id, x, y, r ) );
+            det::add( fp_cnt, &radial_profiles.radial_cnt_( global_shell_idx ), static_cast< ScalarType >( 1 ) );
         } );
 
     Kokkos::fence();
+    det::from_fixed( radial_profiles.radial_sum_, fp_sum );
+    det::from_fixed( radial_profiles.radial_cnt_, fp_cnt );
 
     // Perform MPI_Allreduce on host to avoid GPU-aware MPI issues with MPI_IN_PLACE
     // at large rank counts. The buffers are small (num_global_shells doubles), so the
