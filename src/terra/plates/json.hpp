@@ -2840,6 +2840,11 @@ template < typename T >
 struct is_complete_type< T, decltype( void( sizeof( T ) ) ) > : std::true_type
 {};
 
+// nvcc accepts sizeof(void) as an extension; void is never a complete type.
+template <>
+struct is_complete_type< void, void > : std::false_type
+{};
+
 template < typename BasicJsonType, typename CompatibleObjectType, typename = void >
 struct is_compatible_object_type_impl : std::false_type
 {};
@@ -2987,10 +2992,16 @@ struct is_constructible_array_type_impl<
         // concept.
         not is_iterator_traits< iterator_traits< ConstructibleArrayType > >::value and
 
-        ( std::is_same< typename ConstructibleArrayType::value_type, typename BasicJsonType::array_t::value_type >::
-              value or
-          has_from_json< BasicJsonType, typename ConstructibleArrayType::value_type >::value or
-          has_non_default_from_json< BasicJsonType, typename ConstructibleArrayType::value_type >::value );
+        // nvcc: evaluated lazily, and never for a void value_type (e.g.
+        // std::back_insert_iterator), which would otherwise form a reference to
+        // void inside has_from_json ("reference to void is not allowed").
+        std::disjunction<
+            std::is_same< typename ConstructibleArrayType::value_type, typename BasicJsonType::array_t::value_type >,
+            std::conjunction< std::negation< std::is_void< typename ConstructibleArrayType::value_type > >,
+                              has_from_json< BasicJsonType, typename ConstructibleArrayType::value_type > >,
+            std::conjunction<
+                std::negation< std::is_void< typename ConstructibleArrayType::value_type > >,
+                has_non_default_from_json< BasicJsonType, typename ConstructibleArrayType::value_type > > >::value;
 };
 
 template < typename BasicJsonType, typename ConstructibleArrayType >
