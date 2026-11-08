@@ -7,7 +7,7 @@
 
 namespace terra::grid {
 
-/// @brief \ref FlagLike enum class that indicates whether a node is owned on a subdomain.
+/// @brief \ref terra::util::FlagLike "FlagLike" enum class that indicates whether a node is owned on a subdomain.
 ///
 /// Each node of the grid is either owned or not owned. Nodes that are duplicated due to the domain partitioning
 /// into subdomains must somehow be treated properly in kernels like dot products etc. Values at duplicate nodes

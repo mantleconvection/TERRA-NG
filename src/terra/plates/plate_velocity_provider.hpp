@@ -1,8 +1,6 @@
 /*
  * Copyright (c) 2022-2025 Berta Vilacis, Marcus Mohr, Nils Kohl, Andreas Burkhart, Fatemeh Rezaei.
  *
- * This file is part of HyTeG
- * (see https://i10git.cs.fau.de/hyteg/hyteg).
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,19 +18,21 @@
 
 #pragma once
 
+#include <algorithm>
 #include <set>
+#include <stdexcept>
 
+#include "terra/plates/conversions.hpp"
 #include "terra/plates/plate_not_found_handlers.hpp"
 #include "terra/plates/plate_rotation_provider.hpp"
 #include "terra/plates/plate_stage_data.hpp"
 #include "terra/plates/plate_storage.hpp"
 #include "terra/plates/smoothing_strategies.hpp"
-#include "terra/plates/conversions.hpp"
 
 // preserve ordering of includes
 #include "terra/plates/file_io.hpp"
-#include "terra/plates/local_averaging_point_weight_provider.hpp"
 #include "terra/plates/functions_for_plates.hpp"
+#include "terra/plates/local_averaging_point_weight_provider.hpp"
 
 namespace terra {
 namespace plates {
@@ -65,8 +65,7 @@ class PlateVelocityProvider
         // We use the Lon, Lat coordinates
         const vec3D pointLonLat = conversions::cart2sph( point );
 
-        std::tie( plateFound, plateID, distance ) =
-            findPlate( pointLonLat, age );
+        std::tie( plateFound, plateID, distance ) = findPlate( pointLonLat, age );
         return plateID;
     }
 
@@ -83,8 +82,7 @@ class PlateVelocityProvider
         // We use the Lon, Lat coordinates
         const vec3D pointLonLat = conversions::cart2sph( point );
 
-        std::tie( plateFound, plateID, distance ) =
-            findPlate( pointLonLat, age );
+        std::tie( plateFound, plateID, distance ) = findPlate( pointLonLat, age );
         distance /= plates::constants::earthRadiusInKm;
 
         if ( distance < eps )
@@ -103,7 +101,9 @@ class PlateVelocityProvider
     /// - LinearDistanceSmoother{ 0.015 }
     /// - DefaultPlateNotFoundHandler{}
     vec3D getPointVelocity( const vec3D& point, const double age )
-    { return getPointVelocity( point, age, LinearDistanceSmoother{ 0.015 }, DefaultPlateNotFoundHandler{} ); }
+    {
+        return getPointVelocity( point, age, LinearDistanceSmoother{ 0.015 }, DefaultPlateNotFoundHandler{} );
+    }
 
     /// Alternative: Interpolated linearly in time between the current and next plate age stage. Defaults to the boundaries of
     /// plateTopologies_.getListOfPlateStages() if age lies out of bounds of plateTopologies_.getListOfPlateStages().
@@ -132,8 +132,7 @@ class PlateVelocityProvider
         // We use the Lon, Lat coordinates
         vec3D pointLonLat = conversions::cart2sph( point );
 
-        std::tie( plateFound, plateID, distance ) =
-            findPlate( pointLonLat, age );
+        std::tie( plateFound, plateID, distance ) = findPlate( pointLonLat, age );
 
         if ( !plateFound )
         {
@@ -158,36 +157,50 @@ class PlateVelocityProvider
     /// Crop to plateStages if age lies outside.
     ///
     /// Returns a double tuple s.t. tuple[0] <= age <= tuple[1].
-    /// tuple[2] is a linear interpolation factor s.t. age = (1-tuple[2])*tuple[0] + tuple[2]*tuple[1]
-    std::tuple< double, double, double > getSurroundingAges( const double age )
+    /// tuple[2] is the linear weight of the floor age, s.t. age = tuple[2]*tuple[0] + (1-tuple[2])*tuple[1]
+    /// tuple[3] is the weight of the ceil age, s.t. age = (1-tuple[3])*tuple[0] + tuple[3]*tuple[1]
+    std::tuple< double, double, double, double > getSurroundingAges( const double age )
     {
         std::vector< double > plateStages = plateTopologies_.getListOfPlateStages();
+
+        if ( plateStages.empty() )
+            throw std::runtime_error( "Surrounding plate ages cannot be found" );
+
+        if ( !std::is_sorted( plateStages.begin(), plateStages.end() ) )
+            throw std::runtime_error( "Plate stages must be sorted in ascending order" );
+
         // find the age in the plateStages list, crop to plateStages if age lies outside
         uint_t indexFloor;
         uint_t indexCeil;
-        double interpolationFactor;
+        double weightFloor;
+        double weightCeil;
+
         if ( age >= plateStages.back() )
         {
-            indexFloor          = plateStages.size() - 1;
-            indexCeil           = indexFloor;
-            interpolationFactor = static_cast< double >( 1.0 );
+            indexFloor  = plateStages.size() - 1;
+            indexCeil   = indexFloor;
+            weightFloor = 1.0;
+            weightCeil  = 0.0;
         }
         else if ( age <= plateStages.front() )
         {
-            indexFloor          = 0;
-            indexCeil           = 0;
-            interpolationFactor = static_cast< double >( 1.0 );
+            indexFloor  = 0;
+            indexCeil   = 0;
+            weightFloor = 1.0;
+            weightCeil  = 0.0;
         }
         else
         {
             auto iteratorLowerBound = std::lower_bound( plateStages.begin(), plateStages.end(), age );
             indexCeil               = static_cast< uint_t >( std::distance( plateStages.begin(), iteratorLowerBound ) );
             indexFloor              = indexCeil - 1;
-            interpolationFactor =
-                ( age - plateStages.at( indexFloor ) ) / ( plateStages.at( indexCeil ) - plateStages.at( indexFloor ) );
+            weightFloor =
+                ( plateStages.at( indexCeil ) - age ) / ( plateStages.at( indexCeil ) - plateStages.at( indexFloor ) );
+            //weightCeil              = ( age - plateStages.at( indexFloor ) ) / ( plateStages.at( indexCeil ) - plateStages.at( indexFloor ) );
+            weightCeil = 1.0 - weightFloor;
         }
 
-        return { plateStages.at( indexFloor ), plateStages.at( indexCeil ), interpolationFactor };
+        return { plateStages.at( indexFloor ), plateStages.at( indexCeil ), weightFloor, weightCeil };
     }
 
     /// Returns velocity vector for a point determined from the velocity of the associated plate at given age stage
@@ -204,17 +217,14 @@ class PlateVelocityProvider
         PlateNotFoundStrategy&& errorHandler )
     {
         // find surrounding plate ages and interpolation factor
-        double ageFloor;
-        double ageCeil;
-        double interpolationFactor;
-        std::tie( ageFloor, ageCeil, interpolationFactor ) = getSurroundingAges( age );
+        [[maybe_unused]] const auto [ageFloor, ageCeil, weightFloor, weightCeil] = getSurroundingAges( age );
 
         // call getPointVelocity twice
         vec3D vecFloor = getPointVelocity( point, ageFloor, computeSmoothing, errorHandler );
         vec3D vecCeil  = getPointVelocity( point, ageCeil, computeSmoothing, errorHandler );
 
         // linear interpolation in time
-        return vecFloor + interpolationFactor * ( vecCeil - vecFloor );
+        return vecFloor + weightCeil * ( vecCeil - vecFloor );
     }
 
     /// Computes a weighted average of the velocity around the given point using the provided point and weights.
@@ -235,8 +245,7 @@ class PlateVelocityProvider
         // We use the Lon, Lat coordinates
         const vec3D pointLonLat = conversions::cart2sph( point );
 
-        std::tie( plateFound, plateID, distance ) =
-            findPlate( pointLonLat, age );
+        std::tie( plateFound, plateID, distance ) = findPlate( pointLonLat, age );
 
         if ( !plateFound )
         {
@@ -266,8 +275,7 @@ class PlateVelocityProvider
             bool   avgPointPlateFound{ false };
             double avgPointDistance{ static_cast< double >( -1 ) };
 
-            std::tie( avgPointPlateFound, avgPointPlateID, avgPointDistance ) =
-                findPlate( samplePointSphLonLat, age );
+            std::tie( avgPointPlateFound, avgPointPlateID, avgPointDistance ) = findPlate( samplePointSphLonLat, age );
 
             if ( avgPointPlateFound )
             {
@@ -312,17 +320,14 @@ class PlateVelocityProvider
         PlateNotFoundStrategy&&                  errorHandler )
     {
         // find surrounding plate ages and interpolation factor
-        double ageFloor;
-        double ageCeil;
-        double interpolationFactor;
-        std::tie( ageFloor, ageCeil, interpolationFactor ) = getSurroundingAges( age );
+        [[maybe_unused]] const auto [ageFloor, ageCeil, weightFloor, weightCeil] = getSurroundingAges( age );
 
         // call getLocallyAveragedPointVelocity twice
         vec3D vecFloor = getLocallyAveragedPointVelocity( point, ageFloor, pointWeightProvider, errorHandler );
         vec3D vecCeil  = getLocallyAveragedPointVelocity( point, ageCeil, pointWeightProvider, errorHandler );
 
         // linear interpolation in time
-        return vecFloor + interpolationFactor * ( vecCeil - vecFloor );
+        return vecFloor + weightCeil * ( vecCeil - vecFloor );
     }
 
     /// Query function to obtain a vector of plate stages available in the datafiles
@@ -389,14 +394,6 @@ class PlateVelocityProvider
         }
     }
 
-    /// Same, for both stages bracketing \p age, as used by the *InterpolatedInTime queries
-    void prepareEulerVectorsInterpolatedInTime( const double age )
-    {
-        const auto [ageFloor, ageCeil, interpolationFactor] = getSurroundingAges( age );
-        prepareEulerVectors( ageFloor );
-        prepareEulerVectors( ageCeil );
-    }
-
     /// Plates that the topologies name but the rotation data does not describe, as found by the most recent
     /// prepareEulerVectors(). Non-empty means the two input files disagree and some surface points will have
     /// no velocity; callers that care should report it rather than silently accepting the gap.
@@ -405,7 +402,7 @@ class PlateVelocityProvider
     /// Packed data for one prepared age stage, including the device views.
     ///
     /// Exposed so that callers can evaluate velocities inside a Kokkos kernel instead of going through the
-    /// host-only query path; see terra/plates/plate_velocity_device.hpp. The stage must have been prepared
+    /// host-only query path; see terra/plates/plate_velocity_calculator.hpp. The stage must have been prepared
     /// first with prepareEulerVectors(), which is also what fills in its per-plate Euler vectors.
     const PlateStageData& stageFor( const double age ) const { return stages_.at( age ); }
 
@@ -433,15 +430,14 @@ class PlateVelocityProvider
         }
 
         const auto p = geometry::lonLatDegToUnit( pointLonLat( 0 ), pointLonLat( 1 ) );
-        const auto r = findPlateInStage( stage->second.host(), p );
+        const auto r = findPlateInStage( stage->second.host_data(), p );
 
         if ( !r.found )
         {
             return std::make_tuple( false, idWhenNoPlateFound, std::numeric_limits< double >::max() );
         }
 
-        return usableResult(
-            std::make_tuple( true, r.plateId, r.distanceRad * plates::constants::earthRadiusInKm ) );
+        return usableResult( std::make_tuple( true, r.plateId, r.distanceRad * plates::constants::earthRadiusInKm ) );
     }
 
     /// Drops packed stages far from \p age

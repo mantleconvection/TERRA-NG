@@ -12,7 +12,7 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 using terra::fe::wedge::num_nodes_per_wedge;
 using terra::fe::wedge::num_wedges_per_hex_cell;

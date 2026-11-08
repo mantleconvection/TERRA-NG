@@ -11,7 +11,7 @@
 #include "terra/grid/grid_types.hpp"
 #include "grid/shell/bit_masks.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
 
 
@@ -32,8 +32,8 @@ template < typename ScalarT, int VecDim = 3 >
 class VectorLaplace
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Vec< ScalarT, VecDim >;
-    using DstVectorType = linalg::VectorQ1Vec< ScalarT, VecDim >;
+    using SrcVectorType = linalg::VectorW1Vec< ScalarT, VecDim >;
+    using DstVectorType = linalg::VectorW1Vec< ScalarT, VecDim >;
     using ScalarType    = ScalarT;
 
   private:

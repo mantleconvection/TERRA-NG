@@ -27,7 +27,7 @@
 #include "linalg/solvers/chebyshev.hpp"
 #include "linalg/solvers/fgmres.hpp"
 #include "linalg/solvers/multigrid.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/grid/grid_types.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
 #include "terra/kernels/common/grid_operations.hpp"
@@ -52,8 +52,8 @@ using grid::shell::BoundaryConditionFlag::NEUMANN;
 using grid::shell::ShellBoundaryFlag::BOUNDARY;
 using grid::shell::ShellBoundaryFlag::CMB;
 using grid::shell::ShellBoundaryFlag::SURFACE;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 // ---- analytic solutions -----------------------------------------------------
 
@@ -307,9 +307,9 @@ void consistency_t( const int sol, const int level, const char* op_label )
     const auto coords = grid::shell::subdomain_unit_sphere_single_shell_coords< double >( domain );
     const auto radii  = grid::shell::subdomain_shell_radii< double >( domain );
 
-    VectorQ1Vec< double >    u( "u", domain, masks ), y1( "y1", domain, masks ),
+    VectorW1Vec< double >    u( "u", domain, masks ), y1( "y1", domain, masks ),
         y6( "y6", domain, masks ), diff( "diff", domain, masks );
-    VectorQ1Scalar< double > k( "k", domain, masks );
+    VectorW1Scalar< double > k( "k", domain, masks );
     linalg::assign( k, 1.0 );
 
     Kokkos::parallel_for( "interp u", local_domain_md_range_policy_nodes( domain ),
@@ -372,7 +372,7 @@ void solve_mg( const int sol, const char* op_label, const int min_level, const i
     const size_t num_levels = domains.size();
     const size_t fine       = num_levels - 1;
 
-    std::vector< VectorQ1Scalar< ScalarType > > k;
+    std::vector< VectorW1Scalar< ScalarType > > k;
     for ( size_t l = 0; l < num_levels; ++l )
     {
         k.emplace_back( "k_" + std::to_string( l ), domains[l], masks[l] );
@@ -385,12 +385,12 @@ void solve_mg( const int sol, const char* op_label, const int min_level, const i
         A_c.push_back( make_op< Op >( domains[l], coords[l], radii[l], bmasks[l], k[l].grid_data(), true, false ) );
     Op A_fine = make_op< Op >( domains[fine], coords[fine], radii[fine], bmasks[fine], k[fine].grid_data(), true, false );
 
-    std::vector< VectorQ1Vec< ScalarType > > inv_diag;
+    std::vector< VectorW1Vec< ScalarType > > inv_diag;
     for ( size_t l = 0; l < num_levels; ++l )
     {
         Op diag_op = make_op< Op >( domains[l], coords[l], radii[l], bmasks[l], k[l].grid_data(), true, true );
         inv_diag.emplace_back( "inv_diag_" + std::to_string( l ), domains[l], masks[l] );
-        VectorQ1Vec< ScalarType > ones( "ones_" + std::to_string( l ), domains[l], masks[l] );
+        VectorW1Vec< ScalarType > ones( "ones_" + std::to_string( l ), domains[l], masks[l] );
         linalg::assign( ones, 1.0 );
         linalg::apply( diag_op, ones, inv_diag.back() );
         linalg::invert_entries( inv_diag.back() );
@@ -398,7 +398,7 @@ void solve_mg( const int sol, const char* op_label, const int min_level, const i
 
     std::vector< Prolongation >              P;
     std::vector< Restriction >               R;
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg, tmp_mg_r, tmp_mg_e;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg, tmp_mg_r, tmp_mg_e;
     for ( size_t l = 0; l < num_levels; ++l )
     {
         tmp_mg.emplace_back( "tmp_mg_" + std::to_string( l ), domains[l], masks[l] );
@@ -414,7 +414,7 @@ void solve_mg( const int sol, const char* op_label, const int min_level, const i
     std::vector< Smoother > smoothers;
     for ( size_t l = 0; l < num_levels; ++l )
     {
-        std::vector< VectorQ1Vec< ScalarType > > tmps;
+        std::vector< VectorW1Vec< ScalarType > > tmps;
         tmps.emplace_back( "cheb0_" + std::to_string( l ), domains[l], masks[l] );
         tmps.emplace_back( "cheb1_" + std::to_string( l ), domains[l], masks[l] );
         smoothers.emplace_back( 4, inv_diag[l], tmps, 3 );
@@ -422,7 +422,7 @@ void solve_mg( const int sol, const char* op_label, const int min_level, const i
 
     auto          coarse_table = std::make_shared< util::Table >();
     constexpr int restart      = 30;
-    std::vector< VectorQ1Vec< ScalarType > > coarse_tmps;
+    std::vector< VectorW1Vec< ScalarType > > coarse_tmps;
     for ( int i = 0; i < 2 * restart + 4; ++i )
         coarse_tmps.emplace_back( "coarse_tmp", domains[0], masks[0] );
     linalg::solvers::FGMRESOptions< ScalarType > copts;
@@ -437,14 +437,14 @@ void solve_mg( const int sol, const char* op_label, const int min_level, const i
     MG   mg( P, R, A_c, tmp_mg_r, tmp_mg_e, tmp_mg, smoothers, smoothers, coarse, 1, 1e-30 );
     mg.collect_statistics( mg_table );
 
-    VectorQ1Vec< ScalarType > u( "u", domains[fine], masks[fine] );
-    VectorQ1Vec< ScalarType > b( "b", domains[fine], masks[fine] );
-    VectorQ1Vec< ScalarType > g( "g", domains[fine], masks[fine] );
-    VectorQ1Vec< ScalarType > tmp( "tmp", domains[fine], masks[fine] );
-    VectorQ1Vec< ScalarType > sol_v( "sol", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > u( "u", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > b( "b", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > g( "g", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > tmp( "tmp", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > sol_v( "sol", domains[fine], masks[fine] );
     // The error is computed in the resid buffer after the residual norm,
     // saving one fine-level vector (needed to fit MT512 on 4 GPUs).
-    VectorQ1Vec< ScalarType > resid( "resid", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > resid( "resid", domains[fine], masks[fine] );
 
     Kokkos::parallel_for( "interp sol", local_domain_md_range_policy_nodes( domains[fine] ),
                           SolInterp( coords[fine], radii[fine], sol_v.grid_data(), bmasks[fine], sol, false, false ) );
@@ -569,7 +569,7 @@ void solve_fgmres( const int sol, const char* op_label, const int min_level, con
     const size_t num_levels = domains.size();
     const size_t fine       = num_levels - 1;
 
-    std::vector< VectorQ1Scalar< ScalarType > > k;
+    std::vector< VectorW1Scalar< ScalarType > > k;
     for ( size_t l = 0; l < num_levels; ++l )
     {
         k.emplace_back( "k_" + std::to_string( l ), domains[l], masks[l] );
@@ -582,12 +582,12 @@ void solve_fgmres( const int sol, const char* op_label, const int min_level, con
         A_c.push_back( make_op< Op >( domains[l], coords[l], radii[l], bmasks[l], k[l].grid_data(), true, false ) );
     Op A_fine = make_op< Op >( domains[fine], coords[fine], radii[fine], bmasks[fine], k[fine].grid_data(), true, false );
 
-    std::vector< VectorQ1Vec< ScalarType > > inv_diag;
+    std::vector< VectorW1Vec< ScalarType > > inv_diag;
     for ( size_t l = 0; l < num_levels; ++l )
     {
         Op diag_op = make_op< Op >( domains[l], coords[l], radii[l], bmasks[l], k[l].grid_data(), true, true );
         inv_diag.emplace_back( "inv_diag_" + std::to_string( l ), domains[l], masks[l] );
-        VectorQ1Vec< ScalarType > ones( "ones_" + std::to_string( l ), domains[l], masks[l] );
+        VectorW1Vec< ScalarType > ones( "ones_" + std::to_string( l ), domains[l], masks[l] );
         linalg::assign( ones, 1.0 );
         linalg::apply( diag_op, ones, inv_diag.back() );
         linalg::invert_entries( inv_diag.back() );
@@ -595,7 +595,7 @@ void solve_fgmres( const int sol, const char* op_label, const int min_level, con
 
     std::vector< Prolongation >              P;
     std::vector< Restriction >               R;
-    std::vector< VectorQ1Vec< ScalarType > > tmp_mg, tmp_mg_r, tmp_mg_e;
+    std::vector< VectorW1Vec< ScalarType > > tmp_mg, tmp_mg_r, tmp_mg_e;
     for ( size_t l = 0; l < num_levels; ++l )
     {
         tmp_mg.emplace_back( "tmp_mg_" + std::to_string( l ), domains[l], masks[l] );
@@ -611,7 +611,7 @@ void solve_fgmres( const int sol, const char* op_label, const int min_level, con
     std::vector< Smoother > smoothers;
     for ( size_t l = 0; l < num_levels; ++l )
     {
-        std::vector< VectorQ1Vec< ScalarType > > tmps;
+        std::vector< VectorW1Vec< ScalarType > > tmps;
         tmps.emplace_back( "cheb0_" + std::to_string( l ), domains[l], masks[l] );
         tmps.emplace_back( "cheb1_" + std::to_string( l ), domains[l], masks[l] );
         smoothers.emplace_back( 4, inv_diag[l], tmps, 3 );
@@ -619,7 +619,7 @@ void solve_fgmres( const int sol, const char* op_label, const int min_level, con
 
     auto          coarse_table = std::make_shared< util::Table >();
     constexpr int restart      = 30;
-    std::vector< VectorQ1Vec< ScalarType > > coarse_tmps;
+    std::vector< VectorW1Vec< ScalarType > > coarse_tmps;
     for ( int i = 0; i < 2 * restart + 4; ++i )
         coarse_tmps.emplace_back( "coarse_tmp", domains[0], masks[0] );
     linalg::solvers::FGMRESOptions< ScalarType > copts;
@@ -633,12 +633,12 @@ void solve_fgmres( const int sol, const char* op_label, const int min_level, con
     auto mg_table = std::make_shared< util::Table >();
     MG   mg( P, R, A_c, tmp_mg_r, tmp_mg_e, tmp_mg, smoothers, smoothers, coarse, 1, 1e-30 );
 
-    VectorQ1Vec< ScalarType > u( "u", domains[fine], masks[fine] );
-    VectorQ1Vec< ScalarType > b( "b", domains[fine], masks[fine] );
-    VectorQ1Vec< ScalarType > g( "g", domains[fine], masks[fine] );
-    VectorQ1Vec< ScalarType > tmp( "tmp", domains[fine], masks[fine] );
-    VectorQ1Vec< ScalarType > sol_v( "sol", domains[fine], masks[fine] );
-    VectorQ1Vec< ScalarType > err( "err", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > u( "u", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > b( "b", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > g( "g", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > tmp( "tmp", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > sol_v( "sol", domains[fine], masks[fine] );
+    VectorW1Vec< ScalarType > err( "err", domains[fine], masks[fine] );
 
     Kokkos::parallel_for( "interp sol", local_domain_md_range_policy_nodes( domains[fine] ),
                           SolInterp( coords[fine], radii[fine], sol_v.grid_data(), bmasks[fine], sol, false, false ) );
@@ -658,7 +658,7 @@ void solve_fgmres( const int sol, const char* op_label, const int min_level, con
 
     // outer FGMRES with the single V-cycle as right preconditioner
     auto outer_table = std::make_shared< util::Table >();
-    std::vector< VectorQ1Vec< ScalarType > > outer_tmps;
+    std::vector< VectorW1Vec< ScalarType > > outer_tmps;
     for ( int i = 0; i < 2 * restart + 4; ++i )
         outer_tmps.emplace_back( "outer_tmp", domains[fine], masks[fine] );
     linalg::solvers::FGMRESOptions< ScalarType > oopts;
@@ -712,10 +712,10 @@ int main( int argc, char** argv )
             const auto masks  = grid::setup_node_ownership_mask_data( domain );
             const auto bmask  = grid::shell::setup_boundary_mask_data( domain );
 
-            VectorQ1Scalar< double > k( "k", domain, masks );
+            VectorW1Scalar< double > k( "k", domain, masks );
             linalg::assign( k, 1.0 );
 
-            VectorQ1Vec< double > u( "u", domain, masks ), y1( "y1", domain, masks ), y2( "y2", domain, masks );
+            VectorW1Vec< double > u( "u", domain, masks ), y1( "y1", domain, masks ), y2( "y2", domain, masks );
             const bool bubble = std::getenv( "OPDIFF_NOBUBBLE" ) == nullptr;
             Kokkos::parallel_for( "interp sol", local_domain_md_range_policy_nodes( domain ),
                                   SolInterp( coords, radii, u.grid_data(), bmask, 1, false, bubble ) );

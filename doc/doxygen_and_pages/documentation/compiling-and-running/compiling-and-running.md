@@ -7,7 +7,7 @@ distributed memory parallelism.
 
 If you just want to compile and run the code, you can simply clone the repository:
 ```
-git clone https://github.com/mantleconvection/terraneo
+git clone https://github.com/mantleconvection/TERRA-NG
 ```
 
 However, if you want to modify the code, you should fork the repository and clone your fork.
@@ -19,9 +19,9 @@ For an out-of-source build (recommended), create a new directory (typically next
 in that directory passing the source directory as an argument.
 
 ```
-mkdir terraneo-build
-cd terraneo-build
-cmake ../terraneo
+mkdir TERRA-NG_build
+cd TERRA-NG_build
+cmake ../TERRA-NG
 ```
 
 This will create Makefiles in the build directory.

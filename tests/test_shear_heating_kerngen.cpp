@@ -26,10 +26,10 @@ using grid::Grid2DDataScalar;
 using grid::Grid3DDataVec;
 using grid::Grid4DDataScalar;
 using grid::shell::DistributedDomain;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
-// Fills a VectorQ1Vec velocity with the linear field, and (redundantly) the
+// Fills a VectorW1Vec velocity with the linear field, and (redundantly) the
 // three scalar components + viscosity used by the reference simple operator.
 struct FieldInterpolator
 {
@@ -69,14 +69,14 @@ static double run_level( unsigned level, double rMin, double rMax, double* rel_d
     const auto coords = terra::grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto radii  = terra::grid::shell::subdomain_shell_radii< ScalarType >( domain );
 
-    VectorQ1Vec< ScalarType, 3 > u( "u", domain, mask_data );
-    VectorQ1Scalar< ScalarType > mu( "mu", domain, mask_data );
-    VectorQ1Scalar< ScalarType > ux( "ux", domain, mask_data );
-    VectorQ1Scalar< ScalarType > uy( "uy", domain, mask_data );
-    VectorQ1Scalar< ScalarType > uz( "uz", domain, mask_data );
-    VectorQ1Scalar< ScalarType > s_h( "s_h", domain, mask_data );
-    VectorQ1Scalar< ScalarType > f_kerngen( "f_kerngen", domain, mask_data );
-    VectorQ1Scalar< ScalarType > f_simple( "f_simple", domain, mask_data );
+    VectorW1Vec< ScalarType, 3 > u( "u", domain, mask_data );
+    VectorW1Scalar< ScalarType > mu( "mu", domain, mask_data );
+    VectorW1Scalar< ScalarType > ux( "ux", domain, mask_data );
+    VectorW1Scalar< ScalarType > uy( "uy", domain, mask_data );
+    VectorW1Scalar< ScalarType > uz( "uz", domain, mask_data );
+    VectorW1Scalar< ScalarType > s_h( "s_h", domain, mask_data );
+    VectorW1Scalar< ScalarType > f_kerngen( "f_kerngen", domain, mask_data );
+    VectorW1Scalar< ScalarType > f_simple( "f_simple", domain, mask_data );
 
     linalg::assign( s_h, ScalarType( 1 ) );
 
@@ -102,7 +102,7 @@ static double run_level( unsigned level, double rMin, double rMax, double* rel_d
     const double integral       = linalg::dot( s_h, f_kerngen ) / 2.0;
     const double integral_error = std::abs( integral - analytical );
 
-    VectorQ1Scalar< ScalarType > diff( "diff", domain, mask_data );
+    VectorW1Scalar< ScalarType > diff( "diff", domain, mask_data );
     linalg::assign( diff, ScalarType( 0 ) );
     linalg::lincomb( diff, { ScalarType( 1 ), ScalarType( -1 ) }, { f_kerngen, f_simple } );
     const double diff_norm = std::sqrt( linalg::dot( diff, diff ) );

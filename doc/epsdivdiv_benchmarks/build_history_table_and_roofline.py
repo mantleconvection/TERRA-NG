@@ -18,7 +18,7 @@ import matplotlib.cm as cm
 # without editing source. Defaults point at the original run; the producing
 # job scripts are remeasure_history.sh (throughput) and
 # remeasure_history_ncu_lean.sh (ncu registers/DRAM/spill), kept in this dir.
-BP  = os.environ.get("BO_PERF_DIR", "/home/hpc/iwia/iwia054h/terraneo-build/apps/benchmarks/performance")
+BP  = os.environ.get("BO_PERF_DIR", "/home/hpc/iwia/iwia054h/TERRA-NG_build/apps/benchmarks/performance")
 DOC = os.environ.get("BO_DOC_DIR", os.path.dirname(os.path.abspath(__file__)))
 THR  = os.environ.get("BO_THROUGHPUT", f"{BP}/bo_remeasure_hist.o467167")    # throughput stdout
 FLO  = os.environ.get("BO_FLOPS_CSV",  f"{BP}/ncu_history_lean_467249.csv")  # FLOPs v01..current

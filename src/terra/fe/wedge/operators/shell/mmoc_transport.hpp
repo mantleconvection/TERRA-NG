@@ -12,7 +12,7 @@
 #include "fe/wedge/sl/point_location.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "kokkos/kokkos_wrapper.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "mpi/mpi.hpp"
 #include "util/timer.hpp"
 
@@ -264,9 +264,9 @@ class MMOCTransport
     /// @param substeps      number of substeps; see \ref recommended_substeps
     /// @param global_limiter clip the interpolated value to the global range of T^n
     void step(
-        linalg::VectorQ1Scalar< ScalarType >&          T,
-        const linalg::VectorQ1Vec< ScalarType, 3 >&    u,
-        const linalg::VectorQ1Vec< ScalarType, 3 >&    u_old,
+        linalg::VectorW1Scalar< ScalarType >&          T,
+        const linalg::VectorW1Vec< ScalarType, 3 >&    u,
+        const linalg::VectorW1Vec< ScalarType, 3 >&    u_old,
         const ScalarType                               dt,
         const int                                      substeps,
         const bool                                     global_limiter = true )
@@ -346,7 +346,7 @@ class MMOCTransport
         const grid::shell::DistributedDomain&                          domain,
         const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&       ownership_mask )
     {
-        linalg::VectorQ1Scalar< ScalarType > ones( "sl_multiplicity", domain, ownership_mask );
+        linalg::VectorW1Scalar< ScalarType > ones( "sl_multiplicity", domain, ownership_mask );
         linalg::assign( ones, ScalarType( 1 ) );
         communication::shell::send_recv( domain, ones.grid_data(), communication::CommunicationReduction::SUM );
 
@@ -436,7 +436,7 @@ class MMOCTransport
     /// Public only because CUDA does not permit an extended `__host__ __device__` lambda inside a private or
     /// protected member function. Not part of the interface -- use \ref step.
     void trace(
-        const linalg::VectorQ1Scalar< ScalarType >& T,
+        const linalg::VectorW1Scalar< ScalarType >& T,
         const ScalarType                            dt,
         const int                                   substeps,
         const ScalarType                            t_min,

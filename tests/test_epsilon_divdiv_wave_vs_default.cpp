@@ -1,7 +1,7 @@
 #include "../src/terra/communication/shell/communication.hpp"
 #include "fe/wedge/integrands.hpp"
 #include "fe/wedge/operators/shell/epsilon_divdiv_kerngen.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/grid/grid_types.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
 #include "terra/kernels/common/grid_operations.hpp"
@@ -20,8 +20,8 @@ using grid::shell::BoundaryConditionFlag::DIRICHLET;
 using grid::shell::BoundaryConditionFlag::NEUMANN;
 using grid::shell::ShellBoundaryFlag::CMB;
 using grid::shell::ShellBoundaryFlag::SURFACE;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 struct VectorFieldInterpolator
 {
@@ -92,13 +92,13 @@ void compare_wave_vs_default( int level, bool diagonal, int repeats = 5 )
     const auto coords_shell = terra::grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarT >( domain );
     const auto coords_radii = terra::grid::shell::subdomain_shell_radii< ScalarT >( domain );
 
-    VectorQ1Vec< ScalarT > src( "src", domain, mask_data );
+    VectorW1Vec< ScalarT > src( "src", domain, mask_data );
 
-    VectorQ1Vec< ScalarT > dst_default( "dst_default", domain, mask_data );
-    VectorQ1Vec< ScalarT > dst_wave( "dst_wave", domain, mask_data );
-    VectorQ1Vec< ScalarT > err_wave_vs_default( "err_wave_vs_default", domain, mask_data );
+    VectorW1Vec< ScalarT > dst_default( "dst_default", domain, mask_data );
+    VectorW1Vec< ScalarT > dst_wave( "dst_wave", domain, mask_data );
+    VectorW1Vec< ScalarT > err_wave_vs_default( "err_wave_vs_default", domain, mask_data );
 
-    VectorQ1Scalar< ScalarT > k_coeff( "k", domain, mask_data );
+    VectorW1Scalar< ScalarT > k_coeff( "k", domain, mask_data );
 
     Kokkos::parallel_for(
         "interpolate src",

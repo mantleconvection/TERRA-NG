@@ -20,8 +20,7 @@
 /// The Euler vector of each plate is carried alongside, indexed the same way, so a lookup hands
 /// back everything the velocity needs in one place.
 ///
-/// The struct is a POD of Views and is captured by value into a kernel. Phase 5 of the port
-/// swaps host() for device() at the call site and nothing else changes.
+/// The struct is a POD of Views and is captured by value into a kernel.
 
 #include <cmath>
 #include <stdexcept>
@@ -29,10 +28,11 @@
 
 #include "terra/dense/vec.hpp"
 #include "terra/kokkos/kokkos_wrapper.hpp"
+#include "terra/plates/functions_for_plates.hpp"
 #include "terra/plates/plate_rotation_provider.hpp"
 #include "terra/plates/plate_storage.hpp"
-#include "terra/plates/functions_for_plates.hpp"
 #include "terra/plates/spherical_predicates.hpp"
+#include "terra/plates/types.hpp"
 
 namespace terra {
 namespace plates {
@@ -100,9 +100,7 @@ KOKKOS_INLINE_FUNCTION int binIndexOf( const PlateStageViews< MemSpace >& s, con
         return -1;
     }
 
-    constexpr double pi = 3.14159265358979323846;
-
-    const double lon = Kokkos::atan2( p( 1 ), p( 0 ) );                    // [-pi, pi]
+    const double lon = Kokkos::atan2( p( 1 ), p( 0 ) ); // [-pi, pi]
     const double lat = Kokkos::asin( p( 2 ) > 1.0 ? 1.0 : ( p( 2 ) < -1.0 ? -1.0 : p( 2 ) ) );
 
     int iLon = static_cast< int >( ( lon + pi ) / ( 2.0 * pi ) * s.nLonBins );
@@ -121,13 +119,13 @@ KOKKOS_INLINE_FUNCTION int binIndexOf( const PlateStageViews< MemSpace >& s, con
 /// from the whole stage otherwise, and each candidate is cap-rejected before its edges are
 /// swept.
 template < class MemSpace >
-KOKKOS_INLINE_FUNCTION PlateLookupResult findPlateInStage( const PlateStageViews< MemSpace >& s,
-                                                           const geometry::UnitVec&           p )
+KOKKOS_INLINE_FUNCTION PlateLookupResult
+    findPlateInStage( const PlateStageViews< MemSpace >& s, const geometry::UnitVec& p )
 {
-    const int bin       = binIndexOf( s, p );
-    const bool binned   = ( bin >= 0 ) && ( s.binBegin.extent( 0 ) > 0 );
-    const int candBegin = binned ? s.binBegin( bin ) : 0;
-    const int candEnd   = binned ? s.binBegin( bin + 1 ) : s.nPlates;
+    const int  bin       = binIndexOf( s, p );
+    const bool binned    = ( bin >= 0 ) && ( s.binBegin.extent( 0 ) > 0 );
+    const int  candBegin = binned ? s.binBegin( bin ) : 0;
+    const int  candEnd   = binned ? s.binBegin( bin + 1 ) : s.nPlates;
 
     for ( int c = candBegin; c < candEnd; ++c )
     {
@@ -153,7 +151,8 @@ KOKKOS_INLINE_FUNCTION PlateLookupResult findPlateInStage( const PlateStageViews
         const geometry::UnitVec outside{ -s.cap( plate, 0 ), -s.cap( plate, 1 ), -s.cap( plate, 2 ) };
 
         const auto r = geometry::pointInSphericalPolygon( p, outside, count, [&s, begin]( const int i ) {
-            return geometry::UnitVec{ s.vertices( begin + i, 0 ), s.vertices( begin + i, 1 ), s.vertices( begin + i, 2 ) };
+            return geometry::UnitVec{
+                s.vertices( begin + i, 0 ), s.vertices( begin + i, 1 ), s.vertices( begin + i, 2 ) };
         } );
 
         if ( r.inside )
@@ -169,8 +168,8 @@ KOKKOS_INLINE_FUNCTION PlateLookupResult findPlateInStage( const PlateStageViews
 class PlateStageData
 {
   public:
-    using HostSpace   = Kokkos::HostSpace;
-    using DeviceSpace = Kokkos::DefaultExecutionSpace::memory_space;
+    using HostSpace    = Kokkos::HostSpace;
+    using ExecMemSpace = Kokkos::DefaultExecutionSpace::memory_space;
 
     PlateStageData() = default;
 
@@ -178,11 +177,12 @@ class PlateStageData
     ///                 findPlateAndDistance()
     /// \param nLonBins longitude bins for the broad phase; 0 disables binning
     /// \param nLatBins latitude bins for the broad phase; 0 disables binning
-    PlateStageData( const PlateStorage&          topologies,
-                    const PlateRotationProvider& rotations,
-                    const double                 age,
-                    const int                    nLonBins = 64,
-                    const int                    nLatBins = 32 )
+    PlateStageData(
+        const PlateStorage&          topologies,
+        const PlateRotationProvider& rotations,
+        const double                 age,
+        const int                    nLonBins = 64,
+        const int                    nLatBins = 32 )
     : age_( age )
     {
         const auto& plates = topologies.getPlatesForStage( std::ceil( age ) );
@@ -240,7 +240,7 @@ class PlateStageData
         buildCaps( nPlates );
         buildBins( nPlates, nLonBins, nLatBins );
 
-        mirrorToDevice();
+        mirrorToExecMemSpace();
     }
 
     double age() const { return age_; }
@@ -249,26 +249,24 @@ class PlateStageData
     /// packed Euler vector is zero and must not be used.
     const std::vector< uint_t >& platesWithoutRotations() const { return platesWithoutRotations_; }
 
-    const PlateStageViews< HostSpace >&   host() const { return host_; }
-    const PlateStageViews< DeviceSpace >& device() const { return device_; }
+    const PlateStageViews< HostSpace >&    host_data() const { return host_; }
+    const PlateStageViews< ExecMemSpace >& data() const { return exec_; }
 
   private:
     std::vector< uint_t > platesWithoutRotations_;
 
-
     template < class Space >
     static void allocate( PlateStageViews< Space >& v, int nPlates, int nVerts, int nLonBins, int nLatBins )
     {
-        v.vertices  = Kokkos::View< double* [3], Kokkos::LayoutRight, Space >( "plate_vertices", nVerts );
-        v.ringBegin = Kokkos::View< int*, Kokkos::LayoutRight, Space >( "plate_ring_begin", nPlates + 1 );
-        v.plateId   = Kokkos::View< unsigned int*, Kokkos::LayoutRight, Space >( "plate_id", nPlates );
-        v.cap       = Kokkos::View< double* [4], Kokkos::LayoutRight, Space >( "plate_cap", nPlates );
-        v.omega     = Kokkos::View< double* [3], Kokkos::LayoutRight, Space >( "plate_omega", nPlates );
-        v.hasRotation =
-            Kokkos::View< unsigned char*, Kokkos::LayoutRight, Space >( "plate_has_rotation", nPlates );
-        v.nPlates   = nPlates;
-        v.nLonBins  = nLonBins;
-        v.nLatBins  = nLatBins;
+        v.vertices    = Kokkos::View< double* [3], Kokkos::LayoutRight, Space >( "plate_vertices", nVerts );
+        v.ringBegin   = Kokkos::View< int*, Kokkos::LayoutRight, Space >( "plate_ring_begin", nPlates + 1 );
+        v.plateId     = Kokkos::View< unsigned int*, Kokkos::LayoutRight, Space >( "plate_id", nPlates );
+        v.cap         = Kokkos::View< double* [4], Kokkos::LayoutRight, Space >( "plate_cap", nPlates );
+        v.omega       = Kokkos::View< double* [3], Kokkos::LayoutRight, Space >( "plate_omega", nPlates );
+        v.hasRotation = Kokkos::View< unsigned char*, Kokkos::LayoutRight, Space >( "plate_has_rotation", nPlates );
+        v.nPlates     = nPlates;
+        v.nLonBins    = nLonBins;
+        v.nLatBins    = nLatBins;
     }
 
     /// Smallest-ish spherical cap containing a plate's vertices
@@ -334,11 +332,10 @@ class PlateStageData
             return;
         }
 
-        constexpr double pi     = 3.14159265358979323846;
-        const int        nBins  = nLonBins * nLatBins;
-        const double     dLon   = 2.0 * pi / nLonBins;
-        const double     dLat   = pi / nLatBins;
-        const double     margin = 0.5 * std::sqrt( dLon * dLon + dLat * dLat );
+        const int    nBins  = nLonBins * nLatBins;
+        const double dLon   = 2.0 * pi / nLonBins;
+        const double dLat   = pi / nLatBins;
+        const double margin = 0.5 * std::sqrt( dLon * dLon + dLat * dLat );
 
         std::vector< std::vector< int > > candidates( nBins );
 
@@ -349,7 +346,8 @@ class PlateStageData
             const double lon  = -pi + ( iLon + 0.5 ) * dLon;
             const double lat  = -0.5 * pi + ( iLat + 0.5 ) * dLat;
 
-            const geometry::UnitVec c{ std::cos( lat ) * std::cos( lon ), std::cos( lat ) * std::sin( lon ), std::sin( lat ) };
+            const geometry::UnitVec c{
+                std::cos( lat ) * std::cos( lon ), std::cos( lat ) * std::sin( lon ), std::sin( lat ) };
 
             for ( int i = 0; i < nPlates; ++i )
             {
@@ -395,29 +393,29 @@ class PlateStageData
         host_.binBegin( nBins ) = offset;
     }
 
-    void mirrorToDevice()
+    void mirrorToExecMemSpace()
     {
-        device_.nPlates  = host_.nPlates;
-        device_.nLonBins = host_.nLonBins;
-        device_.nLatBins = host_.nLatBins;
+        exec_.nPlates  = host_.nPlates;
+        exec_.nLonBins = host_.nLonBins;
+        exec_.nLatBins = host_.nLatBins;
 
-        device_.vertices  = Kokkos::create_mirror_view_and_copy( DeviceSpace{}, host_.vertices );
-        device_.ringBegin = Kokkos::create_mirror_view_and_copy( DeviceSpace{}, host_.ringBegin );
-        device_.plateId   = Kokkos::create_mirror_view_and_copy( DeviceSpace{}, host_.plateId );
-        device_.cap       = Kokkos::create_mirror_view_and_copy( DeviceSpace{}, host_.cap );
-        device_.omega       = Kokkos::create_mirror_view_and_copy( DeviceSpace{}, host_.omega );
-        device_.hasRotation = Kokkos::create_mirror_view_and_copy( DeviceSpace{}, host_.hasRotation );
+        exec_.vertices    = Kokkos::create_mirror_view_and_copy( ExecMemSpace{}, host_.vertices );
+        exec_.ringBegin   = Kokkos::create_mirror_view_and_copy( ExecMemSpace{}, host_.ringBegin );
+        exec_.plateId     = Kokkos::create_mirror_view_and_copy( ExecMemSpace{}, host_.plateId );
+        exec_.cap         = Kokkos::create_mirror_view_and_copy( ExecMemSpace{}, host_.cap );
+        exec_.omega       = Kokkos::create_mirror_view_and_copy( ExecMemSpace{}, host_.omega );
+        exec_.hasRotation = Kokkos::create_mirror_view_and_copy( ExecMemSpace{}, host_.hasRotation );
 
         if ( host_.binBegin.extent( 0 ) > 0 )
         {
-            device_.binBegin = Kokkos::create_mirror_view_and_copy( DeviceSpace{}, host_.binBegin );
-            device_.binPlate = Kokkos::create_mirror_view_and_copy( DeviceSpace{}, host_.binPlate );
+            exec_.binBegin = Kokkos::create_mirror_view_and_copy( ExecMemSpace{}, host_.binBegin );
+            exec_.binPlate = Kokkos::create_mirror_view_and_copy( ExecMemSpace{}, host_.binPlate );
         }
     }
 
     double                          age_{ 0.0 };
     PlateStageViews< HostSpace >    host_;
-    PlateStageViews< DeviceSpace >  device_;
+    PlateStageViews< ExecMemSpace > exec_;
 };
 
 } // namespace plates

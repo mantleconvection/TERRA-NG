@@ -10,7 +10,7 @@
 #include "../src/terra/communication/shell/communication.hpp"
 #include "fe/wedge/operators/shell/gradient.hpp"
 #include "fe/wedge/operators/shell/gradient_kerngen.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/grid/grid_types.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
 #include "terra/kernels/common/grid_operations.hpp"
@@ -41,8 +41,8 @@ using grid::shell::ShellBoundaryFlag::CMB;
 using grid::shell::ShellBoundaryFlag::SURFACE;
 using linalg::OperatorApplyMode;
 using linalg::OperatorCommunicationMode;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 // Scalar pressure input.
 struct ScalarPressureInterpolator
@@ -131,10 +131,10 @@ static double compare_once(
     auto mask_coarse        = grid::setup_node_ownership_mask_data( domain_coarse );
     auto boundary_mask_fine = grid::shell::setup_boundary_mask_data( domain_fine );
 
-    VectorQ1Scalar< ScalarType >    src    ( "src",     domain_coarse, mask_coarse );
-    VectorQ1Vec< ScalarType, 3 >    dst_old( "dst_old", domain_fine,   mask_fine   );
-    VectorQ1Vec< ScalarType, 3 >    dst_new( "dst_new", domain_fine,   mask_fine   );
-    VectorQ1Vec< ScalarType, 3 >    err    ( "err",     domain_fine,   mask_fine   );
+    VectorW1Scalar< ScalarType >    src    ( "src",     domain_coarse, mask_coarse );
+    VectorW1Vec< ScalarType, 3 >    dst_old( "dst_old", domain_fine,   mask_fine   );
+    VectorW1Vec< ScalarType, 3 >    dst_new( "dst_new", domain_fine,   mask_fine   );
+    VectorW1Vec< ScalarType, 3 >    err    ( "err",     domain_fine,   mask_fine   );
 
     Kokkos::parallel_for(
         "interp_src_p",

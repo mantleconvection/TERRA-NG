@@ -9,7 +9,7 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -26,12 +26,12 @@ namespace terra::fe::wedge::operators::shell {
 /// that turns the per-wedge stabilization field ν_h_w into the RHS
 /// contribution ∫ ν_h ∇T · ∇φ.  No boundary treatment / diagonal mode /
 /// GCA storage — the call site is a single explicit apply per step.
-template < typename ScalarT >
+template < typename ScalarT, typename CoefficientF = grid::Grid5DDataScalar< ScalarT > >
 class WedgeConstantDivKGrad
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Scalar< ScalarT >;
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using SrcVectorType = linalg::VectorW1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
   private:
@@ -39,12 +39,12 @@ class WedgeConstantDivKGrad
 
     grid::Grid3DDataVec< ScalarT, 3 > grid_;
     grid::Grid2DDataScalar< ScalarT > radii_;
-    grid::Grid5DDataScalar< ScalarT > nu_;
-    // Optional spatially-constant coefficient. When use_scalar_nu_ is set the
-    // kernel uses scalar_nu_ directly and nu_ stays empty (unallocated), so a
-    // uniform coefficient costs no per-wedge field.
-    ScalarT                           scalar_nu_     = ScalarT( 0 );
-    bool                              use_scalar_nu_ = false;
+
+    // Coefficient nu. Either a per-wedge Grid5D field (the default, read
+    // directly) or any callable (id, x, y, r, wedge, qp) -> ScalarT, which is
+    // evaluated at each quadrature point. The kernel picks between the two
+    // with if constexpr, so a uniform coefficient costs no per-wedge field.
+    CoefficientF coefficient_nu_;
 
     linalg::OperatorApplyMode         operator_apply_mode_;
     linalg::OperatorCommunicationMode operator_communication_mode_;
@@ -60,35 +60,14 @@ class WedgeConstantDivKGrad
         const grid::shell::DistributedDomain&    domain,
         const grid::Grid3DDataVec< ScalarT, 3 >& grid,
         const grid::Grid2DDataScalar< ScalarT >& radii,
-        const grid::Grid5DDataScalar< ScalarT >& nu_wedge,
+        CoefficientF                             coefficient,
         linalg::OperatorApplyMode                operator_apply_mode = linalg::OperatorApplyMode::Replace,
         linalg::OperatorCommunicationMode        operator_communication_mode =
             linalg::OperatorCommunicationMode::CommunicateAdditively )
     : domain_( domain )
     , grid_( grid )
     , radii_( radii )
-    , nu_( nu_wedge )
-    , operator_apply_mode_( operator_apply_mode )
-    , operator_communication_mode_( operator_communication_mode )
-    , send_buffers_( domain )
-    , recv_buffers_( domain )
-    {}
-
-    /// Constant-coefficient overload: ν is a single scalar everywhere, so no
-    /// per-wedge Grid5D field is stored (nu_ stays empty). Use for uniform ν.
-    WedgeConstantDivKGrad(
-        const grid::shell::DistributedDomain&    domain,
-        const grid::Grid3DDataVec< ScalarT, 3 >& grid,
-        const grid::Grid2DDataScalar< ScalarT >& radii,
-        ScalarT                                  scalar_nu,
-        linalg::OperatorApplyMode                operator_apply_mode = linalg::OperatorApplyMode::Replace,
-        linalg::OperatorCommunicationMode        operator_communication_mode =
-            linalg::OperatorCommunicationMode::CommunicateAdditively )
-    : domain_( domain )
-    , grid_( grid )
-    , radii_( radii )
-    , scalar_nu_( scalar_nu )
-    , use_scalar_nu_( true )
+    , coefficient_nu_( coefficient )
     , operator_apply_mode_( operator_apply_mode )
     , operator_communication_mode_( operator_communication_mode )
     , send_buffers_( domain )
@@ -96,7 +75,7 @@ class WedgeConstantDivKGrad
     {}
 
     /// Read-only coefficient handle (so the caller can update ν in place).
-    const grid::Grid5DDataScalar< ScalarT >& nu_wedge_grid_data() const { return nu_; }
+    const CoefficientF& nu_wedge_grid_data() const { return coefficient_nu_; }
 
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
@@ -115,9 +94,7 @@ class WedgeConstantDivKGrad
         }
 
         Kokkos::parallel_for(
-            "wedge_constant_div_k_grad_matvec",
-            grid::shell::local_domain_md_range_policy_cells( domain_ ),
-            *this );
+            "wedge_constant_div_k_grad_matvec", grid::shell::local_domain_md_range_policy_cells( domain_ ), *this );
 
         Kokkos::fence();
 
@@ -125,8 +102,7 @@ class WedgeConstantDivKGrad
         {
             communication::shell::pack_send_and_recv_local_subdomain_boundaries(
                 domain_, dst_, send_buffers_, recv_buffers_ );
-            communication::shell::unpack_and_reduce_local_subdomain_boundaries(
-                domain_, dst_, recv_buffers_ );
+            communication::shell::unpack_and_reduce_local_subdomain_boundaries( domain_, dst_, recv_buffers_ );
         }
     }
 
@@ -154,14 +130,24 @@ class WedgeConstantDivKGrad
 
         for ( int wedge = 0; wedge < num_wedges_per_hex_cell; ++wedge )
         {
-            const ScalarT nu_w =
-                use_scalar_nu_ ? scalar_nu_ : nu_( local_subdomain_id, x_cell, y_cell, r_cell, wedge );
-
             for ( int q = 0; q < num_q; ++q )
             {
-                const dense::Mat< ScalarT, 3, 3 > J = jac( wedge_phy_surf[wedge], r_1, r_2, qp[q] );
-                const ScalarT det     = J.det();
-                const ScalarT abs_det = Kokkos::abs( det );
+                ScalarT nu_w = 0.0;
+                
+                if constexpr ( std::is_same_v< CoefficientF, grid::Grid5DDataScalar< ScalarType > > )
+                {
+                    // This is accessing Grid5DDataScalar
+                    nu_w = coefficient_nu_( local_subdomain_id, x_cell, y_cell, r_cell, wedge );
+                }
+                else
+                {
+                    // This is a callback to user provided functor
+                    nu_w = coefficient_nu_( local_subdomain_id, x_cell, y_cell, r_cell, wedge, qp[q] );
+                }
+
+                const dense::Mat< ScalarT, 3, 3 > J       = jac( wedge_phy_surf[wedge], r_1, r_2, qp[q] );
+                const ScalarT                     det     = J.det();
+                const ScalarT                     abs_det = Kokkos::abs( det );
                 if ( abs_det < ScalarT( 1e-30 ) )
                 {
                     continue;

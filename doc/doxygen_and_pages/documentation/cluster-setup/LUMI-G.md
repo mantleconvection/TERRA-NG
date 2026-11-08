@@ -15,8 +15,8 @@ $ module load craype-accel-amd-gfx90a
 $ module load rocm
 
 # CMake configure:
-$ cd ~/terraneo-build
-$ cmake -S ~/terraneo -B ~/terraneo-build   -DCMAKE_C_COMPILER=cc   -DCMAKE_CXX_COMPILER=$(which hipcc) 
+$ cd ~/TERRA-NG_build
+$ cmake -S ~/TERRA-NG -B ~/TERRA-NG_build   -DCMAKE_C_COMPILER=cc   -DCMAKE_CXX_COMPILER=$(which hipcc) 
   -DCMAKE_CXX_STANDARD=20   -DCMAKE_CXX_STANDARD_REQUIRED=ON   -DMPI_C_COMPILER=cc   -DMPI_CXX_COMPILER=CC   
   -DKokkos_ENABLE_HIP=ON   -DKokkos_ARCH_VEGA90A=ON Kokkos_ARCH_AMD_GFX90A
 # We explicitly set the cpp compiler to make sure it knows about gpus

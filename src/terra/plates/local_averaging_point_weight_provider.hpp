@@ -1,8 +1,5 @@
 /*
-* Copyright (c) 2025 Nils Kohl.
- *
- * This file is part of HyTeG
- * (see https://i10git.cs.fau.de/hyteg/hyteg).
+* Copyright (c) 2025 Nils Kohl, Fatemeh Rezaei. 
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,8 +19,8 @@
 
 // #include "core/math/Constants.h"
 
-#include "terra/plates/types.hpp"
 #include "terra/plates/conversions.hpp"
+#include "terra/plates/types.hpp"
 // #include "terraneo/helpers/typeAliases.hpp"
 #include "terra/plates/functions_for_geometry.hpp"
 
@@ -39,7 +36,7 @@ namespace plates {
 /// @return The Gaussian weight.
 inline double computeGaussianWeight( const double distance, const double sigma )
 {
-   return std::exp( -distance * distance / ( 2 * sigma * sigma ) );
+    return std::exp( -distance * distance / ( 2 * sigma * sigma ) );
 }
 
 /// Helper function that projects a set of points from the 2D plane onto the surface of a sphere.
@@ -51,44 +48,45 @@ inline double computeGaussianWeight( const double distance, const double sigma )
 /// considered. The offsets are centered around P on the T and then projected onto the sphere along the plane's normal.
 ///
 /// The projected points are returned in lonlat coords.
-inline std::vector< std::pair< vec3D, double > >
-    samplePointsAndWeightsLonLatFrom2DCartOffsets( const vec3D&                                     pointOnSurfaceLonLat,
-                                                   const std::vector< std::pair< vec3D, double > >& sampleOffsets2DCart )
+inline std::vector< std::pair< vec3D, double > > samplePointsAndWeightsLonLatFrom2DCartOffsets(
+    const vec3D&                                     pointOnSurfaceLonLat,
+    const std::vector< std::pair< vec3D, double > >& sampleOffsets2DCart )
 {
-   const vec3D pointOnSurfaceCart =
-       conversions::sph2cart( { pointOnSurfaceLonLat(0), pointOnSurfaceLonLat(1) }, pointOnSurfaceLonLat(2) );
+    const vec3D pointOnSurfaceCart =
+        conversions::sph2cart( { pointOnSurfaceLonLat( 0 ), pointOnSurfaceLonLat( 1 ) }, pointOnSurfaceLonLat( 2 ) );
 
-   const auto [fst, snd] = findOrthogonalVectorsCart( pointOnSurfaceCart );
+    const auto [fst, snd] = findOrthogonalVectorsCart( pointOnSurfaceCart );
 
-   std::vector< std::pair< vec3D, double > > samples;
+    std::vector< std::pair< vec3D, double > > samples;
 
-   for ( const auto& [p, w] : sampleOffsets2DCart )
-   {
-      const auto sampleCart = pointOnSurfaceCart + p(0) * fst + p(1) * snd;
-      auto       sampleSph  = conversions::cart2sph( sampleCart );
-      sampleSph(2)         = pointOnSurfaceLonLat(2);
+    for ( const auto& [p, w] : sampleOffsets2DCart )
+    {
+        const auto sampleCart = pointOnSurfaceCart + p( 0 ) * fst + p( 1 ) * snd;
+        auto       sampleSph  = conversions::cart2sph( sampleCart );
+        sampleSph( 2 )        = pointOnSurfaceLonLat( 2 );
 
-      samples.emplace_back( sampleSph, w );
-   }
+        samples.emplace_back( sampleSph, w );
+    }
 
-   return samples;
+    return samples;
 }
 
 /// Interface for classes that provide points and weights for local averaging on the sphere.
 class LocalAveragingPointWeightProvider
 {
- public:
-   virtual ~LocalAveragingPointWeightProvider() = default;
+  public:
+    virtual ~LocalAveragingPointWeightProvider() = default;
 
-   /// \brief Returns a list of points on the sphere (in lonlat) and corresponding positive real weights for averaging around a
-   ///        given point on the sphere (also in lonlat).
-   ///
-   /// To construct an average, the weighted sum of the values at the points must be divided by the sum of the weights.
-   /// There is no restriction on the sum of the weights. Ensure to always perform that division.
-   virtual std::vector< std::pair< vec3D, double > > samplePointsAndWeightsLonLat( const vec3D& pointOnSurfaceLonLat ) const = 0;
+    /// \brief Returns a list of points on the sphere (in lonlat) and corresponding positive real weights for averaging around a
+    ///        given point on the sphere (also in lonlat).
+    ///
+    /// To construct an average, the weighted sum of the values at the points must be divided by the sum of the weights.
+    /// There is no restriction on the sum of the weights. Ensure to always perform that division.
+    virtual std::vector< std::pair< vec3D, double > >
+        samplePointsAndWeightsLonLat( const vec3D& pointOnSurfaceLonLat ) const = 0;
 
-   /// \brief Returns the maximum distance of any sample point to the provided point in lonlat.
-   virtual double maxDistance( const vec3D& pointOnSurfaceLonLat ) const = 0;
+    /// \brief Returns the maximum distance of any sample point to the provided point in lonlat.
+    virtual double maxDistance( const vec3D& pointOnSurfaceLonLat ) const = 0;
 };
 
 /// \brief Implements an averaging rule based on points that are arranged in zero or more circles with given radii and resolutions
@@ -99,65 +97,68 @@ class LocalAveragingPointWeightProvider
 ///  larger. The larger the radii compared to the radius of the sphere, the larger the stretch due to the projection.
 class UniformCirclesPointWeightProvider final : public LocalAveragingPointWeightProvider
 {
- public:
-   /// \brief Constructs the provider and precomputes the offsets.
-   ///
-   /// @param radiiAndNumPoints list of radii per circle (the center point is always included, even if this list is empty) and
-   ///                          number of points per circle
-   /// @param gaussianWeightSigma sigma (σ, standard deviation) for the Gaussian weights that are based on the distance (d) of the
-   ///                            points to the center, weight: e^(-d² / (2σ²))
-   /// @param alternateAngularOffset set to true to alternate the offset of the first point in every other circle by h_angle/2
-   UniformCirclesPointWeightProvider( const std::vector< std::pair< double, int > >& radiiAndNumPoints,
-                                      const double                                   gaussianWeightSigma,
-                                      const bool                                     alternateAngularOffset = false )
+  public:
+    /// \brief Constructs the provider and precomputes the offsets.
+    ///
+    /// @param radiiAndNumPoints list of radii per circle (the center point is always included, even if this list is empty) and
+    ///                          number of points per circle
+    /// @param gaussianWeightSigma sigma (σ, standard deviation) for the Gaussian weights that are based on the distance (d) of the
+    ///                            points to the center, weight: e^(-d² / (2σ²))
+    /// @param alternateAngularOffset set to true to alternate the offset of the first point in every other circle by h_angle/2
+    UniformCirclesPointWeightProvider(
+        const std::vector< std::pair< double, int > >& radiiAndNumPoints,
+        const double                                   gaussianWeightSigma,
+        const bool                                     alternateAngularOffset = false )
 
-   {
-      bool evenCircle = true;
+    {
+        bool evenCircle = true;
 
-      sampleOffsets2DCart_.emplace_back( vec3D{ 0, 0, 0 }, computeGaussianWeight( 0, gaussianWeightSigma ) );
+        sampleOffsets2DCart_.emplace_back( vec3D{ 0, 0, 0 }, computeGaussianWeight( 0, gaussianWeightSigma ) );
 
-      for ( const auto& [radius, numPoints] : radiiAndNumPoints )
-      {
-         const double radH = 2 * pi / static_cast< double >( numPoints );
-         evenCircle        = !evenCircle;
+        for ( const auto& [radius, numPoints] : radiiAndNumPoints )
+        {
+            const double radH = 2 * pi / static_cast< double >( numPoints );
+            evenCircle        = !evenCircle;
 
-         const double radOffset = alternateAngularOffset && evenCircle ? 0.5 * radH : 0;
+            const double radOffset = alternateAngularOffset && evenCircle ? 0.5 * radH : 0;
 
-         for ( int i = 0; i < numPoints; ++i )
-         {
-            const vec3D  offset{ radius * std::cos( radOffset + i * radH ), radius * std::sin( radOffset + i * radH ), 0 };
-            const vec3D  point( offset );
-            const double weight = computeGaussianWeight( radius, gaussianWeightSigma );
-            sampleOffsets2DCart_.emplace_back( point, weight );
-         }
-      }
+            for ( int i = 0; i < numPoints; ++i )
+            {
+                const vec3D offset{
+                    radius * std::cos( radOffset + i * radH ), radius * std::sin( radOffset + i * radH ), 0 };
+                const vec3D  point( offset );
+                const double weight = computeGaussianWeight( radius, gaussianWeightSigma );
+                sampleOffsets2DCart_.emplace_back( point, weight );
+            }
+        }
 
-      const vec3D centerLonLat{ 0, 0, 1 };
-      const auto  pointsAndWeights = samplePointsAndWeightsLonLat( centerLonLat );
-      maxDistance_                 = 0.0;
-      for ( const auto& [samplePointSphLonLat, weight] : pointsAndWeights )
-      {
-         maxDistance_ = std::max( maxDistance_, distancePointPoint( centerLonLat, samplePointSphLonLat ) );
-      }
-   }
+        const vec3D centerLonLat{ 0, 0, 1 };
+        const auto  pointsAndWeights = samplePointsAndWeightsLonLat( centerLonLat );
+        maxDistance_                 = 0.0;
+        for ( const auto& [samplePointSphLonLat, weight] : pointsAndWeights )
+        {
+            maxDistance_ = std::max( maxDistance_, distancePointPoint( centerLonLat, samplePointSphLonLat ) );
+        }
+    }
 
-   std::vector< std::pair< vec3D, double > > samplePointsAndWeightsLonLat( const vec3D& pointOnSurfaceLonLat ) const override
-   {
-      return samplePointsAndWeightsLonLatFrom2DCartOffsets( pointOnSurfaceLonLat, sampleOffsets2DCart_ );
-   }
+    std::vector< std::pair< vec3D, double > >
+        samplePointsAndWeightsLonLat( const vec3D& pointOnSurfaceLonLat ) const override
+    {
+        return samplePointsAndWeightsLonLatFrom2DCartOffsets( pointOnSurfaceLonLat, sampleOffsets2DCart_ );
+    }
 
-   double maxDistance( const vec3D& ) const override { return maxDistance_; }
+    double maxDistance( const vec3D& ) const override { return maxDistance_; }
 
-   /// \brief The precomputed 2D offsets and their weights.
-   ///
-   /// Exposed so the stencil can be flattened into device views; see terra/plates/plate_velocity_device.hpp.
-   /// The offsets are independent of the point being averaged around -- only the local tangent frame is -- so
-   /// they can be uploaded once and reused for every point.
-   const std::vector< std::pair< vec3D, double > >& sampleOffsets2DCart() const { return sampleOffsets2DCart_; }
+    /// \brief The precomputed 2D offsets and their weights.
+    ///
+    /// Exposed so the stencil can be flattened into device views; see terra/plates/plate_velocity_calculator.hpp.
+    /// The offsets are independent of the point being averaged around -- only the local tangent frame is -- so
+    /// they can be uploaded once and reused for every point.
+    const std::vector< std::pair< vec3D, double > >& sampleOffsets2DCart() const { return sampleOffsets2DCart_; }
 
- private:
-   std::vector< std::pair< vec3D, double > > sampleOffsets2DCart_;
-   double                                    maxDistance_;
+  private:
+    std::vector< std::pair< vec3D, double > > sampleOffsets2DCart_;
+    double                                    maxDistance_;
 };
 
 /// \brief Implements an averaging rule based on points that are arranged in a 2D Fibonacci Lattice.
@@ -169,52 +170,55 @@ class UniformCirclesPointWeightProvider final : public LocalAveragingPointWeight
 /// larger. The larger the radii compared to the radius of the sphere, the larger the stretch due to the projection.
 class FibonacciLatticePointWeightProvider final : public LocalAveragingPointWeightProvider
 {
- public:
-   /// \brief Constructs the provider and precomputes the offsets.
-   ///
-   /// @param numPoints number of points
-   /// @param radius maximum radius
-   /// @param gaussianWeightSigma sigma (σ, standard deviation) for the Gaussian weights that are based on the distance (d) of the
-   ///                            points to the center, weight: e^(-d² / (2σ²))
-   explicit FibonacciLatticePointWeightProvider( const int numPoints, const double radius, const double gaussianWeightSigma )
-   {
-      const double phi = 0.5 * ( 1 + sqrt( 5 ) );
+  public:
+    /// \brief Constructs the provider and precomputes the offsets.
+    ///
+    /// @param numPoints number of points
+    /// @param radius maximum radius
+    /// @param gaussianWeightSigma sigma (σ, standard deviation) for the Gaussian weights that are based on the distance (d) of the
+    ///                            points to the center, weight: e^(-d² / (2σ²))
+    explicit FibonacciLatticePointWeightProvider(
+        const int    numPoints,
+        const double radius,
+        const double gaussianWeightSigma )
+    {
+        const double phi = 0.5 * ( 1 + sqrt( 5 ) );
 
-      for ( int i = 0; i < numPoints; ++i )
-      {
-         // types.hpp declares pi as long double; keep the arithmetic in double so the
-         // vec3D braced initialiser below does not narrow.
-         const auto theta  = 2.0 * static_cast< double >( pi ) * static_cast< double >( i ) / phi;
-         const auto r      = radius * std::sqrt( static_cast< double >( i ) / static_cast< double >( ( numPoints - 1 ) ) );
-         const auto x      = r * std::cos( theta );
-         const auto y      = r * std::sin( theta );
-         const auto offset = vec3D{ x, y, 0 };
-         const auto dist   = offset.norm();
+        for ( int i = 0; i < numPoints; ++i )
+        {
+            const auto theta = 2.0 * pi * static_cast< double >( i ) / phi;
+            const auto r =
+                radius * std::sqrt( static_cast< double >( i ) / static_cast< double >( ( numPoints - 1 ) ) );
+            const auto x      = r * std::cos( theta );
+            const auto y      = r * std::sin( theta );
+            const auto offset = vec3D{ x, y, 0 };
+            const auto dist   = offset.norm();
 
-         const double weight = computeGaussianWeight( dist, gaussianWeightSigma );
+            const double weight = computeGaussianWeight( dist, gaussianWeightSigma );
 
-         sampleOffsets2DCart_.emplace_back( offset, weight );
-      }
+            sampleOffsets2DCart_.emplace_back( offset, weight );
+        }
 
-      const vec3D centerLonLat{ 0, 0, 1 };
-      const auto  pointsAndWeights = samplePointsAndWeightsLonLat( centerLonLat );
-      maxDistance_                 = 0.0;
-      for ( const auto& [samplePointSphLonLat, weight] : pointsAndWeights )
-      {
-         maxDistance_ = std::max( maxDistance_, distancePointPoint( centerLonLat, samplePointSphLonLat ) );
-      }
-   }
+        const vec3D centerLonLat{ 0, 0, 1 };
+        const auto  pointsAndWeights = samplePointsAndWeightsLonLat( centerLonLat );
+        maxDistance_                 = 0.0;
+        for ( const auto& [samplePointSphLonLat, weight] : pointsAndWeights )
+        {
+            maxDistance_ = std::max( maxDistance_, distancePointPoint( centerLonLat, samplePointSphLonLat ) );
+        }
+    }
 
-   std::vector< std::pair< vec3D, double > > samplePointsAndWeightsLonLat( const vec3D& pointOnSurfaceLonLat ) const override
-   {
-      return samplePointsAndWeightsLonLatFrom2DCartOffsets( pointOnSurfaceLonLat, sampleOffsets2DCart_ );
-   }
+    std::vector< std::pair< vec3D, double > >
+        samplePointsAndWeightsLonLat( const vec3D& pointOnSurfaceLonLat ) const override
+    {
+        return samplePointsAndWeightsLonLatFrom2DCartOffsets( pointOnSurfaceLonLat, sampleOffsets2DCart_ );
+    }
 
-   double maxDistance( const vec3D& ) const override { return maxDistance_; }
+    double maxDistance( const vec3D& ) const override { return maxDistance_; }
 
- private:
-   std::vector< std::pair< vec3D, double > > sampleOffsets2DCart_;
-   double                                    maxDistance_;
+  private:
+    std::vector< std::pair< vec3D, double > > sampleOffsets2DCart_;
+    double                                    maxDistance_;
 };
 
 } // namespace plates

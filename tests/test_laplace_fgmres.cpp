@@ -12,7 +12,6 @@
 #include "terra/fe/wedge/operators/shell/mass.hpp"
 #include "terra/grid/grid_types.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
-#include "terra/io/vtk.hpp"
 #include "terra/kernels/common/grid_operations.hpp"
 #include "terra/kokkos/kokkos_wrapper.hpp"
 #include "util/init.hpp"
@@ -27,7 +26,7 @@ using grid::Grid4DDataScalar;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1Scalar;
+using linalg::VectorW1Scalar;
 
 struct SolutionInterpolator
 {
@@ -123,26 +122,26 @@ double test( int level, const std::shared_ptr< util::Table >& table )
     auto boundary_mask_data = grid::shell::setup_boundary_mask_data( domain );
 
     constexpr auto                              num_tmps_fgmres = 64;
-    std::vector< VectorQ1Scalar< ScalarType > > tmp_fgmres;
+    std::vector< VectorW1Scalar< ScalarType > > tmp_fgmres;
     for ( int i = 0; i < num_tmps_fgmres; ++i )
     {
         tmp_fgmres.emplace_back( "tmp_" + std::to_string( i ), domain, mask_data );
     }
 
     constexpr auto                              num_tmps_cg = 5;
-    std::vector< VectorQ1Scalar< ScalarType > > tmp_cg;
+    std::vector< VectorW1Scalar< ScalarType > > tmp_cg;
     for ( int i = 0; i < num_tmps_cg; ++i )
     {
         tmp_cg.emplace_back( "tmp_" + std::to_string( i ), domain, mask_data );
     }
 
-    VectorQ1Scalar< ScalarType > u( "u", domain, mask_data );
-    VectorQ1Scalar< ScalarType > g( "g", domain, mask_data );
+    VectorW1Scalar< ScalarType > u( "u", domain, mask_data );
+    VectorW1Scalar< ScalarType > g( "g", domain, mask_data );
 
-    VectorQ1Scalar< ScalarType > solution( "solution", domain, mask_data );
-    VectorQ1Scalar< ScalarType > error( "error", domain, mask_data );
-    VectorQ1Scalar< ScalarType > b( "b", domain, mask_data );
-    VectorQ1Scalar< ScalarType > r( "r", domain, mask_data );
+    VectorW1Scalar< ScalarType > solution( "solution", domain, mask_data );
+    VectorW1Scalar< ScalarType > error( "error", domain, mask_data );
+    VectorW1Scalar< ScalarType > b( "b", domain, mask_data );
+    VectorW1Scalar< ScalarType > r( "r", domain, mask_data );
 
     const auto num_dofs = kernels::common::count_masked< long >( mask_data, grid::NodeOwnershipFlag::OWNED );
 

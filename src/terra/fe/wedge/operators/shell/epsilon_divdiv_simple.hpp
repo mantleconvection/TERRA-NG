@@ -8,7 +8,7 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
 
 namespace terra::fe::wedge::operators::shell {
@@ -17,8 +17,8 @@ template < typename ScalarT, int VecDim = 3 >
 class EpsilonDivDivSimple
 {
   public:
-    using SrcVectorType           = linalg::VectorQ1Vec< ScalarT, VecDim >;
-    using DstVectorType           = linalg::VectorQ1Vec< ScalarT, VecDim >;
+    using SrcVectorType           = linalg::VectorW1Vec< ScalarT, VecDim >;
+    using DstVectorType           = linalg::VectorW1Vec< ScalarT, VecDim >;
     using ScalarType              = ScalarT;
 
   private:
@@ -32,7 +32,6 @@ class EpsilonDivDivSimple
     grid::Grid2DDataScalar< ScalarT >    radii_;
     grid::Grid4DDataScalar< ScalarType > k_;
     grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag > mask_;
-
 
     bool treat_boundary_;
     bool diagonal_;
@@ -60,8 +59,9 @@ class EpsilonDivDivSimple
             linalg::OperatorCommunicationMode::CommunicateAdditively )
     : domain_( domain )
     , grid_( grid )
-    , radii_( radii ) , mask_( mask )
+    , radii_( radii )
     , k_( k )
+    , mask_( mask )
     , treat_boundary_( treat_boundary )
     , diagonal_( diagonal )
     , operator_apply_mode_( operator_apply_mode )

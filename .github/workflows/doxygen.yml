@@ -27,9 +27,11 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    # only deploy pages on main repo, not on forks
+    if: github.repository == 'mantleconvection/TERRA-NG'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Install Doxygen
         run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
       - name: Generate docs (running doxygen)
@@ -43,4 +45,4 @@ jobs:
           path: 'doc/doxygen_and_pages/html'
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

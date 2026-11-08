@@ -22,7 +22,7 @@
 #include "terra/grid/bit_masks.hpp"
 #include "terra/grid/shell/bit_masks.hpp"
 #include "../apps/mantlecirculation/src/interpolators.hpp" // terra::mantlecirculation::AdiabaticHeatingSource
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/fe/wedge/operators/shell/mass.hpp"
 #include "terra/grid/grid_types.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
@@ -35,8 +35,8 @@
 
 using namespace terra;
 using grid::shell::DistributedDomain;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using ST = double;
 
 static int g_fail = 0, g_checks = 0;
@@ -63,10 +63,10 @@ int main( int argc, char** argv )
         const auto cs     = grid::shell::subdomain_unit_sphere_single_shell_coords< ST >( domain );
         const auto cr     = grid::shell::subdomain_shell_radii< ST >( domain );
 
-        VectorQ1Vec< ST, 3 >  u( "u", domain, mask );
-        VectorQ1Scalar< ST >  T( "T", domain, mask ), w( "w", domain, mask ), s( "s", domain, mask );
-        VectorQ1Scalar< ST >  ref( "ref", domain, mask ), ones( "ones", domain, mask ), Mlump( "Mlump", domain, mask );
-        VectorQ1Scalar< ST >  diff( "diff", domain, mask );
+        VectorW1Vec< ST, 3 >  u( "u", domain, mask );
+        VectorW1Scalar< ST >  T( "T", domain, mask ), w( "w", domain, mask ), s( "s", domain, mask );
+        VectorW1Scalar< ST >  ref( "ref", domain, mask ), ones( "ones", domain, mask ), Mlump( "Mlump", domain, mask );
+        VectorW1Scalar< ST >  diff( "diff", domain, mask );
 
         // fill u = coords, T = |coords| = r, ref = Di*r^2 (the expected integrand w)
         auto u0 = u.grid_data().comp_[0], u1 = u.grid_data().comp_[1], u2 = u.grid_data().comp_[2];

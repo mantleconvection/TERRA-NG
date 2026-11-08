@@ -93,12 +93,7 @@ struct Grid4DDataVec
         using value_type = ScalarType;
         typename Grid4DDataScalar< ScalarType >::host_mirror_type comp_[VecDim];
 
-        ScalarType& operator()( int i0, int i1, int i2, int i3, int d )
-        {
-            return comp_[d]( i0, i1, i2, i3 );
-        }
-
-        const ScalarType& operator()( int i0, int i1, int i2, int i3, int d ) const
+        ScalarType& operator()( int i0, int i1, int i2, int i3, int d ) const
         {
             return comp_[d]( i0, i1, i2, i3 );
         }
@@ -218,7 +213,8 @@ constexpr int grid_data_vec_dim()
     return -1;
 }
 
-/// @brief Enum for encoding the boundary type tuples (in \ref BoundaryVertex, \ref BoundaryEdge, \ref BoundaryFace).
+/// @brief Enum for encoding the boundary type tuples (in \ref terra::grid::BoundaryVertex "BoundaryVertex",
+/// \ref terra::grid::BoundaryEdge "BoundaryEdge", \ref terra::grid::BoundaryFace "BoundaryFace").
 enum class BoundaryPosition : int
 {
     /// start (`== 0`)

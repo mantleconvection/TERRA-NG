@@ -16,9 +16,6 @@
 #include "fe/wedge/operators/shell/stokes.hpp"
 #include "fe/wedge/operators/shell/unsteady_advection_diffusion_supg_kerngen.hpp"
 #include "fe/wedge/operators/shell/vector_mass.hpp"
-#include "fv/hex/conversion.hpp"
-#include "fv/hex/helpers.hpp"
-#include "fv/hex/operators/fct_advection_diffusion.hpp"
 #include "geophysics/viscosity/viscosity_interpolation.hpp"
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
@@ -35,12 +32,11 @@
 #include "linalg/solvers/multigrid.hpp"
 #include "linalg/solvers/pcg.hpp"
 #include "linalg/solvers/power_iteration.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "mpi/mpi.hpp"
 #include "shell/spherical_harmonics.hpp"
 #include "src/build_radii.hpp"
 #include "src/diagnostics.hpp"
-#include "src/hbm_probe.hpp"
 #include "src/energy_solver.hpp"
 #include "src/hbm_probe.hpp"
 #include "src/interpolators.hpp"
@@ -49,6 +45,7 @@
 #include "src/plates.hpp"
 #include "src/stokes_solver.hpp"
 #include "src/temperature_init.hpp"
+#include "src/utils/energy_coefficients.hpp"
 #include "util/bit_masking.hpp"
 #include "util/filesystem.hpp"
 #include "util/logging.hpp"
@@ -68,9 +65,9 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using linalg::solvers::TwoGridGCA;
 using terra::kernels::common::scale;
 using util::logroot;
@@ -89,7 +86,7 @@ Result<> run( const Parameters& prm )
 {
     auto table = std::make_shared< util::Table >();
 
-    if ( const auto create_directories_result = create_directories( prm.io_parameters );
+    if ( const auto create_directories_result = create_output_directories( prm.io_parameters );
          create_directories_result.is_err() )
     {
         return create_directories_result.error();
@@ -165,9 +162,9 @@ Result<> run( const Parameters& prm )
 
     Grid2DDataScalar< int > subdomain_shell_idx = grid::shell::subdomain_shell_idx( ( *domains[velocity_level] ) );
 
-    // Set up the prognostic Q1 temperature.
-    VectorQ1Scalar< ScalarType > T( "T", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
-    VectorQ1Scalar< ScalarType > Tdev( "Tdev", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
+    // Set up the prognostic W1 temperature.
+    VectorW1Scalar< ScalarType > T( "T", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
+    VectorW1Scalar< ScalarType > Tdev( "Tdev", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
 
     // True when compressibility is on and any PDA form is used.
     const bool pda_form =
@@ -177,14 +174,8 @@ Result<> run( const Parameters& prm )
 
     // Optional 3-D density field for PDA
     // Density is needed in Stokes and energy -- so we set it up here
-    std::optional< VectorQ1Scalar< ScalarType > > density;
-    // The 3-D density is also what the compressible (TALA) heating terms read,
-    // so it is needed whenever compressibility is on, not only for the PDA form.
-    // The EV and MMOC solvers bind the field at construction (their heating terms
-    // ignore it when running incompressible), so it must exist for them as well.
-    const bool energy_binds_density = prm.energy_solver_parameters.energy_solver == EnergySolverType::ENTROPY_VISCOSITY ||
-                                      prm.energy_solver_parameters.energy_solver == EnergySolverType::MMOC;
-    if ( pda_form || prm.physics_parameters.compressible || energy_binds_density )
+    std::optional< VectorW1Scalar< ScalarType > > density;
+    if ( pda_form )
     {
         density.emplace( "density", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
     }
@@ -198,17 +189,6 @@ Result<> run( const Parameters& prm )
         "alpha_profile", coords_radii[velocity_level].extent( 0 ), coords_radii[velocity_level].extent( 1 ) );
     Grid2DDataScalar< ScalarType > cp_profile(
         "cp_profile", coords_radii[velocity_level].extent( 0 ), coords_radii[velocity_level].extent( 1 ) );
-    Grid2DDataScalar< ScalarType > kappa_profile(
-        "kappa_profile", coords_radii[velocity_level].extent( 0 ), coords_radii[velocity_level].extent( 1 ) );
-
-    // Finite-volume functions/vectors.
-
-    // FV cell-centred temperature field (the FCT prognostic variable).
-    linalg::VectorFVScalar< ScalarType > T_fct( "T_fct", ( *domains[velocity_level] ) );
-    // Pre-computed cell centres (with ghost layers filled once and reused every step).
-    linalg::VectorFVVec< ScalarType, 3 > fv_cell_centers( "fv_cell_centers", ( *domains[velocity_level] ) );
-    fv::hex::initialize_cell_centers(
-        fv_cell_centers, ( *domains[velocity_level] ), coords_shell[velocity_level], coords_radii[velocity_level] );
 
     // Counting DoFs.
     int world_size = mpi::num_processes();
@@ -230,8 +210,6 @@ Result<> run( const Parameters& prm )
     logroot << "Rayleigh number: " << prm.physics_parameters.rayleigh_number << std::endl;
     logroot << "Peclet number: " << prm.physics_parameters.peclet_number << std::endl;
     logroot << "Reference viscosity: " << prm.physics_parameters.viscosity_parameters.reference_viscosity << std::endl;
-    logroot << "Viscosity clamp (x reference): [" << prm.physics_parameters.viscosity_parameters.min_viscosity << ", "
-            << prm.physics_parameters.viscosity_parameters.max_viscosity << "]" << std::endl;
     logroot << "Thermal diffusivity: " << prm.physics_parameters.thermal_diffusivity_dim << std::endl;
     if ( !prm.devel_parameters.nondimensional_input )
         logroot << "Characteristic velocity: " << prm.physics_parameters.characteristic_velocity << std::endl;
@@ -239,30 +217,22 @@ Result<> run( const Parameters& prm )
 
     // Fill radial profile arrays
     radial_profile_init(
-        rho_profile,
-        alpha_profile,
-        cp_profile,
-        kappa_profile,
-        *domains[velocity_level],
-        coords_radii[velocity_level],
-        prm );
+        rho_profile, alpha_profile, cp_profile, *domains[velocity_level], coords_radii[velocity_level], prm );
 
-    // Initialise density Q1 field from radial profile -- before Stokes solver setup.
-    // Also needed for the compressible (TALA) heating terms, which read a 3-D density.
-    if ( density )
+    // Initialise density W1 field from radial profile -- before Stokes solver setup
+    if ( pda_form )
     {
         Kokkos::parallel_for(
-            "RadialProfileToQ1",
+            "RadialProfileToW1",
             grid::shell::local_domain_md_range_policy_nodes( *domains[velocity_level] ),
-            RadialProfileToQ1{ density->grid_data(), rho_profile } );
+            RadialProfileToW1{ density->grid_data(), rho_profile } );
         Kokkos::fence();
     }
 
     // Setting up Stokes velocity boundary conditions.
     //
-    // Currently, we can choose either no-slip or free-slip.
-    //
-    // Plate velocities are also a Dirichlet BC, imposed at the surface.
+    // We can choose either no-slip or free-slip.
+    // Plates are also a Dirichlet BC.
 
     BoundaryConditions bcs = {
         { CMB, DIRICHLET },
@@ -294,22 +264,12 @@ Result<> run( const Parameters& prm )
 
     logroot << "Setting up energy equation solver ..." << std::endl;
 
-    // FCT Dirichlet BCs (also used by FCTSolver below for the FV step).
-    const fv::hex::DirichletBCs< ScalarType > fct_bcs{
-        .T_cmb         = static_cast< ScalarType >( prm.boundary_parameters.temperature_max ),
-        .T_surface     = static_cast< ScalarType >( prm.boundary_parameters.temperature_min ),
-        .apply_cmb     = true,
-        .apply_surface = true };
-
     initialize_temperature_fields(
         T,
-        T_fct,
         T_ref,
-        fct_bcs,
         ( *domains[velocity_level] ),
         coords_shell[velocity_level],
         coords_radii[velocity_level],
-        fv_cell_centers,
         ownership_mask_data[velocity_level],
         boundary_mask_data[velocity_level],
         prm );
@@ -327,7 +287,7 @@ Result<> run( const Parameters& prm )
     table->clear();
 
     // Reference conductive temperature profile (also used for the Nusselt number).
-    VectorQ1Scalar< ScalarType > T_cond( "T_cond", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
+    VectorW1Scalar< ScalarType > T_cond( "T_cond", ( *domains[velocity_level] ), ownership_mask_data[velocity_level] );
     compute_reference_conductive_profile(
         T_cond, ( *domains[velocity_level] ), coords_shell[velocity_level], coords_radii[velocity_level], prm );
 
@@ -349,14 +309,14 @@ Result<> run( const Parameters& prm )
         coords_radii[velocity_level],
         coords_scale_factor );
 
-    // Reference conductive temperature profile (also used for the Nusselt number).
-
     xdmf_output->add( T.grid_data() );                 // Temperature
     xdmf_output->add( Tdev.grid_data() );              // Temperature deviation
     xdmf_output->add( u.block_1().grid_data() );       // Velocity
     xdmf_output->add( stokes.eta_fine().grid_data() ); // Viscosity
-    if ( density )
+    if ( pda_form )
+    {
         xdmf_output->add( density->grid_data() ); // Density
+    }
 
     if ( prm.io_parameters.output_pressure )
     {
@@ -404,7 +364,6 @@ Result<> run( const Parameters& prm )
         load_temperature_checkpoint(
             u.block_1(),
             T,
-            T_fct,
             ( *domains[velocity_level] ),
             coords_shell[velocity_level],
             coords_radii[velocity_level],
@@ -428,9 +387,6 @@ Result<> run( const Parameters& prm )
         }
     }
 
-    // Update Tdev
-    subtract_radial_profile( Tdev, T, T_ref, *domains[velocity_level] );
-
     // Setting XDMF file padding width according to max_timesteps.
     xdmf_output->set_pad_width(
         std::to_string( prm.time_stepping_parameters.timestep_initial + prm.time_stepping_parameters.max_timesteps - 1 )
@@ -446,57 +402,72 @@ Result<> run( const Parameters& prm )
         xdmf_output_pressure->set_is_dimensional( prm.devel_parameters.output_dimensional );
     }
 
-    // ----- Plate velocity boundary condition -----
-    // Model age for plate data; only meaningful in dimensional mode.
+    // Initialise and update plates, if applicable
+
+    // Model age for plate data; only dimensional needed
     ScalarType plate_age_Ma = static_cast< ScalarType >( prm.boundary_parameters.plate_parameters.initial_plate_age );
     int        last_plate_update_time = prm.boundary_parameters.plate_parameters.initial_plate_age;
 
-    const ScalarType plate_velocity_nondim_scale = ScalarType( 1 ) / prm.physics_parameters.characteristic_velocity *
-                                                   ( prm.boundary_parameters.plate_parameters.plate_velocity_scaling );
+    const ScalarType plate_velocity_nondim_scale =
+        ScalarType( 1 ) / ( prm.physics_parameters.characteristic_velocity *
+                            prm.boundary_parameters.plate_parameters.plate_velocity_scaling );
 
     std::shared_ptr< plates::PlateVelocityProvider > oracle;
-    std::optional< VectorQ1IsoQ2Q1< ScalarType > >   plate_velocities;
+    std::optional< VectorW1IsoW2W1< ScalarType > >   plate_velocities;
 
     if ( prm.boundary_parameters.plate_parameters.apply_plate_velocities )
     {
-        plate_velocities.emplace( "plate_velocities",
-                                  *domains[velocity_level],
-                                  *domains[pressure_level],
-                                  ownership_mask_data[velocity_level],
-                                  ownership_mask_data[pressure_level] );
+        // Initialise plate velocity grid
+        plate_velocities.emplace(
+            "plate_velocities",
+            *domains[velocity_level],
+            *domains[pressure_level],
+            ownership_mask_data[velocity_level],
+            ownership_mask_data[pressure_level] );
 
-        oracle = initialise_plates( prm.boundary_parameters.plate_parameters.plates_topologies_path,
-                                    prm.boundary_parameters.plate_parameters.plates_reconstructions_path );
+        oracle = initialise_plates(
+            prm.boundary_parameters.plate_parameters.plates_topologies_path,
+            prm.boundary_parameters.plate_parameters.plates_reconstructions_path );
 
-        extract_plate_velocities( plate_age_Ma,
-                                  plate_velocities->block_1().grid_data(),
-                                  *oracle,
-                                  coords_shell[velocity_level],
-                                  coords_radii[velocity_level],
-                                  prm.boundary_parameters.plate_parameters.interpolate_plates_in_time,
-                                  plate_velocity_nondim_scale,
-                                  domains[velocity_level].get(),
-                                  prm.boundary_parameters.plate_parameters.plates_on_device );
+        // Extract plate velocities at initial_plate_age and pass to stokes solve for dirichlet boundary enforcement.
+        extract_plate_velocities(
+            plate_age_Ma,
+            plate_velocities->block_1().grid_data(),
+            *oracle,
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            prm.boundary_parameters.plate_parameters.interpolate_plates_in_time,
+            plate_velocity_nondim_scale,
+            *domains[velocity_level] );
     }
 
     // ----- Initial Stokes solve -----
     logroot << "\n--------- Initial Stokes solve -----------------\n" << std::endl;
 
-    // The PDA form passes the 3-D density unwrapped; TALA passes the radial profile.
+    // Pass full 3-D density to Stokes for PDA, else radial density profile.
+    // Contrary to Tdev, 3-D density is passed already unwrapped, to accomodate
+    // the data structure differences: VectorW1Scalar class (3-D rho)
+    // serves as a wrapper around the raw Kokkos::View Grid4DDataScalar,
+    // whereas rho_profile (Grid2DDataScalar) is already a plain Kokkos::View.
     if ( pda_form )
-        stokes.solve( Tdev,
-                      plate_velocities,
-                      density->grid_data(),
-                      alpha_profile,
-                      prm.physics_parameters.compressible,
-                      /*log_convergence=*/true );
+        stokes.solve(
+            Tdev,
+            plate_velocities,
+            density->grid_data(),
+            alpha_profile,
+            prm.physics_parameters.compressible,
+            /*log_convergence=*/true );
     else
-        stokes.solve( Tdev,
-                      plate_velocities,
-                      rho_profile,
-                      alpha_profile,
-                      prm.physics_parameters.compressible,
-                      /*log_convergence=*/true );
+        stokes.solve(
+            Tdev,
+            plate_velocities,
+            rho_profile,
+            alpha_profile,
+            prm.physics_parameters.compressible,
+            /*log_convergence=*/true );
+
+    if ( prm.devel_parameters.extended_diagnostics )
+        log_hbm( "after first Stokes solve (peak)" );
 
     ScalarType simulated_time    = ScalarType( 0 );
     ScalarType simulated_time_Ma = ScalarType( 0 );
@@ -528,71 +499,110 @@ Result<> run( const Parameters& prm )
             prm,
             table );
         break;
-    case EnergySolverType::ENTROPY_VISCOSITY:
-        energy = std::make_unique< EVSolver< ScalarType > >(
+    case EnergySolverType::ENTROPY_VISCOSITY: {
+        using EnergyEqnCoeffT = EnergyEquationCoeffT<
+            DiffusionCoefficient,
+            InternalHeatingCoefficient,
+            AdiabaticCoefficient,
+            ShearHeatingCoefficient >;
+
+        const auto diffusion_coefficient = DiffusionCoefficient(
+            prm.physics_parameters.peclet_number, rho_profile, cp_profile, coords_radii[velocity_level] );
+
+        const auto internal_heating_coefficient = InternalHeatingCoefficient(
+            prm.physics_parameters.internal_heating,
+            prm.physics_parameters.h_number,
+            cp_profile,
+            coords_radii[velocity_level] );
+
+        const auto adiabatic_heating_coefficient = AdiabaticCoefficient(
+            prm.physics_parameters.compressible,
+            prm.physics_parameters.dissipation_number,
+            alpha_profile,
+            cp_profile,
+            coords_radii[velocity_level] );
+
+        const auto shear_heating_coefficient = ShearHeatingCoefficient(
+            prm.physics_parameters.shear_heating,
+            prm.physics_parameters.dissipation_number,
+            prm.physics_parameters.peclet_number,
+            prm.physics_parameters.rayleigh_number,
+            rho_profile,
+            cp_profile,
+            coords_radii[velocity_level] );
+
+        energy = std::make_unique< EVSolver< ScalarType, EnergyEqnCoeffT > >(
             domains[velocity_level],
             coords_shell[velocity_level],
             coords_radii[velocity_level],
             boundary_mask_data[velocity_level],
             ownership_mask_data[velocity_level],
+            stokes.eta_fine(),
             u.block_1(),
             T,
+            diffusion_coefficient,
+            prm.physics_parameters.thermal_diffusivity_nondim,
+            internal_heating_coefficient,
+            adiabatic_heating_coefficient,
+            shear_heating_coefficient,
             h,
-            prm,
-            table,
-            // Compressible (TALA) heating inputs: fine-level viscosity and
-            // reference density (aliased, updated in place). Ignored when
-            // running incompressible.
-            stokes.eta_fine().grid_data(),
-            density->grid_data() );
-        break;
-    case EnergySolverType::MMOC:
-        energy = std::make_unique< MMOCSolver< ScalarType > >(
-            domains[velocity_level],
-            coords_shell[velocity_level],
-            coords_radii[velocity_level],
-            boundary_mask_data[velocity_level],
-            ownership_mask_data[velocity_level],
-            u.block_1(),
-            T,
-            h,
-            prm,
-            table,
-            stokes.eta_fine().grid_data(),
-            density->grid_data() );
-        break;
-    case EnergySolverType::FCT:
-        energy = std::make_unique< FCTSolver< ScalarType > >(
-            domains[velocity_level],
-            coords_shell[velocity_level],
-            coords_radii[velocity_level],
-            boundary_mask_data[velocity_level],
-            ownership_mask_data[velocity_level],
-            u.block_1(),
-            T,
-            T_fct,
-            fv_cell_centers,
-            fct_bcs,
             prm,
             table );
-        break;
+    }
+    break;
+    case EnergySolverType::MMOC: {
+        using EnergyEqnCoeffT = EnergyEquationCoeffT<
+            DiffusionCoefficient,
+            InternalHeatingCoefficient,
+            AdiabaticCoefficient,
+            ShearHeatingCoefficient >;
+
+        const auto diffusion_coefficient = DiffusionCoefficient(
+            prm.physics_parameters.peclet_number, rho_profile, cp_profile, coords_radii[velocity_level] );
+
+        const auto internal_heating_coefficient = InternalHeatingCoefficient(
+            prm.physics_parameters.internal_heating,
+            prm.physics_parameters.h_number,
+            cp_profile,
+            coords_radii[velocity_level] );
+
+        const auto adiabatic_heating_coefficient = AdiabaticCoefficient(
+            prm.physics_parameters.compressible,
+            prm.physics_parameters.dissipation_number,
+            alpha_profile,
+            cp_profile,
+            coords_radii[velocity_level] );
+
+        const auto shear_heating_coefficient = ShearHeatingCoefficient(
+            prm.physics_parameters.shear_heating,
+            prm.physics_parameters.dissipation_number,
+            prm.physics_parameters.peclet_number,
+            prm.physics_parameters.rayleigh_number,
+            rho_profile,
+            cp_profile,
+            coords_radii[velocity_level] );
+
+        energy = std::make_unique< MMOCSolver< ScalarType, EnergyEqnCoeffT > >(
+            domains[velocity_level],
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            boundary_mask_data[velocity_level],
+            ownership_mask_data[velocity_level],
+            stokes.eta_fine(),
+            u.block_1(),
+            T,
+            diffusion_coefficient,
+            internal_heating_coefficient,
+            adiabatic_heating_coefficient,
+            shear_heating_coefficient,
+            h,
+            prm,
+            table );
+    }
+    break;
     }
 
-    // Hand the radial material profiles to whichever energy solver was built. All four are
-    // normalised by their reference values, so they are identically 1 for an incompressible
-    // run and this call then changes nothing.
-    energy->set_radial_profiles(
-        RadialProfiles< ScalarType >{ rho_profile, alpha_profile, cp_profile, kappa_profile, true } );
-
-    // fv_cell_centers is consumed only by the FCT advection solver after
-    // initialization; for SUPG/EV it is dead weight (a 3-component FV field,
-    // ~0.5 GB/GCD at production scale). Release it for the non-FCT solvers.
-    if ( prm.energy_solver_parameters.energy_solver != EnergySolverType::FCT )
-    {
-        fv_cell_centers = linalg::VectorFVVec< ScalarType, 3 >();
-    }
-
-    // EV-specific: register the Q1-projected per-wedge ν_h diagnostic field
+    // EV-specific: register the W1-projected per-wedge ν_h diagnostic field
     // with XDMF if the energy solver exposes one.  Must happen before any
     // xdmf_output.write() call.
     if ( auto* nu_h_view = energy->nu_h_nodal_view() )
@@ -689,7 +699,7 @@ Result<> run( const Parameters& prm )
 
     logroot << "Starting time stepping!" << std::endl;
 
-    // Compute Nusselt at timestep 0 (before any FCT steps) for diagnostics.
+    // Compute Nusselt at timestep 0 for diagnostics.
     if ( prm.devel_parameters.extended_diagnostics )
     {
         const auto Nu_top_0 = compute_nusselt(
@@ -703,11 +713,9 @@ Result<> run( const Parameters& prm )
             true );
         const auto V_rms_0 = compute_v_rms(
             ( *domains[velocity_level] ), u.block_1(), coords_shell[velocity_level], coords_radii[velocity_level] );
-        logroot << "Nu_top (Q1) = " << Nu_top_0 << ", V_rms = " << V_rms_0
-                << "  [timestep 0, before time stepping]" << std::endl;
+        logroot << "Nu_top (W1) = " << Nu_top_0 << ", V_rms = " << V_rms_0 << "  [timestep 0, before time stepping]"
+                << std::endl;
     }
-
-    log_hbm( "after all solver setup (Stokes + Energy), before time stepping" );
 
     for ( int timestep = prm.time_stepping_parameters.timestep_initial + 1;
           timestep < prm.time_stepping_parameters.max_timesteps;
@@ -726,17 +734,17 @@ Result<> run( const Parameters& prm )
         // Compute dt once from current velocity (before Picard loop).
         ScalarType dt = energy->compute_dt( timestep );
 
-        // Plate data is extracted once per timestep, before the Picard loop, and then
-        // written into the velocity field on every Picard iteration.
+        // Plate data extraction before picard loop, will then be written to velocity field every picard iteration.
+        // Update plate_age here already for plate update
         bool end_simulation_after_solve = false;
         if ( prm.boundary_parameters.plate_parameters.apply_plate_velocities )
         {
-            // plate_age must never run past the requested final age.
+            // plate_age should never go beyond the specified final_plate_age
             const ScalarType dt_to_final_age =
                 ( plate_age_Ma - prm.boundary_parameters.plate_parameters.final_plate_age ) /
                 prm.physics_parameters.calc_time_Ma;
 
-            // Explicit last step, to deal with floating-point rounding around zero.
+            // Explicit last step to deal with floating-point rounding errors around zero
             if ( dt >= dt_to_final_age )
             {
                 dt           = dt_to_final_age;
@@ -752,10 +760,11 @@ Result<> run( const Parameters& prm )
                 plate_age_Ma -= dt * prm.physics_parameters.calc_time_Ma;
             }
 
-            // Update every timestep when interpolating in time, otherwise every 1 Ma.
+            // Update plates every timestep if interpolate_plates_in_time, else update every 1 Ma.
             bool plate_update = true;
             if ( !prm.boundary_parameters.plate_parameters.interpolate_plates_in_time )
             {
+                // Don't update if we have not passed at least 1 Ma since last update.
                 if ( std::ceil( plate_age_Ma ) < last_plate_update_time )
                 {
                     plate_update           = true;
@@ -764,18 +773,17 @@ Result<> run( const Parameters& prm )
                 else
                     plate_update = false;
             }
-
             if ( plate_update )
             {
-                extract_plate_velocities( plate_age_Ma,
-                                          plate_velocities->block_1().grid_data(),
-                                          *oracle,
-                                          coords_shell[velocity_level],
-                                          coords_radii[velocity_level],
-                                          prm.boundary_parameters.plate_parameters.interpolate_plates_in_time,
-                                          plate_velocity_nondim_scale,
-                                          domains[velocity_level].get(),
-                                          prm.boundary_parameters.plate_parameters.plates_on_device );
+                extract_plate_velocities(
+                    plate_age_Ma,
+                    plate_velocities->block_1().grid_data(),
+                    *oracle,
+                    coords_shell[velocity_level],
+                    coords_radii[velocity_level],
+                    prm.boundary_parameters.plate_parameters.interpolate_plates_in_time,
+                    plate_velocity_nondim_scale,
+                    *domains[velocity_level] );
             }
         }
 
@@ -827,12 +835,6 @@ Result<> run( const Parameters& prm )
                     alpha_profile,
                     prm.physics_parameters.compressible,
                     /*log_convergence=*/( picard == num_picard - 1 ) );
-
-            // --- Stokes solve ---
-            stokes.set_solve_time( simulated_time + prm.time_stepping_parameters.energy_substeps * dt );
-
-            if ( timestep == prm.time_stepping_parameters.timestep_initial + 1 && picard == 0 )
-                log_hbm( "after first Stokes solve (peak)" );
 
         } // end Picard loop
 
@@ -914,7 +916,7 @@ Result<> run( const Parameters& prm )
                 ( *domains[velocity_level] ), u.block_1(), coords_shell[velocity_level], coords_radii[velocity_level] );
             if ( timestep % 10 == 0 )
             {
-                logroot << "Nu_top (Q1) = " << Nu_top << ", V_rms = " << V_rms << std::endl;
+                logroot << "Nu_top (W1) = " << Nu_top << ", V_rms = " << V_rms << std::endl;
             }
             // Per-step CSV. simulated_time is updated below; the value here is
             // the time at the *end* of this step (current T just solved).
@@ -924,20 +926,49 @@ Result<> run( const Parameters& prm )
                 std::ofstream     out( path, std::ios::app );
                 if ( out.tellp() == 0 )
                 {
-                    out << "timestep,sim_time,Nu_top_Q1,V_rms\n";
+                    out << "timestep,sim_time,Nu_top_W1,V_rms\n";
                 }
-                const double t_end_of_step = simulated_time + prm.time_stepping_parameters.energy_substeps * dt;
-                out << timestep << "," << t_end_of_step << "," << Nu_top << "," << V_rms << "\n";
+                const double t_end_of_step = simulated_time + prm.energy_solver_parameters.energy_substeps * dt;
+                out << timestep << "," << t_end_of_step << "," << Nu_top << ","
+                    << "," << V_rms << "\n";
             }
         }
 
-        simulated_time += prm.time_stepping_parameters.energy_substeps * dt;
+        simulated_time += prm.energy_solver_parameters.energy_substeps * dt;
         simulated_time_Ma = simulated_time * prm.physics_parameters.calc_time_Ma;
 
-        logroot << "Simulated time: " << simulated_time_Ma << " Ma\n";
-        logroot << "  Stopping at " << prm.time_stepping_parameters.t_end_Ma << " Ma, "
-                << std::round( simulated_time_Ma / prm.time_stepping_parameters.t_end_Ma * 100.0 * 10.0 ) / 10.0
-                << "% done.\n";
+        // Log time progress
+        if ( prm.boundary_parameters.plate_parameters.apply_plate_velocities )
+        {
+            logroot << "Model plate age: " << plate_age_Ma << " Ma" << std::endl;
+            logroot << " Stopping at " << prm.boundary_parameters.plate_parameters.final_plate_age << " Ma, "
+                    << std::round(
+                           ( prm.boundary_parameters.plate_parameters.initial_plate_age - plate_age_Ma ) /
+                           ( prm.boundary_parameters.plate_parameters.initial_plate_age -
+                             prm.boundary_parameters.plate_parameters.final_plate_age ) *
+                           1000.0 ) /
+                           10.0
+                    << "% done." << std::endl;
+        }
+        else
+        {
+            if ( prm.devel_parameters.output_dimensional )
+            {
+                logroot << "Simulated time: " << simulated_time_Ma << " Ma" << std::endl;
+                logroot << "  Stopping at " << prm.time_stepping_parameters.t_end_Ma << " Ma, ";
+            }
+            else
+            {
+                logroot << "Simulated time: " << simulated_time << std::endl;
+                logroot << "Stopping at nondimensional time " << prm.time_stepping_parameters.t_end << ", ";
+            }
+            logroot << std::round( simulated_time / prm.time_stepping_parameters.t_end * 1000.0 ) / 10.0 << "% done."
+                    << std::endl;
+        }
+
+        // Memory footprint
+        if ( prm.devel_parameters.extended_diagnostics )
+            log_hbm( "after timestep " + std::to_string( timestep ) );
         logroot << std::endl;
 
         timer_timestep.stop();
@@ -949,13 +980,12 @@ Result<> run( const Parameters& prm )
 
         if ( prm.boundary_parameters.plate_parameters.apply_plate_velocities )
         {
-            // With plate assimilation the run ends at the requested final plate age,
-            // not at t_end.
             if ( end_simulation_after_solve )
             {
                 logroot << "Final plate age " << prm.boundary_parameters.plate_parameters.final_plate_age
                         << " Ma reached. Exiting simulation." << std::endl;
                 logroot << "###################################################" << std::endl;
+
                 break;
             }
         }

@@ -6,22 +6,23 @@ constexpr int num_wedges_per_hex_cell     = 2;
 constexpr int num_nodes_per_wedge_surface = 3;
 constexpr int num_nodes_per_wedge         = 6;
 
-/// @brief Extracts the (unit sphere) surface vertex coords of the two wedges of a hex cell.
-///
-/// Useful for wedge-based kernels that update two wedges that make up a hex cell at once.
-///
-/// \code
-/// 2--3
-/// |\ |
-/// | \|   =>  [(p0, p1, p2), (p3, p2, p1)]
-/// 0--1
-/// \endcode
-///
-/// @param wedge_surf_phy_coords [out] first dim: wedge/triangle index, second dim: vertex index
-/// @param lateral_grid          [in]  the unit sphere vertex coordinates
-/// @param local_subdomain_id    [in]  shell subdomain id on this process
-/// @param x_cell                [in]  hex cell x-coordinate
-/// @param y_cell                [in]  hex cell y-coordinate
+/*! @brief Extracts the (unit sphere) surface vertex coords of the two wedges of a hex cell.
+   
+    Useful for wedge-based kernels that update two wedges that make up a hex cell at once.
+   
+    \code
+    2--3
+    |\ |
+    | \|   =>  [(p0, p1, p2), (p3, p2, p1)]
+    0--1
+    \endcode
+   
+    @param wedge_surf_phy_coords [out] first dim: wedge/triangle index, second dim: vertex index
+    @param lateral_grid          [in]  the unit sphere vertex coordinates
+    @param local_subdomain_id    [in]  shell subdomain id on this process
+    @param x_cell                [in]  hex cell x-coordinate
+    @param y_cell                [in]  hex cell y-coordinate
+*/
 template < std::floating_point T >
 KOKKOS_INLINE_FUNCTION void wedge_surface_physical_coords(
     dense::Vec< T, 3 > ( &wedge_surf_phy_coords )[num_wedges_per_hex_cell][num_nodes_per_wedge_surface],
@@ -505,98 +506,97 @@ KOKKOS_INLINE_FUNCTION void atomically_add_local_wedge_vector_coefficients(
 /// @code
 ///
 /// Coarse wedge idx = 0
-///
-/// +
-/// |\
-/// | \
-/// |  \
-/// | 2 \
-/// +----+
-/// |\ 3 |\
-/// | \  | \
-/// |  \ |  \
-/// | 0 \| 1 \
-/// +----+----+
-///
-/// Coarse wedge idx = 1
-///
-/// +----+----+
-///  \ 1 |\ 0 |
-///   \  | \  |
-///    \ |  \ |
-///     \| 3 \|
-///      +----+
-///       \ 2 |
-///        \  |
-///         \ |
-///          \|
-///           +
-///
-/// @endcode
-///
-/// This function now computes the indices from a grid of fine wedges that looks like this:
-///
-/// @code
-///
-/// x_cell_fine % 1:
-///
-/// +----+----+
-/// |\ 0 |\ 1 |
-/// | \  | \  |
-/// |  \ |  \ |
-/// | 0 \| 1 \|
-/// +----+----+
-/// |\ 0 |\ 1 |
-/// | \  | \  |
-/// |  \ |  \ |
-/// | 0 \| 1 \|
-/// +----+----+
-///
-/// y_cell_fine % 1:
-///
-/// +----+----+
-/// |\ 1 |\ 1 |
-/// | \  | \  |
-/// |  \ |  \ |
-/// | 1 \| 1 \|
-/// +----+----+
-/// |\ 0 |\ 0 |
-/// | \  | \  |
-/// |  \ |  \ |
-/// | 0 \| 0 \|
-/// +----+----+
-///
-/// wedge_idx_fine:
-///
-/// +----+----+
-/// |\ 1 |\ 1 |
-/// | \  | \  |
-/// |  \ |  \ |
-/// | 0 \| 0 \|
-/// +----+----+
-/// |\ 1 |\ 1 |
-/// | \  | \  |
-/// |  \ |  \ |
-/// | 0 \| 0 \|
-/// +----+----+
-///
-/// Resulting/returned values:
-///
-/// +----+----+
-/// |\ 1 |\ 0 |
-/// | \  | \  |
-/// |  \ |  \ |
-/// | 2 \| 3 \|
-/// +----+----+
-/// |\ 3 |\ 2 |
-/// | \  | \  |
-/// |  \ |  \ |
-/// | 0 \| 1 \|
-/// +----+----+
-///
-/// @endcode
-///
-///
+/*!
+    +
+    |\
+    | \
+    |  \
+    | 2 \
+    +----+
+    |\ 3 |\
+    | \  | \
+    |  \ |  \
+    | 0 \| 1 \
+    +----+----+
+   
+    Coarse wedge idx = 1
+   
+    +----+----+
+     \ 1 |\ 0 |
+      \  | \  |
+       \ |  \ |
+        \| 3 \|
+         +----+
+          \ 2 |
+           \  |
+            \ |
+             \|
+              +
+   
+    @endcode
+   
+    This function now computes the indices from a grid of fine wedges that looks like this:
+   
+    @code
+   
+    x_cell_fine % 1:
+   
+    +----+----+
+    |\ 0 |\ 1 |
+    | \  | \  |
+    |  \ |  \ |
+    | 0 \| 1 \|
+    +----+----+
+    |\ 0 |\ 1 |
+    | \  | \  |
+    |  \ |  \ |
+    | 0 \| 1 \|
+    +----+----+
+   
+    y_cell_fine % 1:
+   
+    +----+----+
+    |\ 1 |\ 1 |
+    | \  | \  |
+    |  \ |  \ |
+    | 1 \| 1 \|
+    +----+----+
+    |\ 0 |\ 0 |
+    | \  | \  |
+    |  \ |  \ |
+    | 0 \| 0 \|
+    +----+----+
+   
+    wedge_idx_fine:
+   
+    +----+----+
+    |\ 1 |\ 1 |
+    | \  | \  |
+    |  \ |  \ |
+    | 0 \| 0 \|
+    +----+----+
+    |\ 1 |\ 1 |
+    | \  | \  |
+    |  \ |  \ |
+    | 0 \| 0 \|
+    +----+----+
+   
+    Resulting/returned values:
+   
+    +----+----+
+    |\ 1 |\ 0 |
+    | \  | \  |
+    |  \ |  \ |
+    | 2 \| 3 \|
+    +----+----+
+    |\ 3 |\ 2 |
+    | \  | \  |
+    |  \ |  \ |
+    | 0 \| 1 \|
+    +----+----+
+   
+    @endcode
+*/
 KOKKOS_INLINE_FUNCTION
 constexpr int fine_lateral_wedge_idx( const int x_cell_fine, const int y_cell_fine, const int wedge_idx_fine )
 {

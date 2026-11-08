@@ -9,7 +9,7 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
 
 namespace terra::fe::wedge::operators::shell {
@@ -37,14 +37,14 @@ namespace terra::fe::wedge::operators::shell {
 ///
 /// The advection term uses the **centred** Galerkin form
 /// \f$\int \phi_i (\mathbf{u}\cdot\nabla\phi_j)\f$ — no upwinding, no limiter. This is
-/// the Q1 analogue of TERRA's face-centred update
+/// the W1 analogue of TERRA's face-centred update
 /// \f$\tfrac{1}{2}(T_i + T_j)\cdot\mathbf{u}\!\cdot\!\mathbf{n}\f$ at energy.f:73.
 template < typename ScalarT, int VelocityVecDim = 3 >
-class Q1CenteredAdvDiffRateOperator
+class W1CenteredAdvDiffRateOperator
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Scalar< ScalarT >;
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using SrcVectorType = linalg::VectorW1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
   private:
@@ -53,7 +53,7 @@ class Q1CenteredAdvDiffRateOperator
     grid::Grid3DDataVec< ScalarT, 3 > grid_;
     grid::Grid2DDataScalar< ScalarT > radii_;
 
-    linalg::VectorQ1Vec< ScalarT, VelocityVecDim > velocity_;
+    linalg::VectorW1Vec< ScalarT, VelocityVecDim > velocity_;
 
     ScalarT diffusivity_;
 
@@ -68,11 +68,11 @@ class Q1CenteredAdvDiffRateOperator
     grid::Grid4DDataVec< ScalarType, VelocityVecDim > vel_grid_;
 
   public:
-    Q1CenteredAdvDiffRateOperator(
+    W1CenteredAdvDiffRateOperator(
         const grid::shell::DistributedDomain&                 domain,
         const grid::Grid3DDataVec< ScalarT, 3 >&              grid,
         const grid::Grid2DDataScalar< ScalarT >&              radii,
-        const linalg::VectorQ1Vec< ScalarT, VelocityVecDim >& velocity,
+        const linalg::VectorW1Vec< ScalarT, VelocityVecDim >& velocity,
         const ScalarT                                         diffusivity,
         linalg::OperatorApplyMode         operator_apply_mode = linalg::OperatorApplyMode::Replace,
         linalg::OperatorCommunicationMode operator_communication_mode =
@@ -139,7 +139,7 @@ class Q1CenteredAdvDiffRateOperator
         quadrature::quad_felippa_3x2_quad_points( quad_points );
         quadrature::quad_felippa_3x2_quad_weights( quad_weights );
 
-        // Interpolate velocity to quadrature points using Q1 wedge basis.
+        // Interpolate velocity to quadrature points using W1 wedge basis.
         // (Same pattern as UnsteadyAdvectionDiffusionSUPG kernel.)
         dense::Vec< ScalarT, VelocityVecDim > vel_interp[num_wedges_per_hex_cell][num_quad_points];
         dense::Vec< ScalarT, 6 >              vel_coeffs[VelocityVecDim][num_wedges_per_hex_cell];
@@ -219,6 +219,6 @@ class Q1CenteredAdvDiffRateOperator
     }
 };
 
-static_assert( linalg::OperatorLike< Q1CenteredAdvDiffRateOperator< double > > );
+static_assert( linalg::OperatorLike< W1CenteredAdvDiffRateOperator< double > > );
 
 } // namespace terra::fe::wedge::operators::shell

@@ -8,7 +8,7 @@
 #include "grid/grid_types.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -16,8 +16,8 @@ template < typename ScalarT >
 class ProlongationLinear
 {
   public:
-    using SrcVectorType           = linalg::VectorQ1Scalar< double >;
-    using DstVectorType           = linalg::VectorQ1Scalar< double >;
+    using SrcVectorType           = linalg::VectorW1Scalar< double >;
+    using DstVectorType           = linalg::VectorW1Scalar< double >;
     using ScalarType              = ScalarT;
     using Grid4DDataLocalMatrices = terra::grid::Grid4DDataMatrices< ScalarType, 6, 6, 2 >;
 
@@ -193,8 +193,8 @@ template < typename ScalarT >
 class ProlongationVecLinear
 {
   public:
-    using SrcVectorType           = linalg::VectorQ1Vec< double >;
-    using DstVectorType           = linalg::VectorQ1Vec< double >;
+    using SrcVectorType           = linalg::VectorW1Vec< double >;
+    using DstVectorType           = linalg::VectorW1Vec< double >;
     using ScalarType              = ScalarT;
     using Grid4DDataLocalMatrices = terra::grid::Grid4DDataMatrices< ScalarType, 6, 6, 2 >;
 

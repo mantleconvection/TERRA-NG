@@ -16,8 +16,8 @@ double power_iteration(
     OperatorT&          op,
     SrcOf< OperatorT >& tmpIt,
     SrcOf< OperatorT >& tmpAux,
-    //VectorQ1Scalar< double>& tmpIt,
-    //VectorQ1Scalar< double>& tmpAux,
+    //VectorW1Scalar< double>& tmpIt,
+    //VectorW1Scalar< double>& tmpAux,
     const int iterations )
 {
     // TODO typecheck on src dst

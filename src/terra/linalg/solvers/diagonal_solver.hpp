@@ -10,7 +10,7 @@ namespace terra::linalg::solvers {
 ///
 /// Implements a diagonal solve operation by inverting a given diagonal
 /// in the constructor and assigning a scaled rhs to the solution for the
-/// solve: x \gets D^{-1}b \f$.
+/// solve: \f$ x \gets D^{-1}b \f$.
 /// Satisfies the SolverLike concept (see solver.hpp).
 ///
 /// OperatorT is essentially ignored (does not need to be the identity operator).

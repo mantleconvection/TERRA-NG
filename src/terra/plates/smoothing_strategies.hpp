@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2022-2025 Berta Vilacis, Marcus Mohr, Nils Kohl.
- *
- * This file is part of HyTeG
- * (see https://i10git.cs.fau.de/hyteg/hyteg).
+ * Copyright (c) 2022-2025 Berta Vilacis, Marcus Mohr, Nils Kohl, Fatemeh Rezaei.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,7 +17,7 @@
 
 #pragma once
 
-namespace terra{
+namespace terra {
 namespace plates {
 
 /// \defgroup SmoothingStrategies SmoothingStrategies
@@ -33,8 +30,8 @@ namespace plates {
 /// Does not apply any smoothing.
 class NoSmoothing
 {
- public:
-   double operator()( const double distanceFromBoundary ) const { return 1.0; }
+  public:
+    double operator()( const double distanceFromBoundary ) const { return 1.0; }
 };
 
 /// Linearly decrease smoothing factor from 1.0 to 0.0
@@ -44,18 +41,18 @@ class NoSmoothing
 /// the given slope and is capped at 1.0.
 class LinearDistanceSmoother
 {
- public:
-   LinearDistanceSmoother( double slope )
-   : slope_( slope ) {};
+  public:
+    LinearDistanceSmoother( double slope )
+    : slope_( slope ){};
 
-   double operator()( const double distanceFromBoundary ) const
-   {
-      double smoothing = distanceFromBoundary * slope_;
-      return smoothing > static_cast< double >( 1 ) ? static_cast< double >( 1 ) : smoothing;
-   }
+    double operator()( const double distanceFromBoundary ) const
+    {
+        double smoothing = distanceFromBoundary * slope_;
+        return smoothing > static_cast< double >( 1 ) ? static_cast< double >( 1 ) : smoothing;
+    }
 
- private:
-   double slope_{ static_cast< double >( 0 ) };
+  private:
+    double slope_{ static_cast< double >( 0 ) };
 };
 
 /// @}

@@ -11,7 +11,7 @@
 #include "kokkos/kokkos_wrapper.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -19,8 +19,8 @@ template < typename ScalarT >
 class RestrictionLinear
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Scalar< double >;
-    using DstVectorType = linalg::VectorQ1Scalar< double >;
+    using SrcVectorType = linalg::VectorW1Scalar< double >;
+    using DstVectorType = linalg::VectorW1Scalar< double >;
     using ScalarType    = ScalarT;
 
   private:
@@ -253,8 +253,8 @@ template < typename ScalarT >
 class RestrictionVecLinear
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Vec< double >;
-    using DstVectorType = linalg::VectorQ1Vec< double >;
+    using SrcVectorType = linalg::VectorW1Vec< double >;
+    using DstVectorType = linalg::VectorW1Vec< double >;
     using ScalarType    = ScalarT;
 
   private:

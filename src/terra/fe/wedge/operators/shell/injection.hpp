@@ -4,7 +4,7 @@
 
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/kernels/common/grid_operations.hpp"
 
 namespace terra::fe::wedge::operators::shell {
@@ -13,8 +13,8 @@ template < typename ScalarT >
 class Injection
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Scalar< ScalarT >;
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using SrcVectorType = linalg::VectorW1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
   private:
@@ -93,8 +93,8 @@ class Injection
 template < typename ScalarT >
 inline void inject(
     const grid::shell::DistributedDomain&    domain_coarse,
-    const linalg::VectorQ1Scalar< ScalarT >& src,
-    linalg::VectorQ1Scalar< ScalarT >&       dst )
+    const linalg::VectorW1Scalar< ScalarT >& src,
+    linalg::VectorW1Scalar< ScalarT >&       dst )
 {
     Injection< ScalarT > inj( domain_coarse );
     inj.apply_impl( src, dst );
@@ -103,8 +103,8 @@ inline void inject(
 template < typename ScalarT, int VecDim = 3 >
 inline void inject(
     const grid::shell::DistributedDomain&         domain_coarse,
-    const linalg::VectorQ1Vec< ScalarT, VecDim >& src,
-    linalg::VectorQ1Vec< ScalarT, VecDim >&       dst )
+    const linalg::VectorW1Vec< ScalarT, VecDim >& src,
+    linalg::VectorW1Vec< ScalarT, VecDim >&       dst )
 {
     Injection< ScalarT > inj( domain_coarse );
 

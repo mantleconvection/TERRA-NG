@@ -33,7 +33,7 @@
 #include "linalg/operator.hpp"
 #include "linalg/trafo/local_basis_trafo_normal_tangential.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
 
 namespace terra::fe::wedge::operators::shell {
@@ -53,8 +53,8 @@ template < typename ScalarT >
 class DivergenceKerngen
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Vec< ScalarT, 3 >;
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using SrcVectorType = linalg::VectorW1Vec< ScalarT, 3 >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
     using Team          = Kokkos::TeamPolicy<>::member_type;
 
@@ -72,6 +72,12 @@ class DivergenceKerngen
     grid::Grid3DDataVec< ScalarT, 3 >                        grid_fine_;
     grid::Grid2DDataScalar< ScalarT >                        radii_;
     grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag > boundary_mask_fine_;
+
+    // Free-slip normals per boundary (lateral, same layout as grid_fine_). Default: grid_fine_ (= r̂).
+    grid::Grid3DDataVec< ScalarT, 3 > normals_cmb_;
+    grid::Grid3DDataVec< ScalarT, 3 > normals_surface_;
+    // false: free-slip uses r̂ (original code paths), see set_freeslip_normals().
+    bool custom_freeslip_normals_ = false;
 
     BoundaryConditions bcs_;
 
@@ -133,6 +139,8 @@ class DivergenceKerngen
     , grid_fine_( grid_fine )
     , radii_( radii_fine )
     , boundary_mask_fine_( boundary_mask_fine )
+    , normals_cmb_( grid_fine )
+    , normals_surface_( grid_fine )
     , operator_apply_mode_( operator_apply_mode )
     , operator_communication_mode_( operator_communication_mode )
     , recv_buffers_( domain_coarse )
@@ -191,6 +199,20 @@ class DivergenceKerngen
 
     /// Force the slow path. Useful for validation/testing the fast paths against a reference.
     void force_slow_path() { kernel_path_ = KernelPath::Slow; }
+
+    /// Use the given free-slip normals (lateral fields, must be unit length: the fast path does not
+    /// normalise) instead of r̂. Until this is called, the original r̂ code paths run unchanged.
+    void set_freeslip_normals(
+        const grid::Grid3DDataVec< ScalarT, 3 >& normals_cmb,
+        const grid::Grid3DDataVec< ScalarT, 3 >& normals_surface )
+    {
+        normals_cmb_             = normals_cmb;
+        normals_surface_         = normals_surface;
+        custom_freeslip_normals_ = true;
+    }
+
+
+    bool has_custom_freeslip_normals() const { return custom_freeslip_normals_; }
 
     void set_operator_apply_and_communication_modes(
         const linalg::OperatorApplyMode         operator_apply_mode,
@@ -441,7 +463,8 @@ class DivergenceKerngen
             }
             else if ( bcf == FREESLIP )
             {
-                dense::Mat< ScalarT, 6, 18 > A_tmp[num_wedges_per_hex_cell] = { 0 };
+                // matrix is filled with zeros by default
+                dense::Mat< ScalarT, 6, 18 > A_tmp[num_wedges_per_hex_cell];
 
                 for ( int wedge = 0; wedge < 2; ++wedge )
                 {
@@ -464,13 +487,24 @@ class DivergenceKerngen
 
                     for ( int bn = 0; bn < 3; ++bn )
                     {
-                        dense::Vec< double, 3 > normal = grid::shell::coords(
-                            s,
-                            x_cell + layer_hex_offset_x[wedge][bn],
-                            y_cell + layer_hex_offset_y[wedge][bn],
-                            r_cell + ( at_cmb ? 0 : 1 ),
-                            grid_fine_,
-                            radii_ );
+                        dense::Vec< double, 3 > normal;
+                        if ( custom_freeslip_normals_ )
+                        {
+                            const auto& normals = at_cmb ? normals_cmb_ : normals_surface_;
+                            for ( int d = 0; d < 3; ++d )
+                                normal( d ) = normals(
+                                    s, x_cell + layer_hex_offset_x[wedge][bn], y_cell + layer_hex_offset_y[wedge][bn], d );
+                        }
+                        else
+                        {
+                            normal = grid::shell::coords(
+                                s,
+                                x_cell + layer_hex_offset_x[wedge][bn],
+                                y_cell + layer_hex_offset_y[wedge][bn],
+                                r_cell + ( at_cmb ? 0 : 1 ),
+                                grid_fine_,
+                                radii_ );
+                        }
 
                         auto      R_i          = trafo_mat_cartesian_to_normal_tangential( normal );
                         const int offset_in_R  = at_cmb ? 0 : 9;
@@ -734,9 +768,17 @@ class DivergenceKerngen
                     {
                         if ( treat_freeslip && is_boundary_node )
                         {
-                            const double nx  = coords_sh( nid, 0 );
-                            const double ny  = coords_sh( nid, 1 );
-                            const double nz  = coords_sh( nid, 2 );
+                            // Default: r̂ = cached unit-sphere coord. Custom normals: read from global memory.
+                            double nx = coords_sh( nid, 0 );
+                            double ny = coords_sh( nid, 1 );
+                            double nz = coords_sh( nid, 2 );
+                            if ( custom_freeslip_normals_ )
+                            {
+                                const auto& normals = at_cmb ? normals_cmb_ : normals_surface_;
+                                nx                  = normals( local_subdomain_id, x_cell + ddx, y_cell + ddy, 0 );
+                                ny                  = normals( local_subdomain_id, x_cell + ddx, y_cell + ddy, 1 );
+                                nz                  = normals( local_subdomain_id, x_cell + ddx, y_cell + ddy, 2 );
+                            }
                             const double un  = u0 * nx + u1 * ny + u2 * nz;
                             u0 -= un * nx;
                             u1 -= un * ny;

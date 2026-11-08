@@ -12,7 +12,7 @@
 #include "linalg/solvers/gca/local_matrix_storage.hpp"
 #include "linalg/trafo/local_basis_trafo_normal_tangential.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
 
 namespace terra::fe::wedge::operators::shell::epsdivdiv_history {
@@ -57,8 +57,8 @@ template < typename ScalarT, int VecDim = 3 >
 class EpsilonDivDivKerngenV08ScalarCoalesced
 {
   public:
-    using SrcVectorType                 = linalg::VectorQ1Vec< ScalarT, VecDim >;
-    using DstVectorType                 = linalg::VectorQ1Vec< ScalarT, VecDim >;
+    using SrcVectorType                 = linalg::VectorW1Vec< ScalarT, VecDim >;
+    using DstVectorType                 = linalg::VectorW1Vec< ScalarT, VecDim >;
     using ScalarType                    = ScalarT;
     static constexpr int LocalMatrixDim = 18;
     using Grid4DDataLocalMatrices = terra::grid::Grid4DDataMatrices< ScalarType, LocalMatrixDim, LocalMatrixDim, 2 >;
@@ -910,11 +910,6 @@ class EpsilonDivDivKerngenV08ScalarCoalesced
         static constexpr int WEDGE_NODE_OFF[2][6][3] = {
             { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 0, 1 }, { 0, 1, 1 } },
             { { 1, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 1, 1 }, { 0, 1, 1 }, { 1, 0, 1 } } };
-
-        static constexpr int WEDGE_TO_UNIQUE[2][6] = {
-            { 0, 1, 2, 3, 4, 5 },
-            { 6, 2, 1, 7, 5, 4 }
-        };
 
         constexpr double ONE_THIRD      = 1.0 / 3.0;
         constexpr double ONE_SIXTH      = 1.0 / 6.0;

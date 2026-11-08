@@ -3,16 +3,16 @@
 
 #include <type_traits>
 
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "terra/eigen/eigen_wrapper.hpp"
 #include "terra/linalg/operator.hpp"
 
 namespace terra::linalg::util {
 
-/// @brief Assembles a VectorQ1Scalar into a Eigen::SparseVector. Likely not efficient - only use for debugging.
+/// @brief Assembles a VectorW1Scalar into a Eigen::SparseVector. Likely not efficient - only use for debugging.
 /// @note Only works in the serial case and on host space (only for debugging!).
 template < typename ScalarType >
-Eigen::SparseVector< ScalarType > debug_sparse_assembly_vector_vec_q1_scalar( const VectorQ1Scalar< double >& vec )
+Eigen::SparseVector< ScalarType > debug_sparse_assembly_vector_vec_q1_scalar( const VectorW1Scalar< double >& vec )
 {
     if ( mpi::num_processes() != 1 )
     {
@@ -75,11 +75,11 @@ template < OperatorLike Operator >
 Eigen::SparseMatrix< double > debug_sparse_assembly_operator_vec_q1_scalar(
     const grid::shell::DistributedDomain& domain_src,
     Operator&                             A,
-    VectorQ1Scalar< double >&             tmp_src,
-    VectorQ1Scalar< double >&             tmp_dst )
+    VectorW1Scalar< double >&             tmp_src,
+    VectorW1Scalar< double >&             tmp_dst )
 {
-    static_assert( std::is_same_v< SrcOf< Operator >, VectorQ1Scalar< double > > );
-    static_assert( std::is_same_v< DstOf< Operator >, VectorQ1Scalar< double > > );
+    static_assert( std::is_same_v< SrcOf< Operator >, VectorW1Scalar< double > > );
+    static_assert( std::is_same_v< DstOf< Operator >, VectorW1Scalar< double > > );
 
     if ( mpi::num_processes() != 1 )
     {

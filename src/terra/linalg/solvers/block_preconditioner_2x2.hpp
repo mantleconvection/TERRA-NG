@@ -11,19 +11,21 @@ namespace terra::linalg::solvers {
 /// Satisfies the SolverLike concept (see solver.hpp).
 /// Applies separate preconditioners to the (1,1) and (2,2) blocks.
 /// The block-diagonal preconditioner solves:
-/// \f[
-/// \begin{pmatrix}
-/// P_{11} & 0 \\
-/// 0 & P_{22}
-/// \end{pmatrix}
-/// \begin{pmatrix}
-/// x_1 \\ x_2
-/// \end{pmatrix}
-/// =
-/// \begin{pmatrix}
-/// b_1 \\ b_2
-/// \end{pmatrix}
-/// \f]
+/*!
+    \f[
+    \begin{pmatrix}
+    P_{11} & 0 \\
+    0 & P_{22}
+    \end{pmatrix}
+    \begin{pmatrix}
+    x_1 \\ x_2
+    \end{pmatrix}
+    =
+    \begin{pmatrix}
+    b_1 \\ b_2
+    \end{pmatrix}
+    \f]
+*/
 /// where \f$ P_{11} \f$ and \f$ P_{22} \f$ are preconditioners for the (1,1) and (2,2) blocks, respectively.
 /// @tparam OperatorT Operator type (must satisfy Block2x2OperatorLike).
 /// @tparam Block11T Type of the (1,1) operator of the preconditioner to be (approximately) inverted
@@ -115,19 +117,21 @@ static_assert( SolverLike< BlockDiagonalPreconditioner2x2<
 /// Satisfies the SolverLike concept (see solver.hpp).
 /// Applies separate preconditioners to the (1,1) and (2,2) blocks.
 /// The block-triangular preconditioner solves:
-/// \f[
-/// \begin{pmatrix}
-/// P_{11} & B^T \\
-/// 0 & P_{22}
-/// \end{pmatrix}
-/// \begin{pmatrix}
-/// x_1 \\ x_2
-/// \end{pmatrix}
-/// =
-/// \begin{pmatrix}
-/// b_1 \\ b_2
-/// \end{pmatrix}
-/// \f]
+/*!
+    \f[
+    \begin{pmatrix}
+    P_{11} & B^T \\
+    0 & P_{22}
+    \end{pmatrix}
+    \begin{pmatrix}
+    x_1 \\ x_2
+    \end{pmatrix}
+    =
+    \begin{pmatrix}
+    b_1 \\ b_2
+    \end{pmatrix}
+    \f]
+*/
 /// where \f$ P_{11} \f$ and \f$ P_{22} \f$ are preconditioners for the (1,1) and (2,2) blocks, respectively.
 /// @tparam OperatorT Operator type (must satisfy Block2x2OperatorLike).
 /// @tparam Block11T Type of the (1,1) operator of the preconditioner to be (approximately) inverted

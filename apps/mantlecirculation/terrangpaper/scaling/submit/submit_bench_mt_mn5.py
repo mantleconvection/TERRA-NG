@@ -397,7 +397,7 @@ export CUDA_VISIBLE_DEVICES="${{local_rank}}"
 EOF
 chmod +x ./gpu_bind.sh
 
-mpirun --bind-to none -np {ntasks} ./gpu_bind.sh {BINARY} --config {config} {app_args} --outdir {out_path} --outdir-overwrite
+mpirun --bind-to none -np {ntasks} ./gpu_bind.sh {BINARY} --config {config} {app_args} --outdir {out_path} --outfiles-overwrite
 
 rm -f ./gpu_bind.sh
 """

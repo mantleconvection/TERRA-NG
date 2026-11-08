@@ -9,24 +9,25 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
-template < typename ScalarT >
+template < typename ScalarT, typename CoefficientT = grid::Grid4DDataScalar< ScalarT > >
 class KMass
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Scalar< ScalarT >;
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using SrcVectorType = linalg::VectorW1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
   private:
     grid::shell::DistributedDomain domain_;
 
-    grid::Grid3DDataVec< ScalarT, 3 >    grid_;
-    grid::Grid2DDataScalar< ScalarT >    radii_;
-    grid::Grid4DDataScalar< ScalarType > k_;
+    grid::Grid3DDataVec< ScalarT, 3 > grid_;
+    grid::Grid2DDataScalar< ScalarT > radii_;
+
+    CoefficientT k_;
 
     bool diagonal_;
     bool lumped_diagonal_;
@@ -42,14 +43,14 @@ class KMass
 
   public:
     KMass(
-        const grid::shell::DistributedDomain&       domain,
-        const grid::Grid3DDataVec< ScalarT, 3 >&    grid,
-        const grid::Grid2DDataScalar< ScalarT >&    radii,
-        const grid::Grid4DDataScalar< ScalarType >& k,
-        const bool                                  diagonal,
-        const bool                                  lumped_diagonal     = false,
-        linalg::OperatorApplyMode                   operator_apply_mode = linalg::OperatorApplyMode::Replace,
-        linalg::OperatorCommunicationMode           operator_communication_mode =
+        const grid::shell::DistributedDomain&    domain,
+        const grid::Grid3DDataVec< ScalarT, 3 >& grid,
+        const grid::Grid2DDataScalar< ScalarT >& radii,
+        CoefficientT                             k,
+        const bool                               diagonal,
+        const bool                               lumped_diagonal     = false,
+        linalg::OperatorApplyMode                operator_apply_mode = linalg::OperatorApplyMode::Replace,
+        linalg::OperatorCommunicationMode        operator_communication_mode =
             linalg::OperatorCommunicationMode::CommunicateAdditively )
     : domain_( domain )
     , grid_( grid )
@@ -127,7 +128,11 @@ class KMass
         const ScalarT grad_r = grad_forward_map_rad( r_1, r_2 );
 
         dense::Vec< ScalarT, 6 > k[num_wedges_per_hex_cell];
-        extract_local_wedge_scalar_coefficients( k, local_subdomain_id, x_cell, y_cell, r_cell, k_ );
+
+        if constexpr ( std::is_same_v< CoefficientT, grid::Grid4DDataScalar< ScalarType > > )
+        {
+            extract_local_wedge_scalar_coefficients( k, local_subdomain_id, x_cell, y_cell, r_cell, k_ );
+        }
 
         for ( int wedge = 0; wedge < num_wedges_per_hex_cell; wedge++ )
         {
@@ -136,9 +141,17 @@ class KMass
                 const ScalarT r = forward_map_rad( r_1, r_2, quad_points[q]( 2 ) );
 
                 ScalarType k_eval = 0.0;
-                for ( int j = 0; j < num_nodes_per_wedge; j++ )
+
+                if constexpr ( std::is_same_v< CoefficientT, grid::Grid4DDataScalar< ScalarType > > )
                 {
-                    k_eval += shape( j, quad_points[q] ) * k[wedge]( j );
+                    for ( int j = 0; j < num_nodes_per_wedge; j++ )
+                    {
+                        k_eval += shape( j, quad_points[q] ) * k[wedge]( j );
+                    }
+                }
+                else
+                {
+                    k_eval = k_( local_subdomain_id, x_cell, y_cell, r_cell, wedge, quad_points[q] );
                 }
 
                 for ( int i = 0; i < num_nodes_per_wedge; i++ )

@@ -1,39 +1,39 @@
 #pragma once
 
-#include "parameters.hpp"
-
 #include "fe/wedge/integrands.hpp"
 #include "fe/wedge/kernel_helpers.hpp"
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "kokkos/kokkos_wrapper.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "mpi/mpi.hpp"
+#include "parameters.hpp"
 #include "util/logging.hpp"
 
 namespace terra::mantlecirculation {
 
 /// @brief Compute ∫_Γ ∇T · n̂ dΓ on the surface or CMB boundary.
 inline ScalarType compute_boundary_heat_flux_integral(
-    const grid::shell::DistributedDomain&                domain,
-    const grid::Grid4DDataScalar< ScalarType >&          T_grid,
-    const grid::Grid3DDataVec< ScalarType, 3 >&          coords_shell,
-    const grid::Grid2DDataScalar< ScalarType >&          coords_radii,
+    const grid::shell::DistributedDomain&                           domain,
+    const grid::Grid4DDataScalar< ScalarType >&                     T_grid,
+    const grid::Grid3DDataVec< ScalarType, 3 >&                     coords_shell,
+    const grid::Grid2DDataScalar< ScalarType >&                     coords_radii,
     const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
-    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& ownership_mask,
-    const bool                                           at_surface )
+    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&        ownership_mask,
+    const bool                                                      at_surface )
 {
     using namespace fe::wedge;
 
     const int num_subdomains = domain.subdomains().size();
-    const int nx = domain.domain_info().subdomain_num_nodes_per_side_laterally();
-    const int nr = domain.domain_info().subdomain_num_nodes_radially();
+    const int nx             = domain.domain_info().subdomain_num_nodes_per_side_laterally();
+    const int nr             = domain.domain_info().subdomain_num_nodes_radially();
 
-    const int r_cell = at_surface ? ( nr - 2 ) : 0;
-    const int r_boundary_node = at_surface ? ( nr - 1 ) : 0;
-    const auto expected_flag = at_surface ? grid::shell::ShellBoundaryFlag::SURFACE : grid::shell::ShellBoundaryFlag::CMB;
+    const int  r_cell          = at_surface ? ( nr - 2 ) : 0;
+    const int  r_boundary_node = at_surface ? ( nr - 1 ) : 0;
+    const auto expected_flag =
+        at_surface ? grid::shell::ShellBoundaryFlag::SURFACE : grid::shell::ShellBoundaryFlag::CMB;
     const ScalarType zeta_boundary = at_surface ? ScalarType( 1 ) : ScalarType( -1 );
-    const ScalarType normal_sign = at_surface ? ScalarType( 1 ) : ScalarType( -1 );
+    const ScalarType normal_sign   = at_surface ? ScalarType( 1 ) : ScalarType( -1 );
 
     ScalarType local_integral = 0;
 
@@ -47,7 +47,7 @@ inline ScalarType compute_boundary_heat_flux_integral(
             // Skip cells whose anchor node is not owned to avoid double-counting at lateral subdomain boundaries.
             if ( ownership_mask( sd, x_cell, y_cell, r_cell ) != grid::NodeOwnershipFlag::OWNED )
                 return;
-            constexpr int nqp = quadrature::quad_felippa_3x2_num_quad_points;
+            constexpr int               nqp = quadrature::quad_felippa_3x2_num_quad_points;
             dense::Vec< ScalarType, 3 > quad_points[nqp];
             ScalarType                  quad_weights[nqp];
             quadrature::quad_felippa_3x2_quad_points( quad_points );
@@ -67,7 +67,7 @@ inline ScalarType compute_boundary_heat_flux_integral(
                 for ( int q = 0; q < nqp; ++q )
                 {
                     dense::Vec< ScalarType, 3 > qp = quad_points[q];
-                    qp( 2 ) = zeta_boundary;
+                    qp( 2 )                        = zeta_boundary;
 
                     const auto J       = jac( wedge_phy_surf[wedge], r_1, r_2, qp );
                     const auto det     = J.det();
@@ -82,15 +82,18 @@ inline ScalarType compute_boundary_heat_flux_integral(
                     for ( int i = 0; i < num_nodes_per_wedge; ++i )
                     {
                         const auto grad_phi_ref = grad_shape< ScalarType >( i, qp );
-                        grad_T_phys = grad_T_phys + ( J_inv_T * grad_phi_ref ) * local_T[wedge]( i );
+                        grad_T_phys             = grad_T_phys + ( J_inv_T * grad_phi_ref ) * local_T[wedge]( i );
                     }
 
                     const auto x_phys = forward_map(
                         wedge_phy_surf[wedge][0],
                         wedge_phy_surf[wedge][1],
                         wedge_phy_surf[wedge][2],
-                        r_1, r_2,
-                        qp( 0 ), qp( 1 ), qp( 2 ) );
+                        r_1,
+                        r_2,
+                        qp( 0 ),
+                        qp( 1 ),
+                        qp( 2 ) );
                     const auto r_hat = x_phys.normalized();
 
                     const ScalarType grad_T_dot_n = normal_sign * grad_T_phys.dot( r_hat );
@@ -123,17 +126,19 @@ inline ScalarType compute_boundary_heat_flux_integral(
 ///
 /// @param at_surface  If true, compute Nu at the outer surface; if false, at the CMB.
 inline ScalarType compute_nusselt(
-    const grid::shell::DistributedDomain&       domain,
-    const linalg::VectorQ1Scalar< ScalarType >& T,
-    const linalg::VectorQ1Scalar< ScalarType >& T_ref,
-    const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
-    const grid::Grid2DDataScalar< ScalarType >&  coords_radii,
+    const grid::shell::DistributedDomain&                           domain,
+    const linalg::VectorW1Scalar< ScalarType >&                     T,
+    const linalg::VectorW1Scalar< ScalarType >&                     T_ref,
+    const grid::Grid3DDataVec< ScalarType, 3 >&                     coords_shell,
+    const grid::Grid2DDataScalar< ScalarType >&                     coords_radii,
     const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
-    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& ownership_mask,
-    const bool                                   at_surface )
+    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&        ownership_mask,
+    const bool                                                      at_surface )
 {
-    const ScalarType numerator   = compute_boundary_heat_flux_integral( domain, T.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, at_surface );
-    const ScalarType denominator = compute_boundary_heat_flux_integral( domain, T_ref.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, at_surface );
+    const ScalarType numerator = compute_boundary_heat_flux_integral(
+        domain, T.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, at_surface );
+    const ScalarType denominator = compute_boundary_heat_flux_integral(
+        domain, T_ref.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, at_surface );
 
     return Kokkos::abs( numerator ) / Kokkos::abs( denominator );
 }
@@ -147,10 +152,10 @@ inline ScalarType compute_nusselt(
 /// is a partition of the global volume integral; the two partial sums are
 /// MPI_Allreduce'd before the final ratio.
 inline ScalarType compute_v_rms(
-    const grid::shell::DistributedDomain&              domain,
-    const linalg::VectorQ1Vec< ScalarType, 3 >&        velocity,
-    const grid::Grid3DDataVec< ScalarType, 3 >&        coords_shell,
-    const grid::Grid2DDataScalar< ScalarType >&        coords_radii )
+    const grid::shell::DistributedDomain&       domain,
+    const linalg::VectorW1Vec< ScalarType, 3 >& velocity,
+    const grid::Grid3DDataVec< ScalarType, 3 >& coords_shell,
+    const grid::Grid2DDataScalar< ScalarType >& coords_radii )
 {
     using namespace fe::wedge;
 
@@ -191,9 +196,8 @@ inline ScalarType compute_v_rms(
             {
                 for ( int q = 0; q < num_q; ++q )
                 {
-                    const dense::Mat< ScalarType, 3, 3 > J =
-                        jac( wedge_phy_surf[wedge], r_1, r_2, qp[q] );
-                    const ScalarType abs_det = Kokkos::abs( J.det() );
+                    const dense::Mat< ScalarType, 3, 3 > J       = jac( wedge_phy_surf[wedge], r_1, r_2, qp[q] );
+                    const ScalarType                     abs_det = Kokkos::abs( J.det() );
                     if ( abs_det < ScalarType( 1e-30 ) )
                     {
                         continue;
@@ -207,10 +211,10 @@ inline ScalarType compute_v_rms(
                         uq[1] += N_j * u_w[wedge][1]( j );
                         uq[2] += N_j * u_w[wedge][2]( j );
                     }
-                    const ScalarType u_mag2 = uq[0]*uq[0] + uq[1]*uq[1] + uq[2]*uq[2];
+                    const ScalarType u_mag2 = uq[0] * uq[0] + uq[1] * uq[1] + uq[2] * uq[2];
 
                     acc_u2 += qw[q] * abs_det * u_mag2;
-                    acc_V  += qw[q] * abs_det;
+                    acc_V += qw[q] * abs_det;
                 }
             }
         },
@@ -219,7 +223,7 @@ inline ScalarType compute_v_rms(
     Kokkos::fence();
 
     MPI_Allreduce( MPI_IN_PLACE, &sum_u2_dV, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
-    MPI_Allreduce( MPI_IN_PLACE, &sum_dV,    1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
+    MPI_Allreduce( MPI_IN_PLACE, &sum_dV, 1, mpi::mpi_datatype< ScalarType >(), MPI_SUM, MPI_COMM_WORLD );
 
     return ( sum_dV > ScalarType( 0 ) ) ? Kokkos::sqrt( sum_u2_dV / sum_dV ) : ScalarType( 0 );
 }

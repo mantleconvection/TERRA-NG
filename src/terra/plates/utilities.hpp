@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2022 Marcus Mohr.
- *
- * This file is part of HyTeG
- * (see https://i10git.cs.fau.de/hyteg/hyteg).
+ * Copyright (c) 2022 Marcus Mohr, Fatemeh Rezaei.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,17 +16,15 @@
  */
 
 #pragma once
+#include <sstream>
 #include <string>
-#include <sstream> 
 
-#include "terra/dense/vec.hpp"
 #include "terra/dense/mat.hpp"
+#include "terra/dense/vec.hpp"
 
 #define PLATES_IO_STR_TO_FP std::stod
 
-
-
-using vec3D = terra::dense::Vec< double, 3 >; 
+using vec3D = terra::dense::Vec< double, 3 >;
 using mat3D = terra::dense::Mat< double, 3, 3 >;
 
 namespace terra {
@@ -40,35 +35,47 @@ using uint_t = unsigned int;
 /// Convert a key string (stage name) to a plate stage (age value)
 inline double keyStrToAge( const std::string& key )
 {
-   std::string ageStr = key.substr( 9, 6 );
-   return PLATES_IO_STR_TO_FP( ageStr );
+    std::string ageStr = key.substr( 9, 6 );
+    return PLATES_IO_STR_TO_FP( ageStr );
 }
 
 /// Convert a plate stage (age value) to a key string (stage name)
 inline std::string ageToKeyStr( const double age )
 {
-   std::stringstream key;
-   key.precision( 4 );
-   key << std::fixed;
-   key << "topology_" << age << "Ma_polygon";
-   return key.str();
+    std::stringstream key;
+    key.precision( 4 );
+    key << std::fixed;
+    key << "topology_" << age << "Ma_polygon";
+    return key.str();
 }
 
 } // namespace plates
 } // namespace terra
 
-
 /// Specialise std::less for vec3D
 ///
 /// The sorting is lexicographically w.r.t. the three vector components.
 /// It has no deeper meaning but allows to e.g. use std::set< vec3D >.
-template<>
-struct std::less< vec3D > {
-  bool operator()( const vec3D& a, const vec3D& b ) const {
-    if( a(0) < b(0) ) { return true; }
-    else if ( a(0) == b(0) && a(1) < b(1) ) { return true; }
-    else if ( a(0) == b(0) && a(1) == b(1) && a(2) < b(2) ) { return true; }
-    else { return false; }
-  }
+template <>
+struct std::less< vec3D >
+{
+    bool operator()( const vec3D& a, const vec3D& b ) const
+    {
+        if ( a( 0 ) < b( 0 ) )
+        {
+            return true;
+        }
+        else if ( a( 0 ) == b( 0 ) && a( 1 ) < b( 1 ) )
+        {
+            return true;
+        }
+        else if ( a( 0 ) == b( 0 ) && a( 1 ) == b( 1 ) && a( 2 ) < b( 2 ) )
+        {
+            return true;
+        }
+        else
+        {
+            return false;
+        }
+    }
 };
-

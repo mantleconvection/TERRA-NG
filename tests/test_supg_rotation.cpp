@@ -45,8 +45,8 @@ using grid::Grid3DDataVec;
 using grid::Grid4DDataScalar;
 using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 using ScalarType = double;
 
@@ -71,7 +71,7 @@ struct VelocityInterpolator
 };
 
 // ============================================================================
-// Cone initial condition at (0.75, 0, 0) with radius 0.2 — evaluated at Q1 nodes.
+// Cone initial condition at (0.75, 0, 0) with radius 0.2 — evaluated at W1 nodes.
 // ============================================================================
 
 struct InitialConditionInterpolator
@@ -96,7 +96,7 @@ struct InitialConditionInterpolator
 };
 
 // ============================================================================
-// Node-based L2 relative error: ||T - T_ref||_2 / ||T_ref||_2 over owned Q1 nodes.
+// Node-based L2 relative error: ||T - T_ref||_2 / ||T_ref||_2 over owned W1 nodes.
 // ============================================================================
 
 ScalarType compute_l2_relative_error_nodes(
@@ -176,11 +176,11 @@ void test( const int level )
     const auto coords_shell = grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto coords_radii = grid::shell::subdomain_shell_radii< ScalarType >( domain );
 
-    VectorQ1Vec< ScalarType >    u( "u", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T( "T", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data ); // for EV ∂_t E
-    VectorQ1Scalar< ScalarType > T_ref( "T_ref", domain, mask_data );
-    VectorQ1Scalar< ScalarType > f( "f", domain, mask_data );
+    VectorW1Vec< ScalarType >    u( "u", domain, mask_data );
+    VectorW1Scalar< ScalarType > T( "T", domain, mask_data );
+    VectorW1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data ); // for EV ∂_t E
+    VectorW1Scalar< ScalarType > T_ref( "T_ref", domain, mask_data );
+    VectorW1Scalar< ScalarType > f( "f", domain, mask_data );
 
     // Per-cell entropy viscosity ν_h.  Shape matches
     // local_domain_md_range_policy_cells (extents: n_sub × (N−1) × (N−1) × (N_r−1)).
@@ -190,10 +190,10 @@ void test( const int level )
     grid::Grid4DDataScalar< ScalarType > nu_h( "nu_h", num_sub, nx_c, nx_c, nr_c );
 
     // Nodal projection of ν_h (for the DivKGrad RHS operator).
-    VectorQ1Scalar< ScalarType > nu_h_nodal( "nu_h_nodal", domain, mask_data );
+    VectorW1Scalar< ScalarType > nu_h_nodal( "nu_h_nodal", domain, mask_data );
 
     // Buffer for the explicit EV stabilization contribution  rhs_ev_i = ∫ ν_h ∇T · ∇φ_i dx.
-    VectorQ1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
+    VectorW1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
 
     // Toggle for this first experiment.  When false, we compute ν_h each step
     // for diagnostic purposes but do NOT feed it back — reproduces the plain
@@ -213,7 +213,7 @@ void test( const int level )
         VelocityInterpolator{ coords_shell, coords_radii, u.grid_data() } );
     Kokkos::fence();
 
-    // Initialise temperature (cone at Q1 nodes) and save the initial state as
+    // Initialise temperature (cone at W1 nodes) and save the initial state as
     // reference — after one full revolution with zero diffusion the exact solution
     // equals the initial condition, so T_ref doubles as "exact solution at T_end".
     Kokkos::parallel_for(
@@ -268,7 +268,7 @@ void test( const int level )
     // FGMRES(30) — 2*30 + 4 = 64 temporaries.
     constexpr int restart = 30;
     auto          table   = std::make_shared< util::Table >();
-    std::vector< VectorQ1Scalar< ScalarType > > fgmres_tmps;
+    std::vector< VectorW1Scalar< ScalarType > > fgmres_tmps;
     fgmres_tmps.reserve( 2 * restart + 4 );
     for ( int i = 0; i < 2 * restart + 4; ++i )
         fgmres_tmps.emplace_back( "fgmres_tmp", domain, mask_data );

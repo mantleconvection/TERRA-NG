@@ -3,7 +3,7 @@
 #include "fe/wedge/operators/shell/laplace_simple.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 namespace terra::linalg {
 

@@ -1,11 +1,10 @@
 
 #include <fstream>
 #include <iomanip>
-#include <linalg/vector_q1.hpp>
+#include <linalg/vector_w1.hpp>
 #include <optional>
 
 #include "terra/grid/shell/spherical_shell.hpp"
-#include "terra/io/vtk.hpp"
 #include "terra/io/xdmf.hpp"
 #include "terra/shell/spherical_harmonics.hpp"
 #include "util/cli11_helper.hpp"
@@ -84,7 +83,7 @@ int main( int argc, char** argv )
     auto sph_data = terra::shell::spherical_harmonics_coefficients_grid< double >(
         parameters.degree_l, parameters.order_m, subdomain_shell_coords );
 
-    auto sph_data_for_xdmf = allocate_scalar_grid< double >( "sph_data_for_xdmf", domain );
+    auto sph_data_for_xdmf = terra::grid::shell::allocate_scalar_grid< double >( "sph_data_for_xdmf", domain );
 
     Kokkos::parallel_for(
         "sph_interpolation_for_xdmf",

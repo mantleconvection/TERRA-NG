@@ -5,7 +5,7 @@ target_sources(terra
     functions_for_rotations.hpp
     plate_rotation_provider.hpp
     plate_storage.hpp
-    plate_velocity_device.hpp
+    plate_velocity_calculator.hpp
         plate_velocity_provider.hpp
     local_averaging_point_weight_provider.hpp
     smoothing_strategies.hpp

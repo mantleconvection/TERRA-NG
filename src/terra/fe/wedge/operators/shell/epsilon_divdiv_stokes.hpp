@@ -8,7 +8,7 @@
 #include "gradient_kerngen.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "util/timer.hpp"
 #include "zero.hpp"
 
@@ -19,8 +19,8 @@ template < typename ScalarT, int VecDim = 3 >
 class EpsDivDivStokes
 {
   public:
-    using SrcVectorType = linalg::VectorQ1IsoQ2Q1< ScalarT, VecDim >;
-    using DstVectorType = linalg::VectorQ1IsoQ2Q1< ScalarT, VecDim >;
+    using SrcVectorType = linalg::VectorW1IsoW2W1< ScalarT, VecDim >;
+    using DstVectorType = linalg::VectorW1IsoW2W1< ScalarT, VecDim >;
     using ScalarType    = ScalarT;
 
     using Block11Type = EpsilonDivDivKerngen< ScalarType, VecDim >;
@@ -81,6 +81,17 @@ class EpsDivDivStokes
             linalg::OperatorApplyMode::Replace, linalg::OperatorCommunicationMode::CommunicateAdditively );
         B_.set_operator_apply_and_communication_modes(
             linalg::OperatorApplyMode::Replace, linalg::OperatorCommunicationMode::CommunicateAdditively );
+    }
+
+    /// Use the given free-slip normals (lateral fields) in all three blocks, so that A, Bᵀ and B
+    /// enforce the same tangential constraint. Default: unit-sphere coords (r̂).
+    void set_freeslip_normals(
+        const grid::Grid3DDataVec< ScalarType, 3 >& normals_cmb,
+        const grid::Grid3DDataVec< ScalarType, 3 >& normals_surface )
+    {
+        A_.set_freeslip_normals( normals_cmb, normals_surface );
+        B_T_.set_freeslip_normals( normals_cmb, normals_surface );
+        B_.set_freeslip_normals( normals_cmb, normals_surface );
     }
 
     const Block11Type& block_11() const { return A_; }

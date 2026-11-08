@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2022 Berta Vilacis, Marcus Mohr.
- *
- * This file is part of HyTeG
- * (see https://i10git.cs.fau.de/hyteg/hyteg).
+ * Copyright (c) 2022 Berta Vilacis, Marcus Mohr, Fatemeh Rezaei.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,36 +18,36 @@
 #pragma once
 
 // #include "terraneo/helpers/typeAliases.hpp"
-#include "terra/dense/vec.hpp"
 #include "terra/dense/mat.hpp"
+#include "terra/dense/vec.hpp"
 
 // namespace terraneo {
 
-using vec3D = terra::dense::Vec< double, 3 >; 
+using vec3D = terra::dense::Vec< double, 3 >;
 using mat3D = terra::dense::Mat< double, 3, 3 >;
-namespace terra{
+namespace terra {
 namespace plates {
 
 using uint_t = unsigned int;
 
-inline constexpr long double pi = 3.14159265358979323846L;
+inline constexpr double pi = 3.14159265358979323846;
 
 /// Struct to bundle information on the rotation of a plate
 struct RotationInfo
 {
-   double time{ static_cast< double >( 0 ) };      //!< time for which the finite rotation is given
-   double longitude{ static_cast< double >( 0 ) }; //!< longitude of finite rotation
-   double latitude{ static_cast< double >( 0 ) };  //!< latitude of finite rotation
-   double angle{ static_cast< double >( 0 ) };     //!< finite rotation angle
-   uint_t plateID{ 0 };             //!< ID of the plate itself
-   uint_t conjugateID{ 0 };         //!< ID of the conjugate plate (needed to "hop" to reference plate)
+    double time{ static_cast< double >( 0 ) };      //!< time for which the finite rotation is given
+    double longitude{ static_cast< double >( 0 ) }; //!< longitude of finite rotation
+    double latitude{ static_cast< double >( 0 ) };  //!< latitude of finite rotation
+    double angle{ static_cast< double >( 0 ) };     //!< finite rotation angle
+    uint_t plateID{ 0 };                            //!< ID of the plate itself
+    uint_t conjugateID{ 0 };                        //!< ID of the conjugate plate (needed to "hop" to reference plate)
 };
 
 /// Struct to bundle information on a finite rotation
 struct FiniteRotation
 {
-   double time;
-   vec3D  lonLatAng; // entries give: longitude, latitude, angle
+    double time;
+    vec3D  lonLatAng; // entries give: longitude, latitude, angle
 };
 
 /// Alias for iterating over a vector of RotationInfo elements
@@ -65,13 +62,13 @@ using Polygon = std::vector< vec3D >;
 /// as we might want to simulate other planets at some point.
 struct constants
 {
-   // static constexpr double earthRadiusInKm{static_cast< double >( 6371 )};
-   // fails with:
-   // call to non-‘constexpr’ function ‘walberla::double walberla::static_cast< double >(T)
-   // [with T = int; walberla::double = double]’
-   static constexpr double earthRadiusInKm{ 6371.0 };
+    // static constexpr double earthRadiusInKm{static_cast< double >( 6371 )};
+    // fails with:
+    // call to non-‘constexpr’ function ‘walberla::double walberla::static_cast< double >(T)
+    // [with T = int; walberla::double = double]’
+    static constexpr double earthRadiusInKm{ 6371.0 };
 };
 
 } // namespace plates
-}
+} // namespace terra
 // } // namespace terraneo

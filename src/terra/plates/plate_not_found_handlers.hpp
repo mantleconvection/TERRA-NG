@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2022 Marcus Mohr.
- *
- * This file is part of HyTeG
- * (see https://i10git.cs.fau.de/hyteg/hyteg).
+ * Copyright (c) 2022 Marcus Mohr, Fatemeh Rezaei. 
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,16 +18,16 @@
 #pragma once
 
 #include <algorithm>
-#include <vector>
-#include <set>
-#include <iostream>
 #include <iomanip>
+#include <iostream>
+#include <set>
+#include <vector>
+#include <map>
+#include <numeric>
+#include <string>
 
-// #include "core/mpi/BufferDataTypeExtensions.h"
-// #include "core/mpi/Gatherv.h"
-
-#include "terra/plates/utilities.hpp"
 #include "mpi/mpi.hpp"
+#include "terra/plates/utilities.hpp"
 
 namespace terra {
 namespace plates {
@@ -47,13 +44,13 @@ namespace plates {
 /// The default strategy when we find no plate for a point is to set the velocity to zero.
 class DefaultPlateNotFoundHandler
 {
- public:
-   vec3D operator()( [[maybe_unused]] const vec3D& point, [[maybe_unused]] const double age )
-   {
-      // WALBERLA_UNUSED( point ); // replaced with [[maybe_unused]] c++17 standard
-      // WALBERLA_UNUSED( age );   // replaced with [[maybe_unused]] c++17 standard
-      return {static_cast< double >( 0 ), static_cast< double >( 0 ), static_cast< double >( 0 )};
-   }
+  public:
+    vec3D operator()( [[maybe_unused]] const vec3D& point, [[maybe_unused]] const double age )
+    {
+        // WALBERLA_UNUSED( point ); // replaced with [[maybe_unused]] c++17 standard
+        // WALBERLA_UNUSED( age );   // replaced with [[maybe_unused]] c++17 standard
+        return { static_cast< double >( 0 ), static_cast< double >( 0 ), static_cast< double >( 0 ) };
+    }
 };
 
 /// Statistics strategy
@@ -62,96 +59,99 @@ class DefaultPlateNotFoundHandler
 /// and can be queried for a report.
 class StatisticsPlateNotFoundHandler
 {
- public:
-   using map_t = std::map< std::string, std::set< vec3D > >;
+  public:
+    using map_t = std::map< std::string, std::set< vec3D > >;
 
-   vec3D operator()( const vec3D& point, const double age )
-   {
-      pointsNotFound_[plates::ageToKeyStr( age )].insert( point );
-      return {static_cast< double >( 0 ), static_cast< double >( 0 ), static_cast< double >( 0 )};
-   }
+    vec3D operator()( const vec3D& point, const double age )
+    {
+        pointsNotFound_[plates::ageToKeyStr( age )].insert( point );
+        return { static_cast< double >( 0 ), static_cast< double >( 0 ), static_cast< double >( 0 ) };
+    }
 
-   void generateReport()
-   {
-      // remove duplicates from list of points:
-      // we can only compare vec3D for equality, but for sorting we'd need "<"
-      // std::sort( pointsNotFound_.begin(), pointsNotFound_.end() );
-      // auto last = std::unique( pointsNotFound_.begin(), pointsNotFound_.end() );
-      // pointsNotFound_.erase( last, pointsNotFound_.end() );
+    void generateReport()
+    {
+        // remove duplicates from list of points:
+        // we can only compare vec3D for equality, but for sorting we'd need "<"
+        // std::sort( pointsNotFound_.begin(), pointsNotFound_.end() );
+        // auto last = std::unique( pointsNotFound_.begin(), pointsNotFound_.end() );
+        // pointsNotFound_.erase( last, pointsNotFound_.end() );
 
-      map_t pointsNotFoundGlobal = collectDataOnRoot();
+        map_t pointsNotFoundGlobal = collectDataOnRoot();
 
-      if ( mpi::rank() == 0 )
-      {
-         for ( const auto& elem : pointsNotFoundGlobal )
-         {
-            std::string              keyStr       = elem.first;
-            const std::set< vec3D >& pointsForAge = elem.second;
-            std::cout << "List of points w/o plateID for age = " << keyStrToAge( keyStr ) << ":" << std::endl;
-            uint_t k = 1;
-            for ( const auto& point : pointsForAge )
+        if ( mpi::rank() == 0 )
+        {
+            for ( const auto& elem : pointsNotFoundGlobal )
             {
-               std::cout << "" << std::setw( 3 ) << k++ << ": (" << std::scientific << std::showpos << point( 0 )
-                                     << ", " << point( 1 ) << ", " << point( 2 ) << ")" << std::endl;
+                std::string              keyStr       = elem.first;
+                const std::set< vec3D >& pointsForAge = elem.second;
+                std::cout << "List of points w/o plateID for age = " << keyStrToAge( keyStr ) << ":" << std::endl;
+                uint_t k = 1;
+                for ( const auto& point : pointsForAge )
+                {
+                    std::cout << "" << std::setw( 3 ) << k++ << ": (" << std::scientific << std::showpos << point( 0 )
+                              << ", " << point( 1 ) << ", " << point( 2 ) << ")" << std::endl;
+                }
             }
-         }
-      }
-   }
+        }
+    }
 
- private:
-   void combineMaps( map_t& dstMap, const map_t& srcMap )
-   {
-      // loop over source map
-      for ( auto [key, srcSet] : srcMap )
-      {
-         // check for key in destination map
-         auto keyPos = dstMap.find( key );
+  private:
+    /// Gather the maps of all processes on root and merge them (other ranks get an empty map).
+    ///
+    /// Each point is sent as a tuple ( age, x, y, z ) of doubles, so a single MPI_Gatherv suffices.
+    map_t collectDataOnRoot()
+    {
+        constexpr int tupleSize = 4;
 
-         // if key does not exist, simply insert new key, set pair
-         if ( keyPos == dstMap.end() )
-         {
-            dstMap[key] = srcSet;
-         }
+        // flatten local map; parse the full age from the key, as keyStrToAge() truncates to 6 characters
+        std::vector< double > sendBuf;
+        for ( const auto& [key, points] : pointsNotFound_ )
+        {
+            const double age = std::stod( key.substr( 9 ) );
+            for ( const auto& p : points )
+            {
+                sendBuf.insert( sendBuf.end(), { age, p( 0 ), p( 1 ), p( 2 ) } );
+            }
+        }
 
-         // key exists, so merge the sets
-         else
-         {
-            auto& dstSet = keyPos->second;
-            dstSet.insert( srcSet.begin(), srcSet.end() );
-         }
-      }
-   }
+        const int myRank    = mpi::rank();
+        const int nProcs    = mpi::num_processes();
+        const int sendCount = static_cast< int >( sendBuf.size() );
 
-   map_t collectDataOnRoot()
-   {
-      // walberla::mpi::SendBuffer sendBuffer;
-      // sendBuffer << pointsNotFound_;
-      // walberla::mpi::RecvBuffer recvBuffer;
-      // walberla::mpi::gathervBuffer( sendBuffer, recvBuffer );
-      std::cout << "BIG BIG BIG TROUBLE; WE'RE IN collectDataOnRoot \n\n";
-      std::abort();
-      const auto myRank = mpi::rank();
-      const unsigned int nProcs = mpi::num_processes();
+        std::vector< int > counts( myRank == 0 ? nProcs : 0 );
+        std::vector< int > displs( myRank == 0 ? nProcs : 0 );
+        MPI_Gather( &sendCount, 1, MPI_INT, counts.data(), 1, MPI_INT, 0, MPI_COMM_WORLD );
 
-      map_t globalMap;
+        std::vector< double > recvBuf;
+        if ( myRank == 0 )
+        {
+            std::exclusive_scan( counts.begin(), counts.end(), displs.begin(), 0 );
+            recvBuf.resize( displs.back() + counts.back() );
+        }
 
-      // extract individual maps and combine them into a global one
-      if ( myRank == 0 )
-      {
-         map_t singleMap;
-         for ( uint_t k = 0; k < nProcs; ++k )
-         {
-            // recvBuffer >> singleMap;
-            combineMaps( globalMap, singleMap );
-         }
-      }
+        MPI_Gatherv( sendBuf.data(),
+                     sendCount,
+                     mpi::mpi_datatype< double >(),
+                     recvBuf.data(),
+                     counts.data(),
+                     displs.data(),
+                     mpi::mpi_datatype< double >(),
+                     0,
+                     MPI_COMM_WORLD );
 
-      return globalMap;
-   }
+        // rebuild the map; std::set takes care of merging duplicates across ranks
+        map_t globalMap;
+        for ( std::size_t i = 0; i < recvBuf.size(); i += tupleSize )
+        {
+            globalMap[ageToKeyStr( recvBuf[i] )].insert( vec3D{ recvBuf[i + 1], recvBuf[i + 2], recvBuf[i + 3] } );
+        }
 
-   map_t pointsNotFound_;
+        return globalMap;
+    }
+
+    map_t pointsNotFound_;
 };
 
 /// @}
-}
 } // namespace plates
+} // namespace terra

@@ -9,7 +9,7 @@
 //   LHS:  (M + dt·A_pureGalerkin) · T^{n+1} = f        (kerngen A, set_supg_enabled(false))
 //   RHS:  f = M·T^n  -  dt·∫ ν_h ∇T^n · ∇φ_i dx          (per-wedge EV diffusion)
 //   ν_h:  computed each step via per-wedge compute_nu_h    (new API)
-//   lap_T (Q1-nodal): (A_kappa · T) / M_lumped, Dirichlet zeroed
+//   lap_T (W1-nodal): (A_kappa · T) / M_lumped, Dirichlet zeroed
 //   T_{n-1}: rotated from T BEFORE the solve overwrites T
 //   Dirichlet BCs: time-dependent, set from the exact rotated-Gaussian solution.
 //
@@ -47,8 +47,8 @@ using grid::Grid4DDataScalar;
 using grid::Grid4DDataVec;
 using grid::Grid5DDataScalar;
 using grid::shell::DistributedDomain;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 using ScalarType = double;
 
@@ -144,6 +144,60 @@ struct SolutionAndRHSInterpolator
     }
 };
 
+struct KappaCallback
+{
+    Grid4DDataScalar< double > kappa_wedge_;
+
+    KOKKOS_INLINE_FUNCTION double operator()(
+        const int local_subdomain_id, const int x_cell, const int y_cell, const int r_cell, const int wedge, const dense::Vec< double, 3 > qp
+    ) const
+    {
+        dense::Vec< double, 6 > kappa[terra::fe::wedge::num_wedges_per_hex_cell];
+        
+        terra::fe::wedge::extract_local_wedge_scalar_coefficients( kappa, local_subdomain_id, x_cell, y_cell, r_cell, kappa_wedge_ );
+
+        double kappa_eval = 0.0;
+        for ( int j = 0; j < terra::fe::wedge::num_nodes_per_wedge; j++ )
+        {
+            kappa_eval += terra::fe::wedge::shape( j, qp ) * kappa[wedge]( j );
+        }
+
+        return kappa_eval;
+    }
+};
+
+struct NuCallback
+{
+    Grid5DDataScalar< double > nu_wedge_;
+
+    KOKKOS_INLINE_FUNCTION double operator()(
+        const int local_subdomain_id, const int x_cell, const int y_cell, const int r_cell, const int wedge, const dense::Vec< double, 3 > qp
+    ) const
+    {
+        return nu_wedge_(local_subdomain_id, x_cell, y_cell, r_cell, wedge);
+    }
+};
+
+struct ZeroCallback
+{
+    double zero_;
+
+    KOKKOS_INLINE_FUNCTION double operator()(
+        const int local_subdomain_id, const int x_cell, const int y_cell, const int r_cell, const int wedge, const dense::Vec< double, 3 > qp
+    ) const
+    {
+        return zero_;
+    }
+};
+
+struct CoeffConfigT 
+{
+    using DiffusionCoeffT        = KappaCallback;
+    using InternalHeatingCoeffT  = ZeroCallback;
+    using AdiabaticHeatingCoeffT = ZeroCallback;
+    using ShearHeatingCoeffT     = ZeroCallback;
+};
+
 int test( const int level, const ScalarType kappa )
 {
     constexpr int        timesteps = 50;
@@ -164,16 +218,16 @@ int test( const int level, const ScalarType kappa )
     auto mask_data          = grid::setup_node_ownership_mask_data( domain );
     auto boundary_mask_data = grid::shell::setup_boundary_mask_data( domain );
 
-    VectorQ1Scalar< ScalarType > T( "T", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data );
-    VectorQ1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
-    VectorQ1Scalar< ScalarType > M_lumped( "M_lumped", domain, mask_data );
-    VectorQ1Scalar< ScalarType > lap_T( "lap_T", domain, mask_data );
-    VectorQ1Scalar< ScalarType > g( "g", domain, mask_data );
-    VectorQ1Scalar< ScalarType > f( "f", domain, mask_data );
-    VectorQ1Vec< ScalarType >    u( "u", domain, mask_data );
-    VectorQ1Scalar< ScalarType > solution( "solution", domain, mask_data );
-    VectorQ1Scalar< ScalarType > error( "error", domain, mask_data );
+    VectorW1Scalar< ScalarType > T( "T", domain, mask_data );
+    VectorW1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data );
+    VectorW1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
+    VectorW1Scalar< ScalarType > M_lumped( "M_lumped", domain, mask_data );
+    VectorW1Scalar< ScalarType > lap_T( "lap_T", domain, mask_data );
+    VectorW1Scalar< ScalarType > g( "g", domain, mask_data );
+    VectorW1Scalar< ScalarType > f( "f", domain, mask_data );
+    VectorW1Vec< ScalarType >    u( "u", domain, mask_data );
+    VectorW1Scalar< ScalarType > solution( "solution", domain, mask_data );
+    VectorW1Scalar< ScalarType > error( "error", domain, mask_data );
 
     // Per-wedge ν_h and κ_wedge for the new EV API.
     const auto num_sub = static_cast< long long >( domain.subdomains().size() );
@@ -181,13 +235,17 @@ int test( const int level, const ScalarType kappa )
     const auto nr_c    = domain.domain_info().subdomain_num_nodes_radially() - 1;
     Grid5DDataScalar< ScalarType > nu_h_wedge(
         "nu_h_wedge", num_sub, nx_c, nx_c, nr_c, fe::wedge::num_wedges_per_hex_cell );
-    Grid5DDataScalar< ScalarType > kappa_wedge(
-        "kappa_wedge", num_sub, nx_c, nx_c, nr_c, fe::wedge::num_wedges_per_hex_cell );
+
+    Grid4DDataScalar< ScalarType > kappa_wedge(
+        "kappa_wedge", num_sub, nx_c, nx_c, nr_c );
     kernels::common::set_constant( kappa_wedge, kappa );
+
+    VectorW1Scalar< ScalarType > eta_test_wedge( "eta_test_wedge", domain, mask_data );
+    linalg::assign( eta_test_wedge, ScalarType( 0 ) );
 
     const fe::wedge::operators::shell::EntropyViscosityParameters< ScalarType > ev_params{};
 
-    std::vector< VectorQ1Scalar< ScalarType > > tmps;
+    std::vector< VectorW1Scalar< ScalarType > > tmps;
     tmps.reserve( 2 * restart + 4 );
     for ( int i = 0; i < 2 * restart + 4; ++i )
         tmps.emplace_back( "tmpp", domain, mask_data );
@@ -208,13 +266,15 @@ int test( const int level, const ScalarType kappa )
     using Mass = fe::wedge::operators::shell::Mass< ScalarType >;
     Mass M( domain, coords_shell, coords_radii );
 
-    using EVDiffOp = fe::wedge::operators::shell::WedgeConstantDivKGrad< ScalarType >;
-    EVDiffOp A_kappa(  domain, coords_shell, coords_radii, kappa_wedge );
-    EVDiffOp A_evdiff( domain, coords_shell, coords_radii, nu_h_wedge );
+    using KappaEVDiffOp = fe::wedge::operators::shell::WedgeConstantDivKGrad< ScalarType, KappaCallback >;
+    KappaEVDiffOp A_kappa(  domain, coords_shell, coords_radii, KappaCallback(kappa_wedge) );
+
+    using NuEVDiffOp = fe::wedge::operators::shell::WedgeConstantDivKGrad< ScalarType, NuCallback >;
+    NuEVDiffOp A_evdiff( domain, coords_shell, coords_radii, NuCallback(nu_h_wedge) );
 
     // M_lumped = M · 1.
     {
-        VectorQ1Scalar< ScalarType > ones( "ones", domain, mask_data );
+        VectorW1Scalar< ScalarType > ones( "ones", domain, mask_data );
         linalg::assign( ones, ScalarType( 1 ) );
         linalg::assign( M_lumped, ScalarType( 0 ) );
         linalg::apply( M, ones, M_lumped );
@@ -292,9 +352,10 @@ int test( const int level, const ScalarType kappa )
 
         const auto stats = fe::wedge::operators::shell::compute_entropy_stats(
             T, mask_data, domain, coords_shell, coords_radii, ev_params );
-        fe::wedge::operators::shell::compute_nu_h(
-            nu_h_wedge, T, T_prev, u, lap_T.grid_data(),
-            domain, coords_shell, coords_radii, dt, stats, ev_params );
+        fe::wedge::operators::shell::compute_nu_h< double, CoeffConfigT >(
+            nu_h_wedge, T, T_prev, eta_test_wedge, u, lap_T.grid_data(),
+            domain, coords_shell, coords_radii, dt, stats, ev_params,
+            ZeroCallback( 0.0 ), ZeroCallback( 0.0 ), ZeroCallback( 0.0 ) );
 
         linalg::apply( A_evdiff, T, rhs_ev );
 

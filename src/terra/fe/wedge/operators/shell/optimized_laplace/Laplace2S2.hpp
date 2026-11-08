@@ -7,7 +7,7 @@
 #include "fe/wedge/kernel_helpers.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "quadrature.hpp"
 #include "util/timer.hpp"
 
@@ -17,8 +17,8 @@ template < typename ScalarT, typename QuadRule = quadrature::QuadRuleWedge6Point
 class Laplace2S2
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Scalar< ScalarT >;
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using SrcVectorType = linalg::VectorW1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
   private:
@@ -281,7 +281,6 @@ class Laplace2S2
                 const ScalarT r          = forward_map_rad< ScalarT >( r_1, r_2, zeta );
                 const ScalarT r_inv      = 1.0 / r;
                 const ScalarT abs_det    = r * r * grad_r * shmem_g3[wedge * N_q + q];
-                const ScalarT factors[3] = { r_inv, r_inv, grad_r_inv };
 
                 // 2. Compute physical gradients for all nodes at this quadrature point.
                 dense::Vec< ScalarType, 3 > grad_phy[num_nodes_per_wedge];

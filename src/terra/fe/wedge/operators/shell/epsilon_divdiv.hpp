@@ -9,7 +9,7 @@
 #include "linalg/operator.hpp"
 #include "linalg/solvers/gca/local_matrix_storage.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
 
 namespace terra::fe::wedge::operators::shell {
@@ -18,8 +18,8 @@ template < typename ScalarT, int VecDim = 3 >
 class EpsilonDivDiv
 {
   public:
-    using SrcVectorType                 = linalg::VectorQ1Vec< ScalarT, VecDim >;
-    using DstVectorType                 = linalg::VectorQ1Vec< ScalarT, VecDim >;
+    using SrcVectorType                 = linalg::VectorW1Vec< ScalarT, VecDim >;
+    using DstVectorType                 = linalg::VectorW1Vec< ScalarT, VecDim >;
     using ScalarType                    = ScalarT;
     static constexpr int LocalMatrixDim = 18;
     using Grid4DDataLocalMatrices = terra::grid::Grid4DDataMatrices< ScalarType, LocalMatrixDim, LocalMatrixDim, 2 >;
@@ -70,8 +70,8 @@ class EpsilonDivDiv
     : domain_( domain )
     , grid_( grid )
     , radii_( radii )
-    , mask_( mask )
     , k_( k )
+    , mask_( mask )
     , treat_boundary_( treat_boundary )
     , diagonal_( diagonal )
     , operator_apply_mode_( operator_apply_mode )

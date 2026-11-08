@@ -31,8 +31,8 @@
 /// TERRA_PLATE_DATA_DIR; without it the test skips (exit code 77).
 
 #include <cmath>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -90,7 +90,7 @@ std::vector< vec3D > fibonacci_sphere( int n )
     {
         const double z   = 1.0 - 2.0 * ( static_cast< double >( i ) + 0.5 ) / static_cast< double >( n );
         const double rho = std::sqrt( std::max( 0.0, 1.0 - z * z ) );
-        const double phi = 2.0 * plates::conversions::pi * static_cast< double >( i ) / golden;
+        const double phi = 2.0 * plates::pi * static_cast< double >( i ) / golden;
 
         points.push_back( vec3D{ rho * std::cos( phi ), rho * std::sin( phi ), z } );
     }
@@ -244,9 +244,9 @@ int main( int argc, char** argv )
 
     for ( const double age : test_stages )
     {
-        vec3D prev_v{ 0, 0, 0 };
-        vec3D prev_p{ 0, 0, 0 };
-        uint_t prev_id  = 0;
+        vec3D  prev_v{ 0, 0, 0 };
+        vec3D  prev_p{ 0, 0, 0 };
+        uint_t prev_id   = 0;
         bool   have_prev = false;
 
         for ( const auto& p : points )
@@ -260,7 +260,7 @@ int main( int argc, char** argv )
 
             plate_histogram[id] += 1;
 
-            const vec3D v_dir = oracle.getLocallyAveragedPointVelocity( p, age, never_average, handler );
+            const vec3D  v_dir  = oracle.getLocallyAveragedPointVelocity( p, age, never_average, handler );
             const double v_norm = v_dir.norm();
             if ( v_norm == 0.0 )
             {
@@ -279,11 +279,11 @@ int main( int argc, char** argv )
             //    unaveraged one. The magnitude check is what catches a missing division by the
             //    weight sum, which would leave the direction untouched.
             bool stencil_on_one_plate = true;
-            for ( const auto& [sample_lonlat, weight] : stencil.samplePointsAndWeightsLonLat(
-                      plates::conversions::cart2sph( p ) ) )
+            for ( const auto& [sample_lonlat, weight] :
+                  stencil.samplePointsAndWeightsLonLat( plates::conversions::cart2sph( p ) ) )
             {
-                const vec3D sample_cart = plates::conversions::sph2cart(
-                    { sample_lonlat( 0 ), sample_lonlat( 1 ) }, sample_lonlat( 2 ) );
+                const vec3D sample_cart =
+                    plates::conversions::sph2cart( { sample_lonlat( 0 ), sample_lonlat( 1 ) }, sample_lonlat( 2 ) );
                 if ( oracle.findPlateID( sample_cart, age ) != id )
                 {
                     stencil_on_one_plate = false;
@@ -293,7 +293,7 @@ int main( int argc, char** argv )
 
             if ( stencil_on_one_plate )
             {
-                const vec3D v_avg = oracle.getLocallyAveragedPointVelocity( p, age, always_average, handler );
+                const vec3D  v_avg  = oracle.getLocallyAveragedPointVelocity( p, age, always_average, handler );
                 const double a_norm = v_avg.norm();
 
                 if ( a_norm > 0.0 )
@@ -306,8 +306,8 @@ int main( int argc, char** argv )
             // 2. rigidity, between consecutive points that landed on the same plate.
             if ( have_prev && prev_id == id )
             {
-                const vec3D dv = v_dir - prev_v;
-                const vec3D dp = p - prev_p;
+                const vec3D  dv    = v_dir - prev_v;
+                const vec3D  dp    = p - prev_p;
                 const double scale = dv.norm() * dp.norm();
                 if ( scale > 0.0 )
                 {
@@ -318,17 +318,18 @@ int main( int argc, char** argv )
             if ( dump )
             {
                 const vec3D v_avg = oracle.getLocallyAveragedPointVelocity( p, age, stencil, handler );
-                std::fprintf( dump,
-                              "%.17g,%d,%u,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n",
-                              age,
-                              static_cast< int >( &p - points.data() ),
-                              id,
-                              v_dir( 0 ),
-                              v_dir( 1 ),
-                              v_dir( 2 ),
-                              v_avg( 0 ),
-                              v_avg( 1 ),
-                              v_avg( 2 ) );
+                std::fprintf(
+                    dump,
+                    "%.17g,%d,%u,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n",
+                    age,
+                    static_cast< int >( &p - points.data() ),
+                    id,
+                    v_dir( 0 ),
+                    v_dir( 1 ),
+                    v_dir( 2 ),
+                    v_avg( 0 ),
+                    v_avg( 1 ),
+                    v_avg( 2 ) );
             }
 
             prev_v    = v_dir;
@@ -343,11 +344,11 @@ int main( int argc, char** argv )
     Worst on_stage{ "interp on stage   |v_interp - v_stage| / |v_stage|", 1e-14 };
     Worst is_lerp{ "interp is lerp    |v - (v0 + f(v1-v0))| / |v|", 1e-14 };
 
-    long id_changed_between_stages = 0;
-    long found_at_one_stage_only   = 0;
-    long interp_points             = 0;
-    double worst_linear_error      = 0.0;
-    double worst_stage_delta       = 0.0;
+    long   id_changed_between_stages = 0;
+    long   found_at_one_stage_only   = 0;
+    long   interp_points             = 0;
+    double worst_linear_error        = 0.0;
+    double worst_stage_delta         = 0.0;
 
     // Exactly on a stage, the interpolation factor is exactly 1.0, so the result must reproduce
     // the stage value bit for bit (up to the tolerance above, which is there only to guard
@@ -356,7 +357,7 @@ int main( int argc, char** argv )
     {
         for ( const auto& p : points )
         {
-            const vec3D v_stage  = oracle.getLocallyAveragedPointVelocity( p, age, never_average, handler );
+            const vec3D v_stage = oracle.getLocallyAveragedPointVelocity( p, age, never_average, handler );
             const vec3D v_interp =
                 oracle.getLocallyAveragedPointVelocityInterpolatedInTime( p, age, never_average, handler );
 
@@ -373,8 +374,8 @@ int main( int argc, char** argv )
     {
         const double age_mid = 0.5 * ( stages[k] + stages[k + 1] );
 
-        double age_floor, age_ceil, factor;
-        std::tie( age_floor, age_ceil, factor ) = oracle.getSurroundingAges( age_mid );
+        double age_floor, age_ceil, weightFloor, weightCeil;
+        std::tie( age_floor, age_ceil, weightFloor, weightCeil ) = oracle.getSurroundingAges( age_mid );
 
         for ( const auto& p : points )
         {
@@ -411,7 +412,7 @@ int main( int argc, char** argv )
             // hopelessly ill-conditioned here: this dataset's stages are 0.1 Ma apart, so
             // v1 - v0 is a difference of nearly equal vectors and is almost pure round-off.
             // Comparing v against a quantity of its own magnitude has no such problem.
-            const vec3D lerp = v0 + factor * ( v1 - v0 );
+            const vec3D  lerp  = v0 + weightCeil * ( v1 - v0 );
             const double vnorm = v.norm();
             if ( vnorm > 0.0 )
             {
@@ -426,8 +427,8 @@ int main( int argc, char** argv )
 
             // Not an assertion: the size of the linear-in-time approximation. The true stage pole
             // is not linear in age, so this is a modelling error to be bounded, not removed.
-            const vec3D v_direct_mid = oracle.getLocallyAveragedPointVelocity( p, age_mid, never_average, handler );
-            const double dnorm       = v_direct_mid.norm();
+            const vec3D  v_direct_mid = oracle.getLocallyAveragedPointVelocity( p, age_mid, never_average, handler );
+            const double dnorm        = v_direct_mid.norm();
             if ( dnorm > 0.0 )
             {
                 worst_linear_error = std::max( worst_linear_error, ( v - v_direct_mid ).norm() / dnorm );

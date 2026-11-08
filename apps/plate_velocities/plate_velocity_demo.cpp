@@ -1,8 +1,6 @@
 /*
  * Copyright (c) 2017-2022 Dominik Thoennes, Nils Kohl, Marcus Mohr, Fatemeh Rezaei.
  *
- * This file is part of HyTeG
- * (see https://i10git.cs.fau.de/hyteg/hyteg).
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,11 +22,12 @@
 
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "mpi/mpi.hpp"
 #include "src/parameters.hpp"
 #include "terra/io/xdmf.hpp"
 #include "terra/kokkos/kokkos_wrapper.hpp"
+#include "terra/plates/plate_velocity_calculator.hpp"
 #include "terra/plates/plate_velocity_provider.hpp"
 #include "terra/plates/types.hpp"
 #include "util/init.hpp"
@@ -49,7 +48,7 @@ using grid::shell::DistributedDomain;
 using util::logall;
 using util::logroot;
 
-// using linalg::VectorQ1IsoQ2Q1;
+// using linalg::VectorW1IsoW2W1;
 
 namespace plates {
 
@@ -63,7 +62,7 @@ typedef enum
 using uint_t = unsigned int;
 
 template < typename GridType, typename RadiiType, typename DataType >
-struct PlateIDInterpolator
+struct PlateIDInterpolatorDemo
 {
     GridType  grid_;
     RadiiType radii_;
@@ -71,7 +70,7 @@ struct PlateIDInterpolator
 
     std::function< double( const vec3D& ) > findPlateID;
 
-    PlateIDInterpolator(
+    PlateIDInterpolatorDemo(
         const GridType&                         grid,
         const RadiiType&                        radii,
         const DataType&                         data,
@@ -93,7 +92,7 @@ struct PlateIDInterpolator
 };
 
 template < typename GridType, typename RadiiType, typename DataType >
-struct PlateVelocityInterpolator
+struct PlateVelocityInterpolatorDemo
 {
     GridType  grid_;
     RadiiType radii_;
@@ -101,7 +100,7 @@ struct PlateVelocityInterpolator
 
     std::function< double( const vec3D& ) > computeVelocityComponent;
 
-    PlateVelocityInterpolator(
+    PlateVelocityInterpolatorDemo(
         const GridType&                         grid,
         const RadiiType&                        radii,
         const DataType&                         data,
@@ -181,7 +180,7 @@ void performComputations(
         "Plate ID interpolation",
         Kokkos::MDRangePolicy< HostExecSpace, Kokkos::Rank< 3 > >(
             { 0, 0, 0 }, { coords_shell.extent( 0 ), coords_shell.extent( 1 ), coords_shell.extent( 2 ) } ),
-        PlateIDInterpolator( coords_shell, coords_radii, ( plateID_host ), findPlateID ) );
+        PlateIDInterpolatorDemo( coords_shell, coords_radii, ( plateID_host ), findPlateID ) );
 
     Kokkos::fence();
 
@@ -189,7 +188,8 @@ void performComputations(
         "Plate Velocity interpolation",
         Kokkos::MDRangePolicy< HostExecSpace, Kokkos::Rank< 3 > >(
             { 0, 0, 0 }, { coords_shell.extent( 0 ), coords_shell.extent( 1 ), coords_shell.extent( 2 ) } ),
-        PlateVelocityInterpolator( coords_shell, coords_radii, ( surfaceVelocity_host ), computeVelocityComponent ) );
+        PlateVelocityInterpolatorDemo(
+            coords_shell, coords_radii, ( surfaceVelocity_host ), computeVelocityComponent ) );
 
     Kokkos::fence();
 
@@ -212,7 +212,7 @@ struct Parameters
     int         beginAge  = 10;
     int         endAge    = 0;
     std::string outdir    = "./output";
-    std::string dataDir   = "./";
+    std::string dataDir   = "../../../TERRA-NG/data/plates/Chen2025-tomopac/";
 };
 
 // ========
@@ -315,9 +315,9 @@ int main( int argc, char** argv )
     logroot << "*** STEP 3: Generating an Oracle" << std::endl;
 
     //std::string dataDir{ "/import/freenas-m-04-students/frezaei/TerraNeoX/TERRA-NG/apps/plate_velocities/data/plates/" };
-    const std::string& dataDir = parameters.dataDir;
-    std::string fnameTopologies      = dataDir + "topologies_0-410Ma.geojson";
-    std::string fnameReconstructions = dataDir + "TomoPAC2.rot";
+    const std::string&                   dataDir              = parameters.dataDir;
+    std::string                          fnameTopologies      = dataDir + "topologies_0-410Ma.geojson";
+    std::string                          fnameReconstructions = dataDir + "TomoPAC2.rot";
     terra::plates::PlateVelocityProvider oracle( fnameTopologies, fnameReconstructions );
 
     logroot << "*** STEP 4: Checking plate stages to work with" << std::endl;

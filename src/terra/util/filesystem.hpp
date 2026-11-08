@@ -10,14 +10,21 @@ namespace terra::util {
 ///  - if possible                                                                      => returns true
 ///  - if creation fails                                                                => returns false
 /// If the directory does exist and is empty:     will do nothing                       => returns true
-/// If the directory does exist and is not empty: will do nothing                       => returns false
+/// If the directory does exist and is not empty: will do nothing                       => returns false or true (see below)
 ///
-/// Returns true for all non-zero ranks if root_only == true.
-inline bool prepare_empty_directory( const std::string& path_str, bool root_only = true )
+/// \return
+/// - true for all non-zero ranks, if `root_only` == true
+/// - true even if directory exists and is non-empty, if `overwrite_content` == true
+/// - a string describing the status of the operation
+//
+// IMHO this function should be marked as nodiscard. But this requires updating the XDMF writer code.
+// [[nodiscard( "filesystem operation status should be checked by caller" )]]
+inline std::pair< bool, std::string >
+    prepare_empty_directory( const std::string& path_str, bool root_only = true, bool overwrite_content = false )
 {
     if ( root_only && mpi::rank() != 0 )
     {
-        return true;
+        return { true, "not root: no operation" };
     }
 
     namespace fs = std::filesystem;
@@ -27,26 +34,32 @@ inline bool prepare_empty_directory( const std::string& path_str, bool root_only
 
     if ( !fs::exists( dir, ec ) )
     {
-        // Directory doesn't exist: create it
+        // Directory doesn't exist: create it, immediately return false if creation fails
         if ( !fs::create_directories( dir, ec ) )
         {
-            return false;
+            std::string error_descr = "Creation of directory '" + path_str + "' failed!";
+            return { false, error_descr };
         }
     }
     else if ( !fs::is_empty( dir, ec ) )
     {
-        // Directory exists and is not empty
-        return false;
+        // Directory exists and is not empty, return false if overwrite_content is false
+        if ( !overwrite_content )
+        {
+            std::string error_descr = "Directory '" + path_str + "' is not empty and overwriting not allowed!";
+            return { false, error_descr };
+        }
     }
 
-    // Directory either newly created or exists and is empty
-    return true;
+    // Directory either newly created, exists and is empty, or exists and files are allowed to be overwritten
+    return { true, "successfully created directory'" + path_str + "'" };
 }
 
 /// @brief Like `prepare_empty_directory()` but aborts if empty directory could not be prepared successfully.
 inline void prepare_empty_directory_or_abort( const std::string& path_str, bool root_only = true )
 {
-    if ( !prepare_empty_directory( path_str, root_only ) )
+    const auto [status, message] = prepare_empty_directory( path_str, root_only );
+    if ( status == false )
     {
         Kokkos::abort( ( "Could not prepare empty directory with path '" + path_str + "'." ).c_str() );
     }

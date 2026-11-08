@@ -7,7 +7,7 @@
 #include "fe/wedge/kernel_helpers.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "quadrature.hpp"
 #include "util/timer.hpp"
 
@@ -17,8 +17,8 @@ template < typename ScalarT, typename QuadRule = quadrature::QuadRuleWedge6Point
 class Laplace0S0
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Scalar< ScalarT >;
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;
+    using SrcVectorType = linalg::VectorW1Scalar< ScalarT >;
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;
     using ScalarType    = ScalarT;
 
   private:
@@ -174,9 +174,6 @@ class Laplace0S0
         // Gather wedge radii.
         const ScalarT r_1 = radii_( local_subdomain_id, r_cell );
         const ScalarT r_2 = radii_( local_subdomain_id, r_cell + 1 );
-
-        const ScalarT grad_r     = grad_forward_map_rad( r_1, r_2 );
-        const ScalarT grad_r_inv = 1.0 / grad_r;
 
         // Compute the local element matrix.
         ScalarType src_local_hex[8] = { 0 };

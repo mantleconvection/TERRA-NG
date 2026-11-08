@@ -56,8 +56,8 @@ using grid::Grid4DDataScalar;
 using grid::Grid4DDataVec;
 using grid::Grid5DDataScalar;
 using grid::shell::DistributedDomain;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 using ScalarType = double;
 
@@ -151,7 +151,7 @@ ScalarType l2_relative_error( const Grid4DDataScalar< ScalarType >&             
 
 /// Zeroes the two boundary shells, which is what the manufactured solution is there to within 1e-3.
 template < typename BoundaryMaskType >
-void apply_homogeneous_dirichlet( VectorQ1Scalar< ScalarType >& T, const BoundaryMaskType& boundary_mask )
+void apply_homogeneous_dirichlet( VectorW1Scalar< ScalarType >& T, const BoundaryMaskType& boundary_mask )
 {
     auto d = T.grid_data();
     Kokkos::parallel_for(
@@ -180,6 +180,32 @@ struct Result
 /// The linear solves are unpreconditioned FGMRES at a deliberately light tolerance: the point of the test is
 /// the transport error, and driving the algebra to round-off would only bury it under solver cost. Both
 /// schemes use exactly these options.
+/// Coefficient callbacks for the per-wedge entropy-viscosity residual: this test has no heat sources, so
+/// all three source callbacks return zero (the diffusion coefficient is the plain scalar kappa).
+struct ZeroCallback
+{
+    double zero_;
+
+    KOKKOS_INLINE_FUNCTION double operator()(
+        const int /*local_subdomain_id*/,
+        const int /*x_cell*/,
+        const int /*y_cell*/,
+        const int /*r_cell*/,
+        const int /*wedge*/,
+        const dense::Vec< double, 3 > /*qp*/ ) const
+    {
+        return zero_;
+    }
+};
+
+struct EVCoeffConfigT
+{
+    using DiffusionCoeffT        = double;
+    using InternalHeatingCoeffT  = ZeroCallback;
+    using AdiabaticHeatingCoeffT = ZeroCallback;
+    using ShearHeatingCoeffT     = ZeroCallback;
+};
+
 linalg::solvers::FGMRESOptions< ScalarType > solver_options()
 {
     return linalg::solvers::FGMRESOptions< ScalarType >{
@@ -202,14 +228,16 @@ Result run_ev( const int level, const ScalarType dt_factor, const std::string& t
     const auto coords_shell = grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto coords_radii = grid::shell::subdomain_shell_radii< ScalarType >( domain );
 
-    VectorQ1Vec< ScalarType >    u( "u", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T( "T", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T_exact( "T_exact", domain, mask_data );
-    VectorQ1Scalar< ScalarType > f( "f", domain, mask_data );
-    VectorQ1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
-    VectorQ1Scalar< ScalarType > lap_T( "lap_T", domain, mask_data );
-    VectorQ1Scalar< ScalarType > M_lumped( "M_lumped", domain, mask_data );
+    VectorW1Vec< ScalarType >    u( "u", domain, mask_data );
+    VectorW1Scalar< ScalarType > T( "T", domain, mask_data );
+    VectorW1Scalar< ScalarType > T_prev( "T_prev", domain, mask_data );
+    VectorW1Scalar< ScalarType > T_exact( "T_exact", domain, mask_data );
+    VectorW1Scalar< ScalarType > f( "f", domain, mask_data );
+    VectorW1Scalar< ScalarType > rhs_ev( "rhs_ev", domain, mask_data );
+    VectorW1Scalar< ScalarType > lap_T( "lap_T", domain, mask_data );
+    VectorW1Scalar< ScalarType > M_lumped( "M_lumped", domain, mask_data );
+    VectorW1Scalar< ScalarType > eta_zero( "eta_zero", domain, mask_data );
+    linalg::assign( eta_zero, ScalarType( 0 ) );
 
     const auto num_sub = static_cast< long long >( domain.subdomains().size() );
     const auto nx_c    = domain.domain_info().subdomain_num_nodes_per_side_laterally() - 1;
@@ -243,14 +271,14 @@ Result run_ev( const int level, const ScalarType dt_factor, const std::string& t
     EVDiffOp A_evdiff( domain, coords_shell, coords_radii, nu_h_wedge );
 
     {
-        VectorQ1Scalar< ScalarType > ones( "ones", domain, mask_data );
+        VectorW1Scalar< ScalarType > ones( "ones", domain, mask_data );
         linalg::assign( ones, ScalarType( 1 ) );
         linalg::assign( M_lumped, ScalarType( 0 ) );
         linalg::apply( M, ones, M_lumped );
     }
 
     const auto opts = solver_options();
-    std::vector< VectorQ1Scalar< ScalarType > > tmps;
+    std::vector< VectorW1Scalar< ScalarType > > tmps;
     tmps.reserve( 2 * opts.restart + 4 );
     for ( int i = 0; i < 2 * opts.restart + 4; ++i )
         tmps.emplace_back( "fgmres_tmp", domain, mask_data );
@@ -296,8 +324,9 @@ Result run_ev( const int level, const ScalarType dt_factor, const std::string& t
 
         const auto stats = fe::wedge::operators::shell::compute_entropy_stats(
             T, mask_data, domain, coords_shell, coords_radii, ev_params );
-        fe::wedge::operators::shell::compute_nu_h( nu_h_wedge, T, T_prev, u, lap_T.grid_data(), domain,
-                                                   coords_shell, coords_radii, dt, stats, ev_params );
+        fe::wedge::operators::shell::compute_nu_h< double, EVCoeffConfigT >(
+            nu_h_wedge, T, T_prev, eta_zero, u, lap_T.grid_data(), domain, coords_shell, coords_radii, dt, stats,
+            ev_params, ZeroCallback{ 0.0 }, ZeroCallback{ 0.0 }, ZeroCallback{ 0.0 } );
 
         linalg::apply( A_evdiff, T, rhs_ev );
         linalg::apply( M, T, f );
@@ -345,11 +374,11 @@ Result run_mmoc( const int level, const ScalarType dt_factor, const int width, c
     const auto coords_shell = grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto coords_radii = grid::shell::subdomain_shell_radii< ScalarType >( domain );
 
-    VectorQ1Vec< ScalarType >    u( "u", domain, mask_data );
-    VectorQ1Vec< ScalarType >    u_zero( "u_zero", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T( "T", domain, mask_data );
-    VectorQ1Scalar< ScalarType > T_exact( "T_exact", domain, mask_data );
-    VectorQ1Scalar< ScalarType > f( "f", domain, mask_data );
+    VectorW1Vec< ScalarType >    u( "u", domain, mask_data );
+    VectorW1Vec< ScalarType >    u_zero( "u_zero", domain, mask_data );
+    VectorW1Scalar< ScalarType > T( "T", domain, mask_data );
+    VectorW1Scalar< ScalarType > T_exact( "T_exact", domain, mask_data );
+    VectorW1Scalar< ScalarType > f( "f", domain, mask_data );
 
     Kokkos::parallel_for( "velocity_init", local_domain_md_range_policy_nodes( domain ),
                           VelocityInterpolator{ coords_shell, coords_radii, u.grid_data() } );
@@ -376,7 +405,7 @@ Result run_mmoc( const int level, const ScalarType dt_factor, const int width, c
     Mass M( domain, coords_shell, coords_radii, false );
 
     const auto opts = solver_options();
-    std::vector< VectorQ1Scalar< ScalarType > > tmps;
+    std::vector< VectorW1Scalar< ScalarType > > tmps;
     tmps.reserve( 2 * opts.restart + 4 );
     for ( int i = 0; i < 2 * opts.restart + 4; ++i )
         tmps.emplace_back( "fgmres_tmp", domain, mask_data );

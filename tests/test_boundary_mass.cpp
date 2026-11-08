@@ -4,7 +4,6 @@
 #include "fe/wedge/operators/shell/boundary_mass.hpp"
 #include "terra/grid/grid_types.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
-#include "terra/io/vtk.hpp"
 #include "terra/kernels/common/grid_operations.hpp"
 #include "terra/kokkos/kokkos_wrapper.hpp"
 #include "util/init.hpp"
@@ -19,7 +18,7 @@ using grid::Grid4DDataScalar;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1Scalar;
+using linalg::VectorW1Scalar;
 
 using ScalarType = double;
 
@@ -41,8 +40,8 @@ SurfaceData test( int level, grid::shell::ShellBoundaryFlag boundary_flag )
     auto ownership_mask_data = grid::setup_node_ownership_mask_data( domain );
     auto boundary_mask_data  = grid::shell::setup_boundary_mask_data( domain );
 
-    VectorQ1Scalar< ScalarType > ones( "ones", domain, ownership_mask_data );
-    VectorQ1Scalar< ScalarType > dst( "dst", domain, ownership_mask_data );
+    VectorW1Scalar< ScalarType > ones( "ones", domain, ownership_mask_data );
+    VectorW1Scalar< ScalarType > dst( "dst", domain, ownership_mask_data );
 
     const auto coords_shell = terra::grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto coords_radii = terra::grid::shell::subdomain_shell_radii< ScalarType >( domain );

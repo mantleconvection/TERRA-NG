@@ -40,8 +40,8 @@ using grid::Grid2DDataScalar;
 using grid::Grid3DDataVec;
 using grid::Grid4DDataScalar;
 using grid::shell::DistributedDomain;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 using fe::wedge::operators::shell::MMOCTransport;
 using fe::wedge::operators::shell::TimeSteppingScheme;
@@ -168,9 +168,9 @@ void test_invariant_linear( const int level, const int num_steps, const ScalarTy
     const auto coords = grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto radii  = grid::shell::subdomain_shell_radii< ScalarType >( domain );
 
-    VectorQ1Vec< ScalarType, 3 > u( "u", domain, mask );
-    VectorQ1Scalar< ScalarType > T( "T", domain, mask );
-    VectorQ1Scalar< ScalarType > T_ref( "T_ref", domain, mask );
+    VectorW1Vec< ScalarType, 3 > u( "u", domain, mask );
+    VectorW1Scalar< ScalarType > T( "T", domain, mask );
+    VectorW1Scalar< ScalarType > T_ref( "T_ref", domain, mask );
 
     Kokkos::parallel_for(
         "u_init",
@@ -256,9 +256,9 @@ void test_cone_revolution( const int level, const ScalarType cfl )
     const auto coords = grid::shell::subdomain_unit_sphere_single_shell_coords< ScalarType >( domain );
     const auto radii  = grid::shell::subdomain_shell_radii< ScalarType >( domain );
 
-    VectorQ1Vec< ScalarType, 3 > u( "u", domain, mask );
-    VectorQ1Scalar< ScalarType > T( "T", domain, mask );
-    VectorQ1Scalar< ScalarType > T_ref( "T_ref", domain, mask );
+    VectorW1Vec< ScalarType, 3 > u( "u", domain, mask );
+    VectorW1Scalar< ScalarType > T( "T", domain, mask );
+    VectorW1Scalar< ScalarType > T_ref( "T_ref", domain, mask );
 
     Kokkos::parallel_for(
         "u_init",

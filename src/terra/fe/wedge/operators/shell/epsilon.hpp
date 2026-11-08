@@ -8,7 +8,7 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
 
 namespace terra::fe::wedge::operators::shell {
@@ -17,8 +17,8 @@ template < typename ScalarT, int VecDim = 3 >
 class Epsilon
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Vec< ScalarT, VecDim >;
-    using DstVectorType = linalg::VectorQ1Vec< ScalarT, VecDim >;
+    using SrcVectorType = linalg::VectorW1Vec< ScalarT, VecDim >;
+    using DstVectorType = linalg::VectorW1Vec< ScalarT, VecDim >;
     using ScalarType    = ScalarT;
 
   private:
@@ -144,8 +144,8 @@ class Epsilon
                 if ( diagonal_ and dimi != dimj )
                     continue;
 
-                ScalarType src_local_hex[8] = { { 0 } };
-                ScalarType dst_local_hex[8] = { { 0 } };
+                ScalarType src_local_hex[8] = { 0 };
+                ScalarType dst_local_hex[8] = { 0 };
 
                 constexpr int hex_offset_x[8] = { 0, 1, 0, 1, 0, 1, 0, 1 };
                 constexpr int hex_offset_y[8] = { 0, 0, 1, 1, 0, 0, 1, 1 };

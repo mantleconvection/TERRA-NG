@@ -56,13 +56,14 @@ std::vector< T > uniform_shell_radii( T r_min, T r_max, int num_shells )
 /// Can be used to have smaller elements near the shell boundaries.
 ///
 /// Returns a function
-/// \f[
-///     f(s) := \begin{cases}
-///         s & k \leq 0 \\
-///         \frac{1}{2} \frac{\tanh( k( 2s-1 ) )}{\tanh(k) + 1} & k > 0
-///     \end{cases}
-/// \f]
-///
+/*!
+    \f[
+        f(s) := \begin{cases}
+            s & k \leq 0 \\
+            \frac{1}{2} \frac{\tanh( k( 2s-1 ) )}{\tanh(k) + 1} & k > 0
+        \end{cases}
+    \f]
+*/
 /// @param k \f$k = 0\f$ results in a uniform distribution (linear function), \f$k > 0\f$ refines at the boundary
 ///        (roughly: \f$k \approx 1\f$: mild clustering, \f$k \approx 2\f$: strong clustering)
 template < std::floating_point T >
@@ -82,12 +83,14 @@ std::function< T( T ) > make_tanh_boundary_cluster( T k )
 /// @brief One-sided tanh map: clusters shells near the inner boundary (\f$r_{\min}\f$).
 ///
 /// Returns
-/// \f[
-///     f(s) = \begin{cases}
-///         s & k \leq 0 \\
-///         1 - \dfrac{\tanh\!\big(k(1-s)\big)}{\tanh(k)} & k > 0
-///     \end{cases}
-/// \f]
+/*!
+    \f[
+        f(s) = \begin{cases}
+            s & k \leq 0 \\
+            1 - \dfrac{\tanh\!\big(k(1-s)\big)}{\tanh(k)} & k > 0
+        \end{cases}
+    \f]
+*/
 /// which satisfies \f$f(0) = 0\f$, \f$f(1) = 1\f$, with small slope near
 /// \f$s = 0\f$ (dense shells) and large slope near \f$s = 1\f$ (sparse shells).
 template < std::floating_point T >
@@ -105,12 +108,14 @@ std::function< T( T ) > make_tanh_inner_cluster( T k )
 /// @brief One-sided tanh map: clusters shells near the outer boundary (\f$r_{\max}\f$).
 ///
 /// Returns
-/// \f[
-///     f(s) = \begin{cases}
-///         s & k \leq 0 \\
-///         \dfrac{\tanh(k\,s)}{\tanh(k)} & k > 0
-///     \end{cases}
-/// \f]
+/*!
+    \f[
+        f(s) = \begin{cases}
+            s & k \leq 0 \\
+            \dfrac{\tanh(k\,s)}{\tanh(k)} & k > 0
+        \end{cases}
+    \f]
+*/
 /// which satisfies \f$f(0) = 0\f$, \f$f(1) = 1\f$, with large slope near
 /// \f$s = 0\f$ (sparse shells) and small slope near \f$s = 1\f$ (dense shells).
 template < std::floating_point T >
@@ -790,8 +795,8 @@ inline mpi::MPIRank subdomain_to_rank_iterate_diamond_subdomains(
 
 /// @brief Information about the thick spherical shell mesh.
 ///
-/// @note If you want to create a domain for an application, use the \ref DistributedDomain class, which constructs an
-///       instance of this class internally.
+/// @note If you want to create a domain for an application, use the \ref terra::grid::shell::DistributedDomain
+/// "DistributedDomain" class, which constructs an instance of this class internally.
 ///
 /// **General information**
 ///
@@ -2558,8 +2563,8 @@ class SubdomainNeighborhood
 /// @brief Parallel data structure organizing the thick spherical shell metadata for distributed (MPI parallel)
 ///        simulations.
 ///
-/// This is essentially a wrapper for the \ref DomainInfo and the neighborhood information (\ref SubdomainNeighborhood)
-/// for all process-local subdomains.
+/// This is essentially a wrapper for the \ref terra::grid::shell::DistributedDomain "DomainInfo" and the
+/// neighborhood information (\ref SubdomainNeighborhood) for all process-local subdomains.
 class DistributedDomain
 {
   public:
@@ -2567,8 +2572,8 @@ class DistributedDomain
 
     using LocalSubdomainIdx = int;
 
-    /// @brief Creates a \ref DistributedDomain with a single subdomain per diamond and initializes all the subdomain
-    ///        neighborhoods.
+    /// @brief Creates a \ref DistributedDomain with each diamond being a single subdomain and initializes all the subdomain
+    ///        neighborhoods. This version uses equidistantly spaced radial layers.
     static DistributedDomain create_uniform_single_subdomain_per_diamond(
         const int                                  lateral_diamond_refinement_level,
         const int                                  radial_diamond_refinement_level,
@@ -2584,8 +2589,8 @@ class DistributedDomain
             subdomain_to_rank );
     }
 
-    /// @brief Creates a \ref DistributedDomain with a single subdomain per diamond and initializes all the subdomain
-    ///        neighborhoods.
+    /// @brief Creates a \ref DistributedDomain with each diamond being a single subdomain and initializes all the subdomain
+    ///        neighborhoods. This version uses the specified radii for its spherical layers.
     static DistributedDomain create_uniform_single_subdomain_per_diamond(
         const int                                  lateral_diamond_refinement_level,
         const std::vector< double >&               radii,
@@ -2594,8 +2599,8 @@ class DistributedDomain
         return create_uniform( lateral_diamond_refinement_level, radii, 0, 0, subdomain_to_rank );
     }
 
-    /// @brief Creates a \ref DistributedDomain with a single subdomain per diamond and initializes all the subdomain
-    ///        neighborhoods.
+    /// @brief Creates a \ref DistributedDomain with (potentially) multiple subdomains per diamond and initializes all
+    ///        the subdomain neighborhoods. This version uses equidistantly spaced radial layers.
     static DistributedDomain create_uniform(
         const int                                  lateral_diamond_refinement_level,
         const int                                  radial_diamond_refinement_level,
@@ -2613,8 +2618,8 @@ class DistributedDomain
             subdomain_to_rank );
     }
 
-    /// @brief Creates a \ref DistributedDomain with a single subdomain per diamond and initializes all the subdomain
-    ///        neighborhoods.
+    /// @brief Creates a \ref DistributedDomain with (potentially) multiple subdomains per diamond and initializes all
+    ///        the subdomain neighborhoods. This version uses the specified radii for its spherical layers.
     static DistributedDomain create_uniform(
         const int                                  lateral_diamond_refinement_level,
         const std::vector< double >&               radii,
@@ -2818,17 +2823,6 @@ inline Kokkos::RangePolicy<>
             ( distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() - 1 ) *
             ( distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() - 1 ) *
             ( distributed_domain.domain_info().subdomain_num_nodes_radially() - 1 ) );
-}
-
-inline Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >
-    local_domain_md_range_policy_cells_fv_skip_ghost_layers( const DistributedDomain& distributed_domain )
-{
-    return Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
-        { 0, 1, 1, 1 },
-        { static_cast< long long >( distributed_domain.subdomains().size() ),
-          distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1 - 1,
-          distributed_domain.domain_info().subdomain_num_nodes_per_side_laterally() + 1 - 1,
-          distributed_domain.domain_info().subdomain_num_nodes_radially() + 1 - 1 } );
 }
 
 /// @brief Returns an initialized grid with the coordinates of all subdomains' nodes projected to the unit sphere.

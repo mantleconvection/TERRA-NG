@@ -10,7 +10,6 @@
 #include "terra/fe/wedge/operators/shell/mass.hpp"
 #include "terra/grid/grid_types.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
-#include "terra/io/vtk.hpp"
 #include "terra/kernels/common/grid_operations.hpp"
 #include "terra/kokkos/kokkos_wrapper.hpp"
 #include "util/init.hpp"
@@ -26,7 +25,7 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1Vec;
 
 struct SolutionInterpolator
 {
@@ -130,14 +129,14 @@ double test( int level, const std::shared_ptr< util::Table >& table )
     auto ownership_mask_data = grid::setup_node_ownership_mask_data( domain );
     auto boundary_mask_data  = grid::shell::setup_boundary_mask_data( domain );
 
-    VectorQ1Vec< ScalarType > u( "u", domain, ownership_mask_data );
-    VectorQ1Vec< ScalarType > g( "g", domain, ownership_mask_data );
-    VectorQ1Vec< ScalarType > Adiagg( "Adiagg", domain, ownership_mask_data );
-    VectorQ1Vec< ScalarType > tmp( "tmp", domain, ownership_mask_data );
-    VectorQ1Vec< ScalarType > solution( "solution", domain, ownership_mask_data );
-    VectorQ1Vec< ScalarType > error( "error", domain, ownership_mask_data );
-    VectorQ1Vec< ScalarType > b( "b", domain, ownership_mask_data );
-    VectorQ1Vec< ScalarType > r( "r", domain, ownership_mask_data );
+    VectorW1Vec< ScalarType > u( "u", domain, ownership_mask_data );
+    VectorW1Vec< ScalarType > g( "g", domain, ownership_mask_data );
+    VectorW1Vec< ScalarType > Adiagg( "Adiagg", domain, ownership_mask_data );
+    VectorW1Vec< ScalarType > tmp( "tmp", domain, ownership_mask_data );
+    VectorW1Vec< ScalarType > solution( "solution", domain, ownership_mask_data );
+    VectorW1Vec< ScalarType > error( "error", domain, ownership_mask_data );
+    VectorW1Vec< ScalarType > b( "b", domain, ownership_mask_data );
+    VectorW1Vec< ScalarType > r( "r", domain, ownership_mask_data );
 
     const auto num_dofs = kernels::common::count_masked< long >( ownership_mask_data, grid::NodeOwnershipFlag::OWNED );
 

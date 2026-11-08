@@ -7,7 +7,7 @@
 
 namespace terra::grid::shell {
 
-/// \ref FlagLike that indicates boundary types for the thick spherical shell.
+/// \ref terra::util::FlagLike "FlagLike" that indicates boundary types for the thick spherical shell.
 enum class ShellBoundaryFlag : uint8_t
 {
     NO_FLAG  = 0,
@@ -20,7 +20,7 @@ enum class ShellBoundaryFlag : uint8_t
 
 static_assert( util::FlagLike< ShellBoundaryFlag > );
 
-/// \ref FlagLike that indicates the type of boundary condition
+/// \ref terra::util::FlagLike "FlagLike" that indicates the type of boundary condition
 enum class BoundaryConditionFlag : uint8_t
 {
     NEUMANN   = 0, // not sure we need this one, implemented as teat_boundary == false in operators

@@ -11,7 +11,7 @@
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
 
 namespace terra::fe::wedge::operators::shell {
@@ -28,7 +28,7 @@ namespace terra::fe::wedge::operators::shell {
 /// (the caller passes the nondimensional Di/Ra prefactor).
 ///
 /// This is the production, kernel-generated counterpart to ShearHeatingSimple:
-/// the velocity is read directly from a VectorQ1Vec (not pre-split ux/uy/uz),
+/// the velocity is read directly from a VectorW1Vec (not pre-split ux/uy/uz),
 /// the per-quadpoint Φ is factored into a device helper so the same math backs
 /// both the linear-form assembly and a nodal-Φ projection (needed by the
 /// entropy-viscosity residual), and the apply path follows the same
@@ -41,8 +41,8 @@ template < typename ScalarT >
 class ShearHeatingKerngen
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Vec< ScalarT, 3 >;  ///< velocity u
-    using DstVectorType = linalg::VectorQ1Scalar< ScalarT >;  ///< heating RHS
+    using SrcVectorType = linalg::VectorW1Vec< ScalarT, 3 >;  ///< velocity u
+    using DstVectorType = linalg::VectorW1Scalar< ScalarT >;  ///< heating RHS
     using ScalarType    = ScalarT;
 
   private:

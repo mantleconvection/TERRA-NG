@@ -1,12 +1,11 @@
 
 #include <fstream>
 #include <iomanip>
-#include <linalg/vector_q1.hpp>
+#include <linalg/vector_w1.hpp>
 #include <optional>
 
 #include "shell/radial_profiles.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
-#include "terra/io/vtk.hpp"
 #include "terra/io/xdmf.hpp"
 #include "terra/shell/spherical_harmonics.hpp"
 #include "util/cli11_helper.hpp"

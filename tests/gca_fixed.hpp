@@ -12,7 +12,7 @@
 #include "linalg/operator.hpp"
 #include "linalg/solvers/gca/gca_elements_collector.hpp"
 #include "linalg/vector.hpp"
-#include "linalg/vector_q1.hpp"
+#include "linalg/vector_w1.hpp"
 
 using terra::fe::wedge::num_nodes_per_wedge;
 using terra::fe::wedge::num_wedges_per_hex_cell;
@@ -42,8 +42,8 @@ template < typename ScalarT, terra::linalg::GCACapable Operator >
 class TwoGridGCA
 {
   public:
-    using SrcVectorType = linalg::VectorQ1Scalar< double >;
-    using DstVectorType = linalg::VectorQ1Scalar< double >;
+    using SrcVectorType = linalg::VectorW1Scalar< double >;
+    using DstVectorType = linalg::VectorW1Scalar< double >;
     using ScalarType    = ScalarT;
 
   private:

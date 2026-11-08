@@ -8,15 +8,56 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Enable verbose makefile output
+# Disable verbose compiled output
 set(CMAKE_VERBOSE_MAKEFILE OFF)
+
+# Set default build type, if user did not specify it and
+# this is not a multi-configuration case
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(default_build_type "Release")
+  message(STATUS "Setting build type to '${default_build_type}' as none was specified.")
+  set(CMAKE_BUILD_TYPE "${default_build_type}" CACHE STRING "Choose the type of build." FORCE)
+endif()
+set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "16.0" )
+  message( FATAL_ERROR "TERRA-NG requires at least version 16 of Clang. Found: ${CMAKE_CXX_COMPILER_VERSION}" )
+endif ()
+
+# Make sure the serial backend is always build
+set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Always enable Serial backend" FORCE)
 
 # Find Kokkos
 # find_package(Kokkos REQUIRED)
 
-#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -munsafe-fp-atomics -ffast-math -Rpass-analysis=kernel-resource-usage")
+# Always make compiler output coloured by default
+set( TNG_COLOUR_COMPILER_OUTPUT ON CACHE BOOL "Make compiler messages use colour" )
+mark_as_advanced( TNG_COLOUR_COMPILER_OUTPUT )
+if( TNG_COLOUR_COMPILER_OUTPUT )
+  add_compile_options($<$<CXX_COMPILER_ID:Clang>:-fdiagnostics-color=always>)
+  add_compile_options($<$<CXX_COMPILER_ID:GNU>:-fdiagnostics-color=always>)
+  if( CMAKE_CXX_COMPILER_ID MATCHES "NVHPC" )
+    add_compile_options( -Xcompiler -fdiagnostics-color=always )
+  endif()
+endif()
+
+# Suppress selected compiler warnings
+set( TNG_SUPPRESS_WARNINGS "-Wno-unknown-pragmas -Wno-sign-compare" CACHE STRING "Suppress certain compiler warnings" )
+mark_as_advanced( TNG_SUPPRESS_WARNINGS )
+if( NOT "${TNG_SUPPRESS_WARNINGS}" STREQUAL "" )
+  separate_arguments( TNG_SUPPRESS_LIST NATIVE_COMMAND "${TNG_SUPPRESS_WARNINGS}" )
+  # why does the generator expression not work?
+  # add_compile_options( $<$<CXX_COMPILER_ID:Clang>:$<JOIN:${TNG_SUPPRESS_LIST},$<SEMICOLON>>> )
+  if( CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU" )
+    add_compile_options( ${TNG_SUPPRESS_LIST} )
+  endif()
+  message( STATUS "Compiler uses the following suppressions: ${TNG_SUPPRESS_WARNINGS}" )
+endif()
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND Kokkos_ENABLE_HIP )
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -munsafe-fp-atomics -ffast-math -Rpass-analysis=kernel-resource-usage")
 endif ()
 
 find_package(MPI REQUIRED)

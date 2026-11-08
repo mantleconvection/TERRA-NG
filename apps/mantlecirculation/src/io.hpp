@@ -7,7 +7,7 @@
 #include "grid/grid_types.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "io/xdmf.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "parameters.hpp"
 #include "shell/radial_profiles.hpp"
 #include "util/filesystem.hpp"
@@ -27,9 +27,9 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 using util::logroot;
 using util::Ok;
 using util::Result;
@@ -40,24 +40,37 @@ using ScalarType = double;
 
 namespace terra::mantlecirculation {
 
-inline Result<> create_directories( const IOParameters& io_parameters )
+/// @brief Creates output directories according to I/O parameters
+///
+/// Collective: must be called by every rank in MPI_COMM_WORLD, however directory checks
+/// and creation are only performed on MPI rank 0
+inline Result<> create_output_directories( const IOParameters& io_parameters )
 {
-    const auto xdmf_dir            = io_parameters.outdir + "/" + io_parameters.xdmf_dir;
-    const auto radial_profiles_dir = io_parameters.outdir + "/" + io_parameters.radial_profiles_out_dir;
-    const auto timer_trees_dir     = io_parameters.outdir + "/" + io_parameters.timer_trees_dir;
+    std::array< std::string, 4 > directory_names;
+    directory_names[0] = io_parameters.outdir;
+    directory_names[1] = io_parameters.outdir + "/" + io_parameters.xdmf_dir;
+    directory_names[2] = io_parameters.outdir + "/" + io_parameters.radial_profiles_out_dir;
+    directory_names[3] = io_parameters.outdir + "/" + io_parameters.timer_trees_dir;
 
-    if ( !io_parameters.overwrite && std::filesystem::exists( io_parameters.outdir ) )
+    bool        success = true;
+    std::string error_message;
+
+    // Make directories
+    for ( const std::string& dir_name : directory_names )
     {
-        return { "Will not overwrite existing directory (to not accidentally delete old simulation data). "
-                 "Use -h for help and look for an overwrite option or choose a different output dir name." };
+        auto [status_operation, status_message] =
+            util::prepare_empty_directory( dir_name, true, io_parameters.outfiles_overwrite );
+        if ( status_operation == false )
+        {
+            error_message += status_message + '\n';
+        }
+        success &= status_operation;
     }
 
-    util::prepare_empty_directory( io_parameters.outdir );
-    util::prepare_empty_directory( xdmf_dir );
-    util::prepare_empty_directory( radial_profiles_dir );
-    util::prepare_empty_directory( timer_trees_dir );
+    // make all MPI ranks aware of status of directory creation on rank 0
+    MPI_Bcast( &success, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD );
 
-    return { Ok{} };
+    return success ? Result< Ok >( Ok{} ) : Result<>( error_message );
 }
 
 // Xdmf output bundle
@@ -135,7 +148,7 @@ inline Result<> write_xdmf(
 }
 
 inline Result<> compute_and_write_radial_profiles(
-    const VectorQ1Scalar< ScalarType >& scalar_function,
+    const VectorW1Scalar< ScalarType >& scalar_function,
     const Grid2DDataScalar< int >&      subdomain_shell_idx,
     const std::vector< double >&        radial_coords,
     const Parameters&                   prm,
@@ -169,12 +182,12 @@ inline Result<> compute_and_write_radial_profiles(
     return { Ok{} };
 }
 
-/// Decompose a Q1 velocity field into its radial (signed) and tangential (magnitude)
+/// Decompose a W1 velocity field into its radial (signed) and tangential (magnitude)
 /// components and write radial profiles for both, reusing
 /// `compute_and_write_radial_profiles`. Output files are named
 /// `radial_profiles_u_r_<step>.csv` and `radial_profiles_u_t_<step>.csv`.
 inline Result<> compute_and_write_velocity_radial_profiles(
-    const linalg::VectorQ1Vec< ScalarType, 3 >&              velocity,
+    const linalg::VectorW1Vec< ScalarType, 3 >&              velocity,
     const grid::Grid3DDataVec< ScalarType, 3 >&              coords_shell,
     const grid::Grid2DDataScalar< int >&                     subdomain_shell_idx,
     const DistributedDomain&                                 domain,
@@ -185,8 +198,8 @@ inline Result<> compute_and_write_velocity_radial_profiles(
     const ScalarType                                         field_scale  = ScalarType( 1 ),
     const std::string&                                       radial_label = "radius" )
 {
-    VectorQ1Scalar< ScalarType > u_r( "u_r", domain, mask );
-    VectorQ1Scalar< ScalarType > u_t( "u_t", domain, mask );
+    VectorW1Scalar< ScalarType > u_r( "u_r", domain, mask );
+    VectorW1Scalar< ScalarType > u_t( "u_t", domain, mask );
 
     const auto u_grid   = velocity.grid_data();
     auto       u_r_grid = u_r.grid_data();

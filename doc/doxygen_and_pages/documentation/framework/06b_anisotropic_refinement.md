@@ -6,7 +6,7 @@ level \f$L\f$, each diamond holds \f$2^L\f$ cells in *every* axis (lateral
 
 The mantle-circulation app supports decoupling for both the
 diamond refinement level and the subdomain refinement level via three CLI flags
-declared in \ref terra::mantlecirculation::MeshParameters:
+declared in \ref terra::mantlecirculation::MeshParameters :
 
 | Flag                     | Default | Effect                                                                                                                                                                                       |
 |--------------------------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|

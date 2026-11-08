@@ -7,13 +7,12 @@
 #include "linalg/solvers/pcg.hpp"
 #include "linalg/solvers/pminres.hpp"
 #include "linalg/solvers/richardson.hpp"
-#include "linalg/vector_q1isoq2_q1.hpp"
+#include "linalg/vector_w1_iso_w2_w1.hpp"
 #include "shell/radial_profiles.hpp"
 #include "terra/dense/mat.hpp"
 #include "terra/fe/wedge/operators/shell/mass.hpp"
 #include "terra/grid/grid_types.hpp"
 #include "terra/grid/shell/spherical_shell.hpp"
-#include "terra/io/vtk.hpp"
 #include "terra/kernels/common/grid_operations.hpp"
 #include "terra/kokkos/kokkos_wrapper.hpp"
 #include "util/init.hpp"
@@ -29,9 +28,9 @@ using grid::Grid4DDataVec;
 using grid::shell::DistributedDomain;
 using grid::shell::DomainInfo;
 using grid::shell::SubdomainInfo;
-using linalg::VectorQ1IsoQ2Q1;
-using linalg::VectorQ1Scalar;
-using linalg::VectorQ1Vec;
+using linalg::VectorW1IsoW2W1;
+using linalg::VectorW1Scalar;
+using linalg::VectorW1Vec;
 
 KOKKOS_INLINE_FUNCTION
 double test_func( const dense::Vec< double, 3 >& coords )
@@ -76,7 +75,7 @@ void test( int level )
 
     auto mask_data = grid::setup_node_ownership_mask_data( domain );
 
-    VectorQ1Scalar< ScalarType > u( "u", domain, mask_data );
+    VectorW1Scalar< ScalarType > u( "u", domain, mask_data );
 
     // Set up solution data.
     Kokkos::parallel_for(
