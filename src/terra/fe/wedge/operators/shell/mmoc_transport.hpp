@@ -40,9 +40,9 @@
 /// structured index stencil (not the Q1 wedge shape functions, which are only second order and dominate the
 /// numerical diffusion).
 ///
-/// Accuracy (test_mmoc_rotation, one revolution of a cone): far less numerical diffusion than entropy viscosity
-/// on the same mesh. The residual error is diffusive, not a phase lag -- amplitude loss and tangential
-/// broadening (the foot-point displacement is tangential); the radius stays essentially exact.
+/// Accuracy (test_mmoc_rotation, one revolution of a cone): the scheme retains the shape of the rotating cone
+/// better than entropy viscosity and SUPG on the same mesh, it has no phase lag, and it is less diffusive, so the
+/// amplitude of the cone is conserved better.
 ///
 /// @warning **Do not reduce the timestep to make this scheme more accurate -- it does the opposite.** The
 ///          trajectory is already essentially exact, so each extra step only commits another interpolation error.
