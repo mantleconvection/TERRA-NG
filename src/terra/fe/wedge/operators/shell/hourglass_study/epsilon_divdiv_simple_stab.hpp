@@ -1,6 +1,8 @@
 #pragma once
 
-#include "../../quadrature/quadrature.hpp"
+#include <cstdlib>
+
+#include "fe/wedge/quadrature/quadrature.hpp"
 #include "communication/shell/communication.hpp"
 #include "dense/vec.hpp"
 #include "fe/wedge/integrands.hpp"
@@ -14,7 +16,7 @@
 namespace terra::fe::wedge::operators::shell {
 
 template < typename ScalarT, int VecDim = 3 >
-class EpsilonDivDivSimple2pt
+class EpsilonDivDivSimpleStab
 {
   public:
     using SrcVectorType           = linalg::VectorW1Vec< ScalarT, VecDim >;
@@ -35,6 +37,7 @@ class EpsilonDivDivSimple2pt
 
 
     bool treat_boundary_;
+    ScalarT stab_c_ = 0.3;
     bool diagonal_;
 
     linalg::OperatorApplyMode         operator_apply_mode_;
@@ -47,7 +50,7 @@ class EpsilonDivDivSimple2pt
     grid::Grid4DDataVec< ScalarType, VecDim > dst_;
 
   public:
-    EpsilonDivDivSimple2pt(
+    EpsilonDivDivSimpleStab(
         const grid::shell::DistributedDomain&    domain,
         const grid::Grid3DDataVec< ScalarT, 3 >  grid,
         const grid::Grid2DDataScalar< ScalarT >  radii,
@@ -63,6 +66,10 @@ class EpsilonDivDivSimple2pt
     , radii_( radii ) , mask_( mask )
     , k_( k )
     , treat_boundary_( treat_boundary )
+    , stab_c_( []() {
+          const char* e = std::getenv( "STAB_C" );
+          return e ? static_cast< ScalarT >( std::atof( e ) ) : ScalarT( 0.3 );
+      }() )
     , diagonal_( diagonal )
     , operator_apply_mode_( operator_apply_mode )
     , operator_communication_mode_( operator_communication_mode )
@@ -151,13 +158,13 @@ class EpsilonDivDivSimple2pt
             const ScalarT r_2 = radii_( local_subdomain_id, r_cell + 1 );
 
             // Quadrature points.
-            constexpr auto num_quad_points = quadrature::quad_felippa_1x2_num_quad_points;
+            constexpr auto num_quad_points = quadrature::quad_felippa_1x1_num_quad_points;
 
             dense::Vec< ScalarT, 3 > quad_points[num_quad_points];
             ScalarT                  quad_weights[num_quad_points];
 
-            quadrature::quad_felippa_1x2_quad_points( quad_points );
-            quadrature::quad_felippa_1x2_quad_weights( quad_weights );
+            quadrature::quad_felippa_1x1_quad_points( quad_points );
+            quadrature::quad_felippa_1x1_quad_weights( quad_weights );
 
             dense::Vec< ScalarT, 6 > k[num_wedges_per_hex_cell];
             extract_local_wedge_scalar_coefficients( k, local_subdomain_id, x_cell, y_cell, r_cell, k_ );
@@ -216,6 +223,38 @@ class EpsilonDivDivSimple2pt
                 }
             }
 
+            // ---- hourglass stabilization (rank-6 gamma correction) --------
+            // gamma_1 = nodal pattern of (xi-1/3)*zeta, gamma_2 of (eta-1/3)*zeta,
+            // applied per displacement component. eps is scaled from the mean
+            // diagonal of the assembled 1-point local matrix.
+            {
+                constexpr ScalarT g1[6] = { 1.0 / 3.0, -2.0 / 3.0, 1.0 / 3.0,
+                                            -1.0 / 3.0, 2.0 / 3.0, -1.0 / 3.0 };
+                constexpr ScalarT g2[6] = { 1.0 / 3.0, 1.0 / 3.0, -2.0 / 3.0,
+                                            -1.0 / 3.0, -1.0 / 3.0, 2.0 / 3.0 };
+                const ScalarT     norm2_g = 4.0 / 3.0;  // |g|^2 = 6*(1/9)+2*... = 4/3
+
+                for ( int wedge = 0; wedge < num_wedges_per_hex_cell; wedge++ )
+                {
+                    ScalarT diag_mean = 0.0;
+                    for ( int i = 0; i < 18; i++ )
+                        diag_mean += A[wedge]( i, i );
+                    diag_mean /= 18.0;
+                    const ScalarT eps = stab_c_ * diag_mean / norm2_g;
+
+                    for ( int d = 0; d < 3; d++ )
+                    {
+                        for ( int i = 0; i < num_nodes_per_wedge; i++ )
+                        {
+                            for ( int j = 0; j < num_nodes_per_wedge; j++ )
+                            {
+                                A[wedge]( i + num_nodes_per_wedge * d, j + num_nodes_per_wedge * d ) +=
+                                    eps * ( g1[i] * g1[j] + g2[i] * g2[j] );
+                            }
+                        }
+                    }
+                }
+            }
 
             if ( treat_boundary_ )
             {
@@ -319,7 +358,7 @@ class EpsilonDivDivSimple2pt
     }
 };
 
-static_assert( linalg::OperatorLike< EpsilonDivDivSimple2pt< float > > );
-static_assert( linalg::OperatorLike< EpsilonDivDivSimple2pt< double > > );
+static_assert( linalg::OperatorLike< EpsilonDivDivSimpleStab< float > > );
+static_assert( linalg::OperatorLike< EpsilonDivDivSimpleStab< double > > );
 
 } // namespace terra::fe::wedge::operators::shell
