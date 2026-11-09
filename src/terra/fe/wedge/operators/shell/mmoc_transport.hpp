@@ -44,10 +44,6 @@
 /// better than entropy viscosity and SUPG on the same mesh, it has no phase lag, and it is less diffusive, so the
 /// amplitude of the cone is conserved better.
 ///
-/// @warning **Do not reduce the timestep to make this scheme more accurate -- it does the opposite.** The
-///          trajectory is already essentially exact, so each extra step only commits another interpolation error.
-///          Run at the largest Courant number the ghost layer allows (see \ref max_courant) and refine in space.
-///
 /// Diffusion is not part of this operator; combine it with an implicit diffusion solve by operator splitting.
 
 namespace terra::fe::wedge::operators::shell
