@@ -38,10 +38,7 @@
 ///
 /// **Interpolation.** The foot-point value uses \ref terra::fe::wedge::sl::evaluate_cubic_scalar over the
 /// structured index stencil (not the Q1 wedge shape functions, which are only second order and dominate the
-/// numerical diffusion). A six-node stencil gives a quintic where a centred window fits, stepping down the
-/// cubic/quadratic/linear ladder near diamond seams (see \ref terra::fe::wedge::sl::stencil_window). Results are
-/// Bermejo-Staniforth clipped to the located cell's eight nodes; velocity uses
-/// \ref terra::fe::wedge::sl::evaluate_q1_vec (exact for linear fields).
+/// numerical diffusion).
 ///
 /// Accuracy (test_mmoc_rotation, one revolution of a cone): far less numerical diffusion than entropy viscosity
 /// on the same mesh. The residual error is diffusive, not a phase lag -- amplitude loss and tangential
