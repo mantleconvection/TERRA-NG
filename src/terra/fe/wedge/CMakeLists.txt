@@ -5,3 +5,4 @@ target_sources(terra
 add_subdirectory(operators)
 add_subdirectory(quadrature)
 add_subdirectory(shell)
+add_subdirectory(sl)

@@ -1,0 +1,16 @@
+// generated RHS for solution s1, mu = 1
+        const real_t x0 = std::sinh(py);
+        const real_t x1 = 2*px;
+        const real_t x2 = std::sin(x1);
+        const real_t x3 = 2*pz;
+        const real_t x4 = std::sin(x3);
+        const real_t x5 = std::cos(x1);
+        const real_t x6 = 2*py;
+        const real_t x7 = std::sin(x6);
+        const real_t x8 = (8.0/3.0)*std::cosh(pz);
+        const real_t x9 = std::cos(x6);
+        const real_t x10 = std::sinh(px);
+        const real_t x11 = std::cos(x3);
+        data_( sd, x, y, r, 0 ) = (25.0/3.0)*x0*x2*x4 - 4.0/3.0*x4*x9*std::cosh(px) - x5*x7*x8;
+        data_( sd, x, y, r, 1 ) = (50.0/3.0)*x10*x4*x7 - x2*x8*x9 - 2.0/3.0*x4*x5*std::cosh(py);
+        data_( sd, x, y, r, 2 ) = -4.0/3.0*x0*x11*x5 - 8.0/3.0*x10*x11*x9 + (80.0/3.0)*x2*x7*std::sinh(pz);

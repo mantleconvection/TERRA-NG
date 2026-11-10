@@ -88,9 +88,16 @@ class FGMRES
     /// @param tag Tag string to identify this solver instance in statistics.
     void set_tag( const std::string& tag ) { tag_ = tag; }
 
+    /// @brief Iterations the most recent \ref solve_impl took, across all restarts.
+    ///
+    /// The count is otherwise only visible in the statistics table, which makes it awkward to compare the cost
+    /// of two schemes that differ in what they hand the solver.
+    [[nodiscard]] int last_iterations() const { return last_iterations_; }
+
     /// @brief Set the number of inner iterations before restart (FGMRES(m)).
     /// @param m Restart parameter (must be at least 1).
     void set_restart( int m ) { options_.restart = std::max( 1, m ); }
+    void set_absolute_tolerance( ScalarType t ) { options_.absolute_residual_tolerance = t; }
 
     /// @brief Solve the linear system \f$ Ax = b \f$ using flexible GMRES with restarts.
     ///
@@ -106,7 +113,8 @@ class FGMRES
     /// @param A Operator (matrix) to solve with.
     /// @param x Solution vector (input: initial guess, output: final solution).
     /// @param b Right-hand side vector (input).
-    void solve_impl( OperatorType& A, SolutionVectorType& x, const RHSVectorType& b )
+    template < typename OpT >
+    void solve_impl( OpT& A, SolutionVectorType& x, const RHSVectorType& b )
     {
         util::Timer timer_fgmres_solve( "fgmres_solve" );
 
@@ -363,17 +371,23 @@ class FGMRES
                 util::logroot << "FGMRES: Residual is NaN/Inf after restart. Aborting solve.\n"
                                  "        (Details: beta0 = "
                               << beta0 << ", total_iters = " << total_iters << ")" << std::endl;
+                last_iterations_ = total_iters;
                 return;
             }
             if ( beta0 <= options_.absolute_residual_tolerance ||
                  beta0 / initial_residual <= options_.relative_residual_tolerance )
             {
+                last_iterations_ = total_iters;
                 return;
             }
         }
+
+        last_iterations_ = total_iters;   // budget exhausted rather than converged
     }
 
   private:
+    int last_iterations_ = 0; ///< Iterations of the most recent solve; see last_iterations().
+
     std::string tag_; ///< Tag for statistics output identification.
 
     std::vector< SolutionVectorType > tmp_; ///< Temporary workspace vectors.
