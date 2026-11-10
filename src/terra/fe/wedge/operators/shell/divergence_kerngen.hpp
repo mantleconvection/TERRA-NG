@@ -29,6 +29,7 @@
 #include "dense/vec.hpp"
 #include "fe/wedge/integrands.hpp"
 #include "fe/wedge/kernel_helpers.hpp"
+#include "fe/wedge/operators/shell/host_tile_cells.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/trafo/local_basis_trafo_normal_tangential.hpp"
@@ -109,13 +110,6 @@ class DivergenceKerngen
     /// Host-side path selection, updated whenever BCs change.
     void update_kernel_path_flag_host_only()
     {
-        // Serial backend: keep the slow path (fast paths assume a real team of cooperative threads).
-        if constexpr ( std::is_same_v< Kokkos::DefaultExecutionSpace, Kokkos::Serial > )
-        {
-            kernel_path_ = KernelPath::Slow;
-            return;
-        }
-
         const BoundaryConditionFlag cmb_bc     = get_boundary_condition_flag( bcs_, CMB );
         const BoundaryConditionFlag surface_bc = get_boundary_condition_flag( bcs_, SURFACE );
         const bool                  has_freeslip = ( cmb_bc == FREESLIP ) || ( surface_bc == FREESLIP );
@@ -154,24 +148,8 @@ class DivergenceKerngen
         hex_lat_          = domain_info.subdomain_num_nodes_per_side_laterally() - 1;
         hex_rad_          = domain_info.subdomain_num_nodes_radially() - 1;
 
-        if constexpr ( std::is_same_v< Kokkos::DefaultExecutionSpace, Kokkos::Serial > )
-        {
-            lat_tile_ = 1; r_tile_ = 1; r_passes_ = 1;
-        }
-#ifdef KOKKOS_ENABLE_OPENMP
-        else if constexpr ( std::is_same_v< Kokkos::DefaultExecutionSpace, Kokkos::OpenMP > )
-        {
-            const int max_team = std::min( Kokkos::OpenMP().concurrency(),
-                                           static_cast< int >( Kokkos::Impl::HostThreadTeamData::max_team_members ) );
-            if ( max_team >= 64 )      { lat_tile_ = 4; r_tile_ = 4; r_passes_ = 4; }
-            else if ( max_team >= 16 ) { lat_tile_ = 4; r_tile_ = 1; r_passes_ = 16; }
-            else                        { lat_tile_ = 1; r_tile_ = 1; r_passes_ = 1; }
-        }
-#endif
-        else
-        {
-            lat_tile_ = 4; r_tile_ = 8; r_passes_ = 2;
-        }
+        lat_tile_ = 4; r_tile_ = 8; r_passes_ = 2;
+
         r_tile_block_ = r_tile_ * r_passes_;
         lat_tiles_    = ( hex_lat_ + lat_tile_ - 1 ) / lat_tile_;
         r_tiles_      = ( hex_rad_ + r_tile_block_ - 1 ) / r_tile_block_;
@@ -238,7 +216,7 @@ class DivergenceKerngen
         dst_ = dst.grid_data();
 
         util::Timer          timer_kernel( "divergence_kernel" );
-        Kokkos::TeamPolicy<> policy( blocks_, team_size_ );
+        Kokkos::TeamPolicy<> policy( blocks_, tile_team_size( team_size_ ) );
         if ( kernel_path_ != KernelPath::Slow )
         {
             policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
@@ -260,7 +238,7 @@ class DivergenceKerngen
         }
         else
         {
-            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > dn_policy( blocks_, team_size_ );
+            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > dn_policy( blocks_, tile_team_size( team_size_ ) );
             dn_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
             Kokkos::parallel_for(
                 "divergence_apply_kernel_fast_dn", dn_policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
@@ -346,19 +324,27 @@ class DivergenceKerngen
         int local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell;
         decode_team_indices( team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
 
-        if ( tr >= r_tile_ )
-            return;
+        // One cell per team thread on a device; on the host the single team thread walks the whole tile.
+        for_each_tile_cell( team, team_size_, [&]( const int cell ) {
+            const int tr     = cell % r_tile_;
+            const int tx     = ( cell / r_tile_ ) % lat_tile_;
+            const int ty     = cell / ( r_tile_ * lat_tile_ );
+            const int x_cell = x0 + tx;
+            const int y_cell = y0 + ty;
+            if ( tr >= r_tile_ )
+                return;
 
-        for ( int pass = 0; pass < r_passes_; ++pass )
-        {
-            const int r_cell_pass = r0 + pass * r_tile_ + tr;
-            if ( r_cell_pass >= hex_rad_ )
-                break;
-            if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
-                continue;
+            for ( int pass = 0; pass < r_passes_; ++pass )
+            {
+                const int r_cell_pass = r0 + pass * r_tile_ + tr;
+                if ( r_cell_pass >= hex_rad_ )
+                    break;
+                if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
+                    continue;
 
-            process_cell_from_global( local_subdomain_id, x_cell, y_cell, r_cell_pass );
-        }
+                process_cell_from_global( local_subdomain_id, x_cell, y_cell, r_cell_pass );
+            }
+        } );
     }
 
     // Per-cell compute: reads src/coords/radii directly from global memory.
@@ -624,199 +610,207 @@ class DivergenceKerngen
 
         team.team_barrier();
 
-        if ( tr >= r_tile_ )
-            return;
-        if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
-            return;
+        // One cell per team thread on a device; on the host the single team thread walks the whole tile.
+        for_each_tile_cell( team, team_size_, [&]( const int cell ) {
+            const int tr     = cell % r_tile_;
+            const int tx     = ( cell / r_tile_ ) % lat_tile_;
+            const int ty     = cell / ( r_tile_ * lat_tile_ );
+            const int x_cell = x0 + tx;
+            const int y_cell = y0 + ty;
+            if ( tr >= r_tile_ )
+                return;
+            if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
+                return;
 
-        // --- Fused arithmetic kernel (same optimisations as EpsilonDivDivKerngen's fast paths) ---
-        //
-        // The divergence operator's 6x18 element matrix collapses to
-        //     p_i = -qw * |det J| * shape_coarse_i * (∇·u)_phys
-        // so we never materialise A. Per wedge we compute one Jacobian, one div_u at the quadrature
-        // point (18 FMAs), then scatter `prefactor · shape_coarse_i` to 6 coarse nodes.
-        //
-        // Dirichlet: zero-out the boundary nodes' velocity contribution.
-        // Freeslip:  project the boundary nodes' velocity onto the tangent plane before use
-        //            (the outward unit normal on a spherical shell is just the unit-sphere
-        //             lateral coord already cached in coords_sh).
-        //
-        // Quadrature: Felippa 1x1 single point. Weights + points fetched once.
+            // --- Fused arithmetic kernel (same optimisations as EpsilonDivDivKerngen's fast paths) ---
+            //
+            // The divergence operator's 6x18 element matrix collapses to
+            //     p_i = -qw * |det J| * shape_coarse_i * (∇·u)_phys
+            // so we never materialise A. Per wedge we compute one Jacobian, one div_u at the quadrature
+            // point (18 FMAs), then scatter `prefactor · shape_coarse_i` to 6 coarse nodes.
+            //
+            // Dirichlet: zero-out the boundary nodes' velocity contribution.
+            // Freeslip:  project the boundary nodes' velocity onto the tangent plane before use
+            //            (the outward unit normal on a spherical shell is just the unit-sphere
+            //             lateral coord already cached in coords_sh).
+            //
+            // Quadrature: Felippa 1x1 single point. Weights + points fetched once.
 
-        dense::Vec< ScalarT, 3 > quad_points[quadrature::quad_felippa_1x1_num_quad_points];
-        ScalarT                  quad_weights[quadrature::quad_felippa_1x1_num_quad_points];
-        quadrature::quad_felippa_1x1_quad_points( quad_points );
-        quadrature::quad_felippa_1x1_quad_weights( quad_weights );
-        const ScalarT qw = quad_weights[0];
+            dense::Vec< ScalarT, 3 > quad_points[quadrature::quad_felippa_1x1_num_quad_points];
+            ScalarT                  quad_weights[quadrature::quad_felippa_1x1_num_quad_points];
+            quadrature::quad_felippa_1x1_quad_points( quad_points );
+            quadrature::quad_felippa_1x1_quad_weights( quad_weights );
+            const ScalarT qw = quad_weights[0];
 
-        // Wedge node offset table: (ddx, ddy, ddr) per (wedge, local node 0..5). Same layout used
-        // by atomically_add_local_wedge_scalar_coefficients for the coarse scatter.
-        constexpr int WEDGE_NODE_OFF[2][6][3] = {
-            { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 0, 1 }, { 0, 1, 1 } },
-            { { 1, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 1, 1 }, { 0, 1, 1 }, { 1, 0, 1 } } };
+            // Wedge node offset table: (ddx, ddy, ddr) per (wedge, local node 0..5). Same layout used
+            // by atomically_add_local_wedge_scalar_coefficients for the coarse scatter.
+            constexpr int WEDGE_NODE_OFF[2][6][3] = {
+                { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 0, 1 }, { 0, 1, 1 } },
+                { { 1, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 1, 1 }, { 0, 1, 1 }, { 1, 0, 1 } } };
 
-        // Same lat hex-corner layout as the surface-coord gather: v0 is the "first" corner of each
-        // sub-wedge, v1 and v2 the other two. Only lat nodes matter for the Jacobian block.
-        const int n00 = node_id( tx,     ty     );
-        const int n01 = node_id( tx,     ty + 1 );
-        const int n10 = node_id( tx + 1, ty     );
-        const int n11 = node_id( tx + 1, ty + 1 );
+            // Same lat hex-corner layout as the surface-coord gather: v0 is the "first" corner of each
+            // sub-wedge, v1 and v2 the other two. Only lat nodes matter for the Jacobian block.
+            const int n00 = node_id( tx,     ty     );
+            const int n01 = node_id( tx,     ty + 1 );
+            const int n10 = node_id( tx + 1, ty     );
+            const int n11 = node_id( tx + 1, ty + 1 );
 
-        for ( int pass = 0; pass < r_passes_; ++pass )
-        {
-            const int lvl0       = pass * r_tile_ + tr;
-            const int r_cell_abs = r0 + lvl0;
-            if ( r_cell_abs >= hex_rad_ )
-                break;
-
-            const ScalarT r_1 = r_sh( lvl0     );
-            const ScalarT r_2 = r_sh( lvl0 + 1 );
-
-            const bool at_cmb     = has_flag( local_subdomain_id, x_cell, y_cell, r_cell_abs,     CMB     );
-            const bool at_surface = has_flag( local_subdomain_id, x_cell, y_cell, r_cell_abs + 1, SURFACE );
-
-            // BC classification, done once per cell.
-            bool treat_dirichlet = false;
-            bool treat_freeslip  = false;
-            if ( at_cmb || at_surface )
+            for ( int pass = 0; pass < r_passes_; ++pass )
             {
-                const ShellBoundaryFlag     sbf = at_cmb ? CMB : SURFACE;
-                const BoundaryConditionFlag bcf = get_boundary_condition_flag( bcs_, sbf );
-                treat_dirichlet = ( bcf == DIRICHLET );
-                if constexpr ( Freeslip )
-                    treat_freeslip = ( bcf == FREESLIP );
-            }
+                const int lvl0       = pass * r_tile_ + tr;
+                const int r_cell_abs = r0 + lvl0;
+                if ( r_cell_abs >= hex_rad_ )
+                    break;
 
-            // Boundary nodes live either at the cell's bottom (ddr == 0, CMB) or top (ddr == 1, SURFACE).
-            const int boundary_ddr = at_cmb ? 0 : 1;
+                const ScalarT r_1 = r_sh( lvl0     );
+                const ScalarT r_2 = r_sh( lvl0 + 1 );
 
-            const int fine_rad_wedge = r_cell_abs % 2;
+                const bool at_cmb     = has_flag( local_subdomain_id, x_cell, y_cell, r_cell_abs,     CMB     );
+                const bool at_surface = has_flag( local_subdomain_id, x_cell, y_cell, r_cell_abs + 1, SURFACE );
 
-            for ( int w = 0; w < num_wedges_per_hex_cell; ++w )
-            {
-                const int v0 = ( w == 0 ? n00 : n11 );
-                const int v1 = ( w == 0 ? n10 : n01 );
-                const int v2 = ( w == 0 ? n01 : n10 );
-
-                // --- Jacobian (same formulas as EpsilonDivDivKerngen) ---
-                constexpr double ONE_THIRD = 1.0 / 3.0;
-                const double     half_dr   = 0.5 * ( r_2 - r_1 );
-                const double     r_mid     = 0.5 * ( r_1 + r_2 );
-
-                const double J_0_0 = r_mid  * ( -coords_sh( v0, 0 ) + coords_sh( v1, 0 ) );
-                const double J_0_1 = r_mid  * ( -coords_sh( v0, 0 ) + coords_sh( v2, 0 ) );
-                const double J_0_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 0 ) + coords_sh( v1, 0 ) + coords_sh( v2, 0 ) ) );
-                const double J_1_0 = r_mid  * ( -coords_sh( v0, 1 ) + coords_sh( v1, 1 ) );
-                const double J_1_1 = r_mid  * ( -coords_sh( v0, 1 ) + coords_sh( v2, 1 ) );
-                const double J_1_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 1 ) + coords_sh( v1, 1 ) + coords_sh( v2, 1 ) ) );
-                const double J_2_0 = r_mid  * ( -coords_sh( v0, 2 ) + coords_sh( v1, 2 ) );
-                const double J_2_1 = r_mid  * ( -coords_sh( v0, 2 ) + coords_sh( v2, 2 ) );
-                const double J_2_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 2 ) + coords_sh( v1, 2 ) + coords_sh( v2, 2 ) ) );
-
-                const double J_det  = J_0_0 * J_1_1 * J_2_2 - J_0_0 * J_1_2 * J_2_1
-                                    - J_0_1 * J_1_0 * J_2_2 + J_0_1 * J_1_2 * J_2_0
-                                    + J_0_2 * J_1_0 * J_2_1 - J_0_2 * J_1_1 * J_2_0;
-                const double abs_det = Kokkos::abs( J_det );
-                const double inv_det = 1.0 / J_det;
-
-                // J^{-T} (row d dot dN_ref = physical gradient component d)
-                const double i00 = inv_det * (  J_1_1 * J_2_2 - J_1_2 * J_2_1 );
-                const double i01 = inv_det * ( -J_1_0 * J_2_2 + J_1_2 * J_2_0 );
-                const double i02 = inv_det * (  J_1_0 * J_2_1 - J_1_1 * J_2_0 );
-                const double i10 = inv_det * ( -J_0_1 * J_2_2 + J_0_2 * J_2_1 );
-                const double i11 = inv_det * (  J_0_0 * J_2_2 - J_0_2 * J_2_0 );
-                const double i12 = inv_det * ( -J_0_0 * J_2_1 + J_0_1 * J_2_0 );
-                const double i20 = inv_det * (  J_0_1 * J_1_2 - J_0_2 * J_1_1 );
-                const double i21 = inv_det * ( -J_0_0 * J_1_2 + J_0_2 * J_1_0 );
-                const double i22 = inv_det * (  J_0_0 * J_1_1 - J_0_1 * J_1_0 );
-
-                // dN_ref[j] on the reference wedge at the Felippa centroid. Matches EpsilonDivDivKerngen.
-                constexpr double ONE_SIXTH = 1.0 / 6.0;
-                static constexpr double dN_ref[6][3] = {
-                    { -0.5, -0.5, -ONE_SIXTH },
-                    {  0.5,  0.0, -ONE_SIXTH },
-                    {  0.0,  0.5, -ONE_SIXTH },
-                    { -0.5, -0.5,  ONE_SIXTH },
-                    {  0.5,  0.0,  ONE_SIXTH },
-                    {  0.0,  0.5,  ONE_SIXTH } };
-
-                // --- Fused gather: accumulate (∇·u)_phys at the single quadrature point ---
-                double div_u = 0.0;
-#pragma unroll
-                for ( int j = 0; j < num_nodes_per_wedge; ++j )
+                // BC classification, done once per cell.
+                bool treat_dirichlet = false;
+                bool treat_freeslip  = false;
+                if ( at_cmb || at_surface )
                 {
-                    const int ddx = WEDGE_NODE_OFF[w][j][0];
-                    const int ddy = WEDGE_NODE_OFF[w][j][1];
-                    const int ddr = WEDGE_NODE_OFF[w][j][2];
-
-                    const bool is_boundary_node = ( at_cmb || at_surface ) && ( ddr == boundary_ddr );
-
-                    // Dirichlet: boundary-node velocity contributes nothing to div_u.
-                    if ( treat_dirichlet && is_boundary_node )
-                        continue;
-
-                    const int nid = node_id( tx + ddx, ty + ddy );
-                    const int lvl = lvl0 + ddr;
-
-                    double u0 = src_sh( nid, 0, lvl );
-                    double u1 = src_sh( nid, 1, lvl );
-                    double u2 = src_sh( nid, 2, lvl );
-
-                    // Freeslip: project boundary-node velocity onto the tangent plane.
-                    // On the spherical shell the outward normal is the unit-sphere coord itself.
+                    const ShellBoundaryFlag     sbf = at_cmb ? CMB : SURFACE;
+                    const BoundaryConditionFlag bcf = get_boundary_condition_flag( bcs_, sbf );
+                    treat_dirichlet = ( bcf == DIRICHLET );
                     if constexpr ( Freeslip )
+                        treat_freeslip = ( bcf == FREESLIP );
+                }
+
+                // Boundary nodes live either at the cell's bottom (ddr == 0, CMB) or top (ddr == 1, SURFACE).
+                const int boundary_ddr = at_cmb ? 0 : 1;
+
+                const int fine_rad_wedge = r_cell_abs % 2;
+
+                for ( int w = 0; w < num_wedges_per_hex_cell; ++w )
+                {
+                    const int v0 = ( w == 0 ? n00 : n11 );
+                    const int v1 = ( w == 0 ? n10 : n01 );
+                    const int v2 = ( w == 0 ? n01 : n10 );
+
+                    // --- Jacobian (same formulas as EpsilonDivDivKerngen) ---
+                    constexpr double ONE_THIRD = 1.0 / 3.0;
+                    const double     half_dr   = 0.5 * ( r_2 - r_1 );
+                    const double     r_mid     = 0.5 * ( r_1 + r_2 );
+
+                    const double J_0_0 = r_mid  * ( -coords_sh( v0, 0 ) + coords_sh( v1, 0 ) );
+                    const double J_0_1 = r_mid  * ( -coords_sh( v0, 0 ) + coords_sh( v2, 0 ) );
+                    const double J_0_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 0 ) + coords_sh( v1, 0 ) + coords_sh( v2, 0 ) ) );
+                    const double J_1_0 = r_mid  * ( -coords_sh( v0, 1 ) + coords_sh( v1, 1 ) );
+                    const double J_1_1 = r_mid  * ( -coords_sh( v0, 1 ) + coords_sh( v2, 1 ) );
+                    const double J_1_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 1 ) + coords_sh( v1, 1 ) + coords_sh( v2, 1 ) ) );
+                    const double J_2_0 = r_mid  * ( -coords_sh( v0, 2 ) + coords_sh( v1, 2 ) );
+                    const double J_2_1 = r_mid  * ( -coords_sh( v0, 2 ) + coords_sh( v2, 2 ) );
+                    const double J_2_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 2 ) + coords_sh( v1, 2 ) + coords_sh( v2, 2 ) ) );
+
+                    const double J_det  = J_0_0 * J_1_1 * J_2_2 - J_0_0 * J_1_2 * J_2_1
+                                        - J_0_1 * J_1_0 * J_2_2 + J_0_1 * J_1_2 * J_2_0
+                                        + J_0_2 * J_1_0 * J_2_1 - J_0_2 * J_1_1 * J_2_0;
+                    const double abs_det = Kokkos::abs( J_det );
+                    const double inv_det = 1.0 / J_det;
+
+                    // J^{-T} (row d dot dN_ref = physical gradient component d)
+                    const double i00 = inv_det * (  J_1_1 * J_2_2 - J_1_2 * J_2_1 );
+                    const double i01 = inv_det * ( -J_1_0 * J_2_2 + J_1_2 * J_2_0 );
+                    const double i02 = inv_det * (  J_1_0 * J_2_1 - J_1_1 * J_2_0 );
+                    const double i10 = inv_det * ( -J_0_1 * J_2_2 + J_0_2 * J_2_1 );
+                    const double i11 = inv_det * (  J_0_0 * J_2_2 - J_0_2 * J_2_0 );
+                    const double i12 = inv_det * ( -J_0_0 * J_2_1 + J_0_1 * J_2_0 );
+                    const double i20 = inv_det * (  J_0_1 * J_1_2 - J_0_2 * J_1_1 );
+                    const double i21 = inv_det * ( -J_0_0 * J_1_2 + J_0_2 * J_1_0 );
+                    const double i22 = inv_det * (  J_0_0 * J_1_1 - J_0_1 * J_1_0 );
+
+                    // dN_ref[j] on the reference wedge at the Felippa centroid. Matches EpsilonDivDivKerngen.
+                    constexpr double ONE_SIXTH = 1.0 / 6.0;
+                    static constexpr double dN_ref[6][3] = {
+                        { -0.5, -0.5, -ONE_SIXTH },
+                        {  0.5,  0.0, -ONE_SIXTH },
+                        {  0.0,  0.5, -ONE_SIXTH },
+                        { -0.5, -0.5,  ONE_SIXTH },
+                        {  0.5,  0.0,  ONE_SIXTH },
+                        {  0.0,  0.5,  ONE_SIXTH } };
+
+                    // --- Fused gather: accumulate (∇·u)_phys at the single quadrature point ---
+                    double div_u = 0.0;
+#pragma unroll
+                    for ( int j = 0; j < num_nodes_per_wedge; ++j )
                     {
-                        if ( treat_freeslip && is_boundary_node )
+                        const int ddx = WEDGE_NODE_OFF[w][j][0];
+                        const int ddy = WEDGE_NODE_OFF[w][j][1];
+                        const int ddr = WEDGE_NODE_OFF[w][j][2];
+
+                        const bool is_boundary_node = ( at_cmb || at_surface ) && ( ddr == boundary_ddr );
+
+                        // Dirichlet: boundary-node velocity contributes nothing to div_u.
+                        if ( treat_dirichlet && is_boundary_node )
+                            continue;
+
+                        const int nid = node_id( tx + ddx, ty + ddy );
+                        const int lvl = lvl0 + ddr;
+
+                        double u0 = src_sh( nid, 0, lvl );
+                        double u1 = src_sh( nid, 1, lvl );
+                        double u2 = src_sh( nid, 2, lvl );
+
+                        // Freeslip: project boundary-node velocity onto the tangent plane.
+                        // On the spherical shell the outward normal is the unit-sphere coord itself.
+                        if constexpr ( Freeslip )
                         {
-                            // Default: r̂ = cached unit-sphere coord. Custom normals: read from global memory.
-                            double nx = coords_sh( nid, 0 );
-                            double ny = coords_sh( nid, 1 );
-                            double nz = coords_sh( nid, 2 );
-                            if ( custom_freeslip_normals_ )
+                            if ( treat_freeslip && is_boundary_node )
                             {
-                                const auto& normals = at_cmb ? normals_cmb_ : normals_surface_;
-                                nx                  = normals( local_subdomain_id, x_cell + ddx, y_cell + ddy, 0 );
-                                ny                  = normals( local_subdomain_id, x_cell + ddx, y_cell + ddy, 1 );
-                                nz                  = normals( local_subdomain_id, x_cell + ddx, y_cell + ddy, 2 );
+                                // Default: r̂ = cached unit-sphere coord. Custom normals: read from global memory.
+                                double nx = coords_sh( nid, 0 );
+                                double ny = coords_sh( nid, 1 );
+                                double nz = coords_sh( nid, 2 );
+                                if ( custom_freeslip_normals_ )
+                                {
+                                    const auto& normals = at_cmb ? normals_cmb_ : normals_surface_;
+                                    nx                  = normals( local_subdomain_id, x_cell + ddx, y_cell + ddy, 0 );
+                                    ny                  = normals( local_subdomain_id, x_cell + ddx, y_cell + ddy, 1 );
+                                    nz                  = normals( local_subdomain_id, x_cell + ddx, y_cell + ddy, 2 );
+                                }
+                                const double un  = u0 * nx + u1 * ny + u2 * nz;
+                                u0 -= un * nx;
+                                u1 -= un * ny;
+                                u2 -= un * nz;
                             }
-                            const double un  = u0 * nx + u1 * ny + u2 * nz;
-                            u0 -= un * nx;
-                            u1 -= un * ny;
-                            u2 -= un * nz;
                         }
+
+                        // Physical gradient of reference shape function j.
+                        const double gx = dN_ref[j][0];
+                        const double gy = dN_ref[j][1];
+                        const double gz = dN_ref[j][2];
+                        const double g0 = i00 * gx + i01 * gy + i02 * gz;
+                        const double g1 = i10 * gx + i11 * gy + i12 * gz;
+                        const double g2 = i20 * gx + i21 * gy + i22 * gz;
+
+                        div_u += g0 * u0 + g1 * u1 + g2 * u2;
                     }
 
-                    // Physical gradient of reference shape function j.
-                    const double gx = dN_ref[j][0];
-                    const double gy = dN_ref[j][1];
-                    const double gz = dN_ref[j][2];
-                    const double g0 = i00 * gx + i01 * gy + i02 * gz;
-                    const double g1 = i10 * gx + i11 * gy + i12 * gz;
-                    const double g2 = i20 * gx + i21 * gy + i22 * gz;
+                    // --- Scatter: p_i += -qw * |det J| * shape_coarse_i * div_u ---
+                    const int    fine_lat_wedge = fine_lateral_wedge_idx( x_cell, y_cell, w );
+                    const double prefactor      = -qw * abs_det * div_u;
 
-                    div_u += g0 * u0 + g1 * u1 + g2 * u2;
-                }
-
-                // --- Scatter: p_i += -qw * |det J| * shape_coarse_i * div_u ---
-                const int    fine_lat_wedge = fine_lateral_wedge_idx( x_cell, y_cell, w );
-                const double prefactor      = -qw * abs_det * div_u;
-
-                const int xc = x_cell / 2;
-                const int yc = y_cell / 2;
-                const int rc = r_cell_abs / 2;
+                    const int xc = x_cell / 2;
+                    const int yc = y_cell / 2;
+                    const int rc = r_cell_abs / 2;
 
 #pragma unroll
-                for ( int i = 0; i < num_nodes_per_wedge; ++i )
-                {
-                    const double shape_i = shape_coarse( i, fine_rad_wedge, fine_lat_wedge, quad_points[0] );
-                    const int    ddx     = WEDGE_NODE_OFF[w][i][0];
-                    const int    ddy     = WEDGE_NODE_OFF[w][i][1];
-                    const int    ddr     = WEDGE_NODE_OFF[w][i][2];
-                    Kokkos::atomic_add( &dst_( local_subdomain_id, xc + ddx, yc + ddy, rc + ddr ),
-                                         prefactor * shape_i );
+                    for ( int i = 0; i < num_nodes_per_wedge; ++i )
+                    {
+                        const double shape_i = shape_coarse( i, fine_rad_wedge, fine_lat_wedge, quad_points[0] );
+                        const int    ddx     = WEDGE_NODE_OFF[w][i][0];
+                        const int    ddy     = WEDGE_NODE_OFF[w][i][1];
+                        const int    ddr     = WEDGE_NODE_OFF[w][i][2];
+                        Kokkos::atomic_add( &dst_( local_subdomain_id, xc + ddx, yc + ddy, rc + ddr ),
+                                             prefactor * shape_i );
+                    }
                 }
             }
-        }
+        } );
     }
 };
 

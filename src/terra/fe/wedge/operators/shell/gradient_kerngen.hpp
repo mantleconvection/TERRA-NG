@@ -40,6 +40,7 @@
 #include "dense/vec.hpp"
 #include "fe/wedge/integrands.hpp"
 #include "fe/wedge/kernel_helpers.hpp"
+#include "fe/wedge/operators/shell/host_tile_cells.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/trafo/local_basis_trafo_normal_tangential.hpp"
@@ -117,11 +118,6 @@ class GradientKerngen
 
     void update_kernel_path_flag_host_only()
     {
-        if constexpr ( std::is_same_v< Kokkos::DefaultExecutionSpace, Kokkos::Serial > )
-        {
-            kernel_path_ = KernelPath::Slow;
-            return;
-        }
         const BoundaryConditionFlag cmb_bc     = get_boundary_condition_flag( bcs_, CMB );
         const BoundaryConditionFlag surface_bc = get_boundary_condition_flag( bcs_, SURFACE );
         const bool                  has_freeslip = ( cmb_bc == FREESLIP ) || ( surface_bc == FREESLIP );
@@ -159,24 +155,8 @@ class GradientKerngen
         hex_lat_          = domain_info.subdomain_num_nodes_per_side_laterally() - 1;
         hex_rad_          = domain_info.subdomain_num_nodes_radially() - 1;
 
-        if constexpr ( std::is_same_v< Kokkos::DefaultExecutionSpace, Kokkos::Serial > )
-        {
-            lat_tile_ = 1; r_tile_ = 1; r_passes_ = 1;
-        }
-#ifdef KOKKOS_ENABLE_OPENMP
-        else if constexpr ( std::is_same_v< Kokkos::DefaultExecutionSpace, Kokkos::OpenMP > )
-        {
-            const int max_team = std::min( Kokkos::OpenMP().concurrency(),
-                                           static_cast< int >( Kokkos::Impl::HostThreadTeamData::max_team_members ) );
-            if ( max_team >= 64 )      { lat_tile_ = 4; r_tile_ = 4; r_passes_ = 4; }
-            else if ( max_team >= 16 ) { lat_tile_ = 4; r_tile_ = 1; r_passes_ = 16; }
-            else                        { lat_tile_ = 1; r_tile_ = 1; r_passes_ = 1; }
-        }
-#endif
-        else
-        {
-            lat_tile_ = 4; r_tile_ = 8; r_passes_ = 2;
-        }
+        lat_tile_ = 4; r_tile_ = 8; r_passes_ = 2;
+
         r_tile_block_ = r_tile_ * r_passes_;
         lat_tiles_    = ( hex_lat_ + lat_tile_ - 1 ) / lat_tile_;
         r_tiles_      = ( hex_rad_ + r_tile_block_ - 1 ) / r_tile_block_;
@@ -239,7 +219,7 @@ class GradientKerngen
         dst_ = dst.grid_data();
 
         util::Timer          timer_kernel( "gradient_kernel" );
-        Kokkos::TeamPolicy<> policy( blocks_, team_size_ );
+        Kokkos::TeamPolicy<> policy( blocks_, tile_team_size( team_size_ ) );
         if ( kernel_path_ != KernelPath::Slow )
         {
             policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
@@ -261,7 +241,7 @@ class GradientKerngen
         }
         else
         {
-            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > dn_policy( blocks_, team_size_ );
+            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > dn_policy( blocks_, tile_team_size( team_size_ ) );
             dn_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
             Kokkos::parallel_for(
                 "gradient_apply_kernel_fast_dn", dn_policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
@@ -341,19 +321,27 @@ class GradientKerngen
         int local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell;
         decode_team_indices( team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
 
-        if ( tr >= r_tile_ )
-            return;
+        // One cell per team thread on a device; on the host the single team thread walks the whole tile.
+        for_each_tile_cell( team, team_size_, [&]( const int cell ) {
+            const int tr     = cell % r_tile_;
+            const int tx     = ( cell / r_tile_ ) % lat_tile_;
+            const int ty     = cell / ( r_tile_ * lat_tile_ );
+            const int x_cell = x0 + tx;
+            const int y_cell = y0 + ty;
+            if ( tr >= r_tile_ )
+                return;
 
-        for ( int pass = 0; pass < r_passes_; ++pass )
-        {
-            const int r_cell_pass = r0 + pass * r_tile_ + tr;
-            if ( r_cell_pass >= hex_rad_ )
-                break;
-            if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
-                continue;
+            for ( int pass = 0; pass < r_passes_; ++pass )
+            {
+                const int r_cell_pass = r0 + pass * r_tile_ + tr;
+                if ( r_cell_pass >= hex_rad_ )
+                    break;
+                if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
+                    continue;
 
-            process_cell_legacy( local_subdomain_id, x_cell, y_cell, r_cell_pass );
-        }
+                process_cell_legacy( local_subdomain_id, x_cell, y_cell, r_cell_pass );
+            }
+        } );
     }
 
     // Per-cell legacy Gradient kernel (same math as gradient.hpp), used by the slow path.
@@ -619,186 +607,194 @@ class GradientKerngen
 
         team.team_barrier();
 
-        if ( tr >= r_tile_ )
-            return;
-        if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
-            return;
+        // One cell per team thread on a device; on the host the single team thread walks the whole tile.
+        for_each_tile_cell( team, team_size_, [&]( const int cell ) {
+            const int tr     = cell % r_tile_;
+            const int tx     = ( cell / r_tile_ ) % lat_tile_;
+            const int ty     = cell / ( r_tile_ * lat_tile_ );
+            const int x_cell = x0 + tx;
+            const int y_cell = y0 + ty;
+            if ( tr >= r_tile_ )
+                return;
+            if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
+                return;
 
-        dense::Vec< ScalarT, 3 > quad_points[quadrature::quad_felippa_1x1_num_quad_points];
-        ScalarT                  quad_weights[quadrature::quad_felippa_1x1_num_quad_points];
-        quadrature::quad_felippa_1x1_quad_points( quad_points );
-        quadrature::quad_felippa_1x1_quad_weights( quad_weights );
-        const ScalarT qw = quad_weights[0];
+            dense::Vec< ScalarT, 3 > quad_points[quadrature::quad_felippa_1x1_num_quad_points];
+            ScalarT                  quad_weights[quadrature::quad_felippa_1x1_num_quad_points];
+            quadrature::quad_felippa_1x1_quad_points( quad_points );
+            quadrature::quad_felippa_1x1_quad_weights( quad_weights );
+            const ScalarT qw = quad_weights[0];
 
-        constexpr int WEDGE_NODE_OFF[2][6][3] = {
-            { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 0, 1 }, { 0, 1, 1 } },
-            { { 1, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 1, 1 }, { 0, 1, 1 }, { 1, 0, 1 } } };
+            constexpr int WEDGE_NODE_OFF[2][6][3] = {
+                { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 0, 1 }, { 0, 1, 1 } },
+                { { 1, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 1, 1 }, { 0, 1, 1 }, { 1, 0, 1 } } };
 
-        const int n00 = node_id( tx,     ty     );
-        const int n01 = node_id( tx,     ty + 1 );
-        const int n10 = node_id( tx + 1, ty     );
-        const int n11 = node_id( tx + 1, ty + 1 );
+            const int n00 = node_id( tx,     ty     );
+            const int n01 = node_id( tx,     ty + 1 );
+            const int n10 = node_id( tx + 1, ty     );
+            const int n11 = node_id( tx + 1, ty + 1 );
 
-        for ( int pass = 0; pass < r_passes_; ++pass )
-        {
-            const int lvl0       = pass * r_tile_ + tr;
-            const int r_cell_abs = r0 + lvl0;
-            if ( r_cell_abs >= hex_rad_ )
-                break;
-
-            const ScalarT r_1 = r_sh( lvl0     );
-            const ScalarT r_2 = r_sh( lvl0 + 1 );
-
-            const bool at_cmb     = has_flag( local_subdomain_id, x_cell, y_cell, r_cell_abs,     CMB     );
-            const bool at_surface = has_flag( local_subdomain_id, x_cell, y_cell, r_cell_abs + 1, SURFACE );
-
-            bool treat_dirichlet = false;
-            bool treat_freeslip  = false;
-            if ( at_cmb || at_surface )
+            for ( int pass = 0; pass < r_passes_; ++pass )
             {
-                const ShellBoundaryFlag     sbf = at_cmb ? CMB : SURFACE;
-                const BoundaryConditionFlag bcf = get_boundary_condition_flag( bcs_, sbf );
-                treat_dirichlet = ( bcf == DIRICHLET );
-                if constexpr ( Freeslip )
-                    treat_freeslip = ( bcf == FREESLIP );
-            }
-            const int boundary_ddr = at_cmb ? 0 : 1;
+                const int lvl0       = pass * r_tile_ + tr;
+                const int r_cell_abs = r0 + lvl0;
+                if ( r_cell_abs >= hex_rad_ )
+                    break;
 
-            const int fine_rad_wedge = r_cell_abs % 2;
+                const ScalarT r_1 = r_sh( lvl0     );
+                const ScalarT r_2 = r_sh( lvl0 + 1 );
 
-            // Coarse indices for this fine cell within the tile's coarse slab.
-            const int cxc_in_tile = ( x_cell - x0 ) / 2;     // 0..(lat_tile/2-1)
-            const int cyc_in_tile = ( y_cell - y0 ) / 2;
-            const int crc_in_tile = lvl0 / 2;                // 0..(r_tile_block/2-1)
+                const bool at_cmb     = has_flag( local_subdomain_id, x_cell, y_cell, r_cell_abs,     CMB     );
+                const bool at_surface = has_flag( local_subdomain_id, x_cell, y_cell, r_cell_abs + 1, SURFACE );
 
-            for ( int w = 0; w < num_wedges_per_hex_cell; ++w )
-            {
-                const int v0 = ( w == 0 ? n00 : n11 );
-                const int v1 = ( w == 0 ? n10 : n01 );
-                const int v2 = ( w == 0 ? n01 : n10 );
-
-                constexpr double ONE_THIRD = 1.0 / 3.0;
-                const double     half_dr   = 0.5 * ( r_2 - r_1 );
-                const double     r_mid     = 0.5 * ( r_1 + r_2 );
-
-                const double J_0_0 = r_mid  * ( -coords_sh( v0, 0 ) + coords_sh( v1, 0 ) );
-                const double J_0_1 = r_mid  * ( -coords_sh( v0, 0 ) + coords_sh( v2, 0 ) );
-                const double J_0_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 0 ) + coords_sh( v1, 0 ) + coords_sh( v2, 0 ) ) );
-                const double J_1_0 = r_mid  * ( -coords_sh( v0, 1 ) + coords_sh( v1, 1 ) );
-                const double J_1_1 = r_mid  * ( -coords_sh( v0, 1 ) + coords_sh( v2, 1 ) );
-                const double J_1_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 1 ) + coords_sh( v1, 1 ) + coords_sh( v2, 1 ) ) );
-                const double J_2_0 = r_mid  * ( -coords_sh( v0, 2 ) + coords_sh( v1, 2 ) );
-                const double J_2_1 = r_mid  * ( -coords_sh( v0, 2 ) + coords_sh( v2, 2 ) );
-                const double J_2_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 2 ) + coords_sh( v1, 2 ) + coords_sh( v2, 2 ) ) );
-
-                const double J_det  = J_0_0 * J_1_1 * J_2_2 - J_0_0 * J_1_2 * J_2_1
-                                    - J_0_1 * J_1_0 * J_2_2 + J_0_1 * J_1_2 * J_2_0
-                                    + J_0_2 * J_1_0 * J_2_1 - J_0_2 * J_1_1 * J_2_0;
-                const double abs_det = Kokkos::abs( J_det );
-                const double inv_det = 1.0 / J_det;
-
-                const double i00 = inv_det * (  J_1_1 * J_2_2 - J_1_2 * J_2_1 );
-                const double i01 = inv_det * ( -J_1_0 * J_2_2 + J_1_2 * J_2_0 );
-                const double i02 = inv_det * (  J_1_0 * J_2_1 - J_1_1 * J_2_0 );
-                const double i10 = inv_det * ( -J_0_1 * J_2_2 + J_0_2 * J_2_1 );
-                const double i11 = inv_det * (  J_0_0 * J_2_2 - J_0_2 * J_2_0 );
-                const double i12 = inv_det * ( -J_0_0 * J_2_1 + J_0_1 * J_2_0 );
-                const double i20 = inv_det * (  J_0_1 * J_1_2 - J_0_2 * J_1_1 );
-                const double i21 = inv_det * ( -J_0_0 * J_1_2 + J_0_2 * J_1_0 );
-                const double i22 = inv_det * (  J_0_0 * J_1_1 - J_0_1 * J_1_0 );
-
-                constexpr double ONE_SIXTH = 1.0 / 6.0;
-                static constexpr double dN_ref[6][3] = {
-                    { -0.5, -0.5, -ONE_SIXTH },
-                    {  0.5,  0.0, -ONE_SIXTH },
-                    {  0.0,  0.5, -ONE_SIXTH },
-                    { -0.5, -0.5,  ONE_SIXTH },
-                    {  0.5,  0.0,  ONE_SIXTH },
-                    {  0.0,  0.5,  ONE_SIXTH } };
-
-                const int fine_lat_wedge = fine_lateral_wedge_idx( x_cell, y_cell, w );
-
-                // --- Interpolate coarse pressure at the quadrature point. ---
-                // The 6 coarse nodes of this fine cell live at the 8 corners of one coarse hex
-                // (wedge layout via WEDGE_NODE_OFF on the coarse grid).
-                double p_interp = 0.0;
-#pragma unroll
-                for ( int j = 0; j < num_nodes_per_wedge; ++j )
+                bool treat_dirichlet = false;
+                bool treat_freeslip  = false;
+                if ( at_cmb || at_surface )
                 {
-                    const int cddx = WEDGE_NODE_OFF[w][j][0];
-                    const int cddy = WEDGE_NODE_OFF[w][j][1];
-                    const int cddr = WEDGE_NODE_OFF[w][j][2];
-                    const int nidc = node_id_c( cxc_in_tile + cddx, cyc_in_tile + cddy );
-                    const int lvlc = crc_in_tile + cddr;
-                    const double pj = p_sh( nidc, lvlc );
-                    const double sj = shape_coarse( j, fine_rad_wedge, fine_lat_wedge, quad_points[0] );
-                    p_interp += sj * pj;
-                }
-
-                const double prefactor = -qw * abs_det * p_interp;
-
-                // --- Scatter contributions to 6 fine nodes (3 dims each). ---
-                const int xc_base = x_cell;
-                const int yc_base = y_cell;
-                const int rc_base = r_cell_abs;
-
-#pragma unroll
-                for ( int i = 0; i < num_nodes_per_wedge; ++i )
-                {
-                    const int ddx = WEDGE_NODE_OFF[w][i][0];
-                    const int ddy = WEDGE_NODE_OFF[w][i][1];
-                    const int ddr = WEDGE_NODE_OFF[w][i][2];
-
-                    const bool is_boundary_node = ( at_cmb || at_surface ) && ( ddr == boundary_ddr );
-
-                    // Dirichlet: no scatter at boundary nodes.
-                    if ( treat_dirichlet && is_boundary_node )
-                        continue;
-
-                    // Physical gradient of fine basis function i.
-                    const double gx = dN_ref[i][0];
-                    const double gy = dN_ref[i][1];
-                    const double gz = dN_ref[i][2];
-                    const double g0 = i00 * gx + i01 * gy + i02 * gz;
-                    const double g1 = i10 * gx + i11 * gy + i12 * gz;
-                    const double g2 = i20 * gx + i21 * gy + i22 * gz;
-
-                    double c0 = prefactor * g0;
-                    double c1 = prefactor * g1;
-                    double c2 = prefactor * g2;
-
-                    // Freeslip: project the 3-component contribution onto the tangent plane at boundary nodes.
+                    const ShellBoundaryFlag     sbf = at_cmb ? CMB : SURFACE;
+                    const BoundaryConditionFlag bcf = get_boundary_condition_flag( bcs_, sbf );
+                    treat_dirichlet = ( bcf == DIRICHLET );
                     if constexpr ( Freeslip )
+                        treat_freeslip = ( bcf == FREESLIP );
+                }
+                const int boundary_ddr = at_cmb ? 0 : 1;
+
+                const int fine_rad_wedge = r_cell_abs % 2;
+
+                // Coarse indices for this fine cell within the tile's coarse slab.
+                const int cxc_in_tile = ( x_cell - x0 ) / 2;     // 0..(lat_tile/2-1)
+                const int cyc_in_tile = ( y_cell - y0 ) / 2;
+                const int crc_in_tile = lvl0 / 2;                // 0..(r_tile_block/2-1)
+
+                for ( int w = 0; w < num_wedges_per_hex_cell; ++w )
+                {
+                    const int v0 = ( w == 0 ? n00 : n11 );
+                    const int v1 = ( w == 0 ? n10 : n01 );
+                    const int v2 = ( w == 0 ? n01 : n10 );
+
+                    constexpr double ONE_THIRD = 1.0 / 3.0;
+                    const double     half_dr   = 0.5 * ( r_2 - r_1 );
+                    const double     r_mid     = 0.5 * ( r_1 + r_2 );
+
+                    const double J_0_0 = r_mid  * ( -coords_sh( v0, 0 ) + coords_sh( v1, 0 ) );
+                    const double J_0_1 = r_mid  * ( -coords_sh( v0, 0 ) + coords_sh( v2, 0 ) );
+                    const double J_0_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 0 ) + coords_sh( v1, 0 ) + coords_sh( v2, 0 ) ) );
+                    const double J_1_0 = r_mid  * ( -coords_sh( v0, 1 ) + coords_sh( v1, 1 ) );
+                    const double J_1_1 = r_mid  * ( -coords_sh( v0, 1 ) + coords_sh( v2, 1 ) );
+                    const double J_1_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 1 ) + coords_sh( v1, 1 ) + coords_sh( v2, 1 ) ) );
+                    const double J_2_0 = r_mid  * ( -coords_sh( v0, 2 ) + coords_sh( v1, 2 ) );
+                    const double J_2_1 = r_mid  * ( -coords_sh( v0, 2 ) + coords_sh( v2, 2 ) );
+                    const double J_2_2 = half_dr * ( ONE_THIRD * ( coords_sh( v0, 2 ) + coords_sh( v1, 2 ) + coords_sh( v2, 2 ) ) );
+
+                    const double J_det  = J_0_0 * J_1_1 * J_2_2 - J_0_0 * J_1_2 * J_2_1
+                                        - J_0_1 * J_1_0 * J_2_2 + J_0_1 * J_1_2 * J_2_0
+                                        + J_0_2 * J_1_0 * J_2_1 - J_0_2 * J_1_1 * J_2_0;
+                    const double abs_det = Kokkos::abs( J_det );
+                    const double inv_det = 1.0 / J_det;
+
+                    const double i00 = inv_det * (  J_1_1 * J_2_2 - J_1_2 * J_2_1 );
+                    const double i01 = inv_det * ( -J_1_0 * J_2_2 + J_1_2 * J_2_0 );
+                    const double i02 = inv_det * (  J_1_0 * J_2_1 - J_1_1 * J_2_0 );
+                    const double i10 = inv_det * ( -J_0_1 * J_2_2 + J_0_2 * J_2_1 );
+                    const double i11 = inv_det * (  J_0_0 * J_2_2 - J_0_2 * J_2_0 );
+                    const double i12 = inv_det * ( -J_0_0 * J_2_1 + J_0_1 * J_2_0 );
+                    const double i20 = inv_det * (  J_0_1 * J_1_2 - J_0_2 * J_1_1 );
+                    const double i21 = inv_det * ( -J_0_0 * J_1_2 + J_0_2 * J_1_0 );
+                    const double i22 = inv_det * (  J_0_0 * J_1_1 - J_0_1 * J_1_0 );
+
+                    constexpr double ONE_SIXTH = 1.0 / 6.0;
+                    static constexpr double dN_ref[6][3] = {
+                        { -0.5, -0.5, -ONE_SIXTH },
+                        {  0.5,  0.0, -ONE_SIXTH },
+                        {  0.0,  0.5, -ONE_SIXTH },
+                        { -0.5, -0.5,  ONE_SIXTH },
+                        {  0.5,  0.0,  ONE_SIXTH },
+                        {  0.0,  0.5,  ONE_SIXTH } };
+
+                    const int fine_lat_wedge = fine_lateral_wedge_idx( x_cell, y_cell, w );
+
+                    // --- Interpolate coarse pressure at the quadrature point. ---
+                    // The 6 coarse nodes of this fine cell live at the 8 corners of one coarse hex
+                    // (wedge layout via WEDGE_NODE_OFF on the coarse grid).
+                    double p_interp = 0.0;
+#pragma unroll
+                    for ( int j = 0; j < num_nodes_per_wedge; ++j )
                     {
-                        if ( treat_freeslip && is_boundary_node )
-                        {
-                            // Default: r̂ = cached unit-sphere coord. Custom normals: read from global memory.
-                            const int nid = node_id( tx + ddx, ty + ddy );
-                            double    nx  = coords_sh( nid, 0 );
-                            double    ny  = coords_sh( nid, 1 );
-                            double    nz  = coords_sh( nid, 2 );
-                            if ( custom_freeslip_normals_ )
-                            {
-                                const auto& normals = at_cmb ? normals_cmb_ : normals_surface_;
-                                const int   xn      = xc_base + ddx;
-                                const int   yn      = yc_base + ddy;
-                                nx                  = normals( local_subdomain_id, xn, yn, 0 );
-                                ny                  = normals( local_subdomain_id, xn, yn, 1 );
-                                nz                  = normals( local_subdomain_id, xn, yn, 2 );
-                            }
-                            const double cn  = c0 * nx + c1 * ny + c2 * nz;
-                            c0 -= cn * nx;
-                            c1 -= cn * ny;
-                            c2 -= cn * nz;
-                        }
+                        const int cddx = WEDGE_NODE_OFF[w][j][0];
+                        const int cddy = WEDGE_NODE_OFF[w][j][1];
+                        const int cddr = WEDGE_NODE_OFF[w][j][2];
+                        const int nidc = node_id_c( cxc_in_tile + cddx, cyc_in_tile + cddy );
+                        const int lvlc = crc_in_tile + cddr;
+                        const double pj = p_sh( nidc, lvlc );
+                        const double sj = shape_coarse( j, fine_rad_wedge, fine_lat_wedge, quad_points[0] );
+                        p_interp += sj * pj;
                     }
 
-                    Kokkos::atomic_add( &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 0 ), c0 );
-                    Kokkos::atomic_add( &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 1 ), c1 );
-                    Kokkos::atomic_add( &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 2 ), c2 );
+                    const double prefactor = -qw * abs_det * p_interp;
+
+                    // --- Scatter contributions to 6 fine nodes (3 dims each). ---
+                    const int xc_base = x_cell;
+                    const int yc_base = y_cell;
+                    const int rc_base = r_cell_abs;
+
+#pragma unroll
+                    for ( int i = 0; i < num_nodes_per_wedge; ++i )
+                    {
+                        const int ddx = WEDGE_NODE_OFF[w][i][0];
+                        const int ddy = WEDGE_NODE_OFF[w][i][1];
+                        const int ddr = WEDGE_NODE_OFF[w][i][2];
+
+                        const bool is_boundary_node = ( at_cmb || at_surface ) && ( ddr == boundary_ddr );
+
+                        // Dirichlet: no scatter at boundary nodes.
+                        if ( treat_dirichlet && is_boundary_node )
+                            continue;
+
+                        // Physical gradient of fine basis function i.
+                        const double gx = dN_ref[i][0];
+                        const double gy = dN_ref[i][1];
+                        const double gz = dN_ref[i][2];
+                        const double g0 = i00 * gx + i01 * gy + i02 * gz;
+                        const double g1 = i10 * gx + i11 * gy + i12 * gz;
+                        const double g2 = i20 * gx + i21 * gy + i22 * gz;
+
+                        double c0 = prefactor * g0;
+                        double c1 = prefactor * g1;
+                        double c2 = prefactor * g2;
+
+                        // Freeslip: project the 3-component contribution onto the tangent plane at boundary nodes.
+                        if constexpr ( Freeslip )
+                        {
+                            if ( treat_freeslip && is_boundary_node )
+                            {
+                                // Default: r̂ = cached unit-sphere coord. Custom normals: read from global memory.
+                                const int nid = node_id( tx + ddx, ty + ddy );
+                                double    nx  = coords_sh( nid, 0 );
+                                double    ny  = coords_sh( nid, 1 );
+                                double    nz  = coords_sh( nid, 2 );
+                                if ( custom_freeslip_normals_ )
+                                {
+                                    const auto& normals = at_cmb ? normals_cmb_ : normals_surface_;
+                                    const int   xn      = xc_base + ddx;
+                                    const int   yn      = yc_base + ddy;
+                                    nx                  = normals( local_subdomain_id, xn, yn, 0 );
+                                    ny                  = normals( local_subdomain_id, xn, yn, 1 );
+                                    nz                  = normals( local_subdomain_id, xn, yn, 2 );
+                                }
+                                const double cn  = c0 * nx + c1 * ny + c2 * nz;
+                                c0 -= cn * nx;
+                                c1 -= cn * ny;
+                                c2 -= cn * nz;
+                            }
+                        }
+
+                        Kokkos::atomic_add( &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 0 ), c0 );
+                        Kokkos::atomic_add( &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 1 ), c1 );
+                        Kokkos::atomic_add( &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 2 ), c2 );
+                    }
                 }
             }
-        }
+        } );
     }
 };
 
