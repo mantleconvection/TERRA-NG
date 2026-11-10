@@ -297,6 +297,7 @@ enum class EnergySolverType
 {
     SUPG,
     ENTROPY_VISCOSITY,
+    MMOC,
 };
 struct EnergySolverParameters
 {
@@ -373,6 +374,15 @@ struct DeveloperOptions
 
     // Free-slip normals consistent with the discrete gradient (Bᵀ·1); false: r̂.
     bool consistent_freeslip_normals = true;
+
+    /// Abort threshold for the negative-temperature guard, in units of the nondimensional
+    /// temperature. MMOC is semi-Lagrangian with a quintic reconstruction and therefore not
+    /// monotone, so a small undershoot below T_min is expected and harmless; a strict
+    /// "any negative value" test aborts healthy runs on it. The run stops once the minimum
+    /// temperature falls below -negative_temperature_tolerance; the actual minimum is logged
+    /// whenever it sets a new (negative) record, so a genuine blow-up stays visible.
+    /// Set to 0 to restore the strict behaviour.
+    double negative_temperature_tolerance = 1e-3;
 };
 
 struct Parameters
@@ -935,6 +945,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         { "supg", EnergySolverType::SUPG },
         { "entropy_viscosity", EnergySolverType::ENTROPY_VISCOSITY },
         { "ev", EnergySolverType::ENTROPY_VISCOSITY },
+        { "mmoc", EnergySolverType::MMOC },
     };
 
     add_option_with_default( app, "--energy-solver", parameters.energy_solver_parameters.energy_solver )
@@ -943,7 +954,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Energy Solver" )
         ->description(
             "'ev': Implicit Galerkin advection-diffusion with entropy-viscosity stabilization (Guermond et. al, 2011, Kronbichler et. al, 2012) (default). "
-            "'supg': Implicit SUPG advection-diffusion with FGMRES solver." );
+            "'supg': Implicit SUPG advection-diffusion with FGMRES solver. "
+            "'mmoc': Semi-Lagrangian (modified method of characteristics) transport with split implicit diffusion." );
 
     add_option_with_default( app, "--energy-krylov-restart", parameters.energy_solver_parameters.krylov_restart )
         ->group( "Energy Solver" );
@@ -1021,6 +1033,12 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         add_flag_with_default( app, "--extended-diagnostics", parameters.devel_parameters.extended_diagnostics )
             ->group( "Developer settings" )
             ->description( "Log detailed diagnostics on solver setup, memory footprint, etc." );
+        add_option_with_default(
+            app, "--negative-temperature-tolerance", parameters.devel_parameters.negative_temperature_tolerance )
+            ->group( "Developer settings" )
+            ->description(
+                "Abort once the minimum temperature falls below minus this value. MMOC is not monotone, so a "
+                "small undershoot is expected; 0 restores the strict any-negative-value test." );
         add_flag_with_default(
             app,
             "--consistent-freeslip-normals,!--consistent-freeslip-normals-off",

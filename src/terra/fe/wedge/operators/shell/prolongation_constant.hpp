@@ -8,6 +8,7 @@
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
 #include "linalg/vector_w1.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -29,6 +30,9 @@ class ProlongationConstant
     explicit ProlongationConstant( linalg::OperatorApplyMode operator_apply_mode = linalg::OperatorApplyMode::Replace )
     : operator_apply_mode_( operator_apply_mode )
     {}
+
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
 
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
@@ -54,17 +58,20 @@ class ProlongationConstant
         }
 
         // Looping over the coarse grid.
-        Kokkos::parallel_for(
-            "matvec",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
-                { 0, 0, 0, 0 },
-                {
-                    src_.extent( 0 ),
-                    src_.extent( 1 ),
-                    src_.extent( 2 ),
-                    src_.extent( 3 ),
-                } ),
-            *this );
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, det::max_abs( src_ ), det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+                Kokkos::parallel_for(
+                    "matvec",
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+                        { 0, 0, 0, 0 },
+                        {
+                            src_.extent( 0 ),
+                            src_.extent( 1 ),
+                            src_.extent( 2 ),
+                            src_.extent( 3 ),
+                        } ),
+                    *this );
+        } );
 
         Kokkos::fence();
     }
@@ -91,8 +98,8 @@ class ProlongationConstant
                 const auto weight = wedge::shell::prolongation_constant_weight< ScalarType >(
                     fine_stencil_x, fine_stencil_y, fine_stencil_r, x_coarse, y_coarse, r_coarse );
 
-                Kokkos::atomic_add(
-                    &dst_( local_subdomain_id, fine_stencil_x, fine_stencil_y, fine_stencil_r ),
+                det::add(
+                    fp_, &dst_( local_subdomain_id, fine_stencil_x, fine_stencil_y, fine_stencil_r ),
                     weight * src_( local_subdomain_id, x_coarse, y_coarse, r_coarse ) );
             }
         }
@@ -119,6 +126,9 @@ class ProlongationVecConstant
     : operator_apply_mode_( operator_apply_mode )
     {}
 
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
         if ( operator_apply_mode_ == linalg::OperatorApplyMode::Replace )
@@ -143,17 +153,20 @@ class ProlongationVecConstant
         }
 
         // Looping over the coarse grid.
-        Kokkos::parallel_for(
-            "matvec",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
-                { 0, 0, 0, 0 },
-                {
-                    src_.extent( 0 ),
-                    src_.extent( 1 ),
-                    src_.extent( 2 ),
-                    src_.extent( 3 ),
-                } ),
-            *this );
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, det::max_abs( src_ ), det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+                Kokkos::parallel_for(
+                    "matvec",
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+                        { 0, 0, 0, 0 },
+                        {
+                            src_.extent( 0 ),
+                            src_.extent( 1 ),
+                            src_.extent( 2 ),
+                            src_.extent( 3 ),
+                        } ),
+                    *this );
+        } );
 
         Kokkos::fence();
     }
@@ -182,8 +195,8 @@ class ProlongationVecConstant
 
                 for ( int d = 0; d < VecDim; ++d )
                 {
-                    Kokkos::atomic_add(
-                        &dst_( local_subdomain_id, fine_stencil_x, fine_stencil_y, fine_stencil_r, d ),
+                    det::add(
+                        fp_, &dst_( local_subdomain_id, fine_stencil_x, fine_stencil_y, fine_stencil_r, d ),
                         weight * src_( local_subdomain_id, x_coarse, y_coarse, r_coarse, d ) );
                 }
             }

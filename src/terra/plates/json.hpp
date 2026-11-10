@@ -2772,8 +2772,10 @@ template < typename BasicJsonType, typename T, typename = void >
 struct has_from_json : std::false_type
 {};
 
+// `and not is_void` added for nvc++ (EDG): it rejects the `T&` here as a
+// hard error when T=void instead of an SFINAE soft-failure as GCC/Clang do.
 template < typename BasicJsonType, typename T >
-struct has_from_json< BasicJsonType, T, enable_if_t< not is_basic_json< T >::value > >
+struct has_from_json< BasicJsonType, T, enable_if_t< not is_basic_json< T >::value and not std::is_void< T >::value > >
 {
     using serializer = typename BasicJsonType::template json_serializer< T, void >;
 
@@ -2787,8 +2789,10 @@ template < typename BasicJsonType, typename T, typename = void >
 struct has_non_default_from_json : std::false_type
 {};
 
+// `and not is_void` added for nvc++ (EDG): it rejects the `T&` here as a
+// hard error when T=void instead of an SFINAE soft-failure as GCC/Clang do.
 template < typename BasicJsonType, typename T >
-struct has_non_default_from_json< BasicJsonType, T, enable_if_t< not is_basic_json< T >::value > >
+struct has_non_default_from_json< BasicJsonType, T, enable_if_t< not is_basic_json< T >::value and not std::is_void< T >::value > >
 {
     using serializer = typename BasicJsonType::template json_serializer< T, void >;
 
@@ -2801,8 +2805,10 @@ template < typename BasicJsonType, typename T, typename = void >
 struct has_to_json : std::false_type
 {};
 
+// `and not is_void` added for nvc++ (EDG): it rejects the `T&` here as a
+// hard error when T=void instead of an SFINAE soft-failure as GCC/Clang do.
 template < typename BasicJsonType, typename T >
-struct has_to_json< BasicJsonType, T, enable_if_t< not is_basic_json< T >::value > >
+struct has_to_json< BasicJsonType, T, enable_if_t< not is_basic_json< T >::value and not std::is_void< T >::value > >
 {
     using serializer = typename BasicJsonType::template json_serializer< T, void >;
 
@@ -2838,6 +2844,11 @@ struct is_complete_type : std::false_type
 
 template < typename T >
 struct is_complete_type< T, decltype( void( sizeof( T ) ) ) > : std::true_type
+{};
+
+// nvcc accepts sizeof(void) as an extension; void is never a complete type.
+template <>
+struct is_complete_type< void, void > : std::false_type
 {};
 
 template < typename BasicJsonType, typename CompatibleObjectType, typename = void >
@@ -2987,10 +2998,16 @@ struct is_constructible_array_type_impl<
         // concept.
         not is_iterator_traits< iterator_traits< ConstructibleArrayType > >::value and
 
-        ( std::is_same< typename ConstructibleArrayType::value_type, typename BasicJsonType::array_t::value_type >::
-              value or
-          has_from_json< BasicJsonType, typename ConstructibleArrayType::value_type >::value or
-          has_non_default_from_json< BasicJsonType, typename ConstructibleArrayType::value_type >::value );
+        // nvcc: evaluated lazily, and never for a void value_type (e.g.
+        // std::back_insert_iterator), which would otherwise form a reference to
+        // void inside has_from_json ("reference to void is not allowed").
+        std::disjunction<
+            std::is_same< typename ConstructibleArrayType::value_type, typename BasicJsonType::array_t::value_type >,
+            std::conjunction< std::negation< std::is_void< typename ConstructibleArrayType::value_type > >,
+                              has_from_json< BasicJsonType, typename ConstructibleArrayType::value_type > >,
+            std::conjunction<
+                std::negation< std::is_void< typename ConstructibleArrayType::value_type > >,
+                has_non_default_from_json< BasicJsonType, typename ConstructibleArrayType::value_type > > >::value;
 };
 
 template < typename BasicJsonType, typename ConstructibleArrayType >

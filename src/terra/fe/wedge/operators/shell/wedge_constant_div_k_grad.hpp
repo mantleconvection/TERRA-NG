@@ -10,6 +10,7 @@
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
 #include "linalg/vector_w1.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -77,6 +78,9 @@ class WedgeConstantDivKGrad
     /// Read-only coefficient handle (so the caller can update ν in place).
     const CoefficientF& nu_wedge_grid_data() const { return coefficient_nu_; }
 
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
         if ( operator_apply_mode_ == linalg::OperatorApplyMode::Replace )
@@ -93,8 +97,11 @@ class WedgeConstantDivKGrad
             throw std::runtime_error( "WedgeConstantDivKGrad: src/dst extent mismatch" );
         }
 
-        Kokkos::parallel_for(
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, det::max_abs( src_ ), det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+            Kokkos::parallel_for(
             "wedge_constant_div_k_grad_matvec", grid::shell::local_domain_md_range_policy_cells( domain_ ), *this );
+        } );
 
         Kokkos::fence();
 
@@ -176,7 +183,7 @@ class WedgeConstantDivKGrad
             }
         }
 
-        atomically_add_local_wedge_scalar_coefficients( dst_, local_subdomain_id, x_cell, y_cell, r_cell, dst_w );
+        atomically_add_local_wedge_scalar_coefficients( dst_, local_subdomain_id, x_cell, y_cell, r_cell, dst_w, fp_ );
     }
 };
 

@@ -14,6 +14,7 @@
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
 #include "linalg/vector_w1.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -49,6 +50,9 @@ class RestrictionConstant
     , recv_buffers_( domain_coarse )
     {}
 
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
         if ( operator_apply_mode_ == linalg::OperatorApplyMode::Replace )
@@ -74,17 +78,20 @@ class RestrictionConstant
         }
 
         // Looping over the coarse grid.
-        Kokkos::parallel_for(
-            "matvec",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
-                { 0, 0, 0, 0 },
-                {
-                    dst_.extent( 0 ),
-                    dst_.extent( 1 ),
-                    dst_.extent( 2 ),
-                    dst_.extent( 3 ),
-                } ),
-            *this );
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, det::max_abs( src_ ), det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+                Kokkos::parallel_for(
+                    "matvec",
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+                        { 0, 0, 0, 0 },
+                        {
+                            dst_.extent( 0 ),
+                            dst_.extent( 1 ),
+                            dst_.extent( 2 ),
+                            dst_.extent( 3 ),
+                        } ),
+                    *this );
+        } );
 
         Kokkos::fence();
 
@@ -124,8 +131,8 @@ class RestrictionConstant
                         1.0 :
                         0.0;
 
-                Kokkos::atomic_add(
-                    &dst_( local_subdomain_id, x_coarse, y_coarse, r_coarse ),
+                det::add(
+                    fp_, &dst_( local_subdomain_id, x_coarse, y_coarse, r_coarse ),
                     weight * mask_weight * src_( local_subdomain_id, fine_stencil_x, fine_stencil_y, fine_stencil_r ) );
             }
         }
@@ -198,6 +205,9 @@ class RestrictionVecConstant
             boundary_mask_ = grid::shell::setup_boundary_mask_data( domain_coarse_ );
     }
 
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
         if ( operator_apply_mode_ == linalg::OperatorApplyMode::Replace )
@@ -223,17 +233,20 @@ class RestrictionVecConstant
         }
 
         // Looping over the coarse grid.
-        Kokkos::parallel_for(
-            "matvec",
-            Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
-                { 0, 0, 0, 0 },
-                {
-                    dst_.extent( 0 ),
-                    dst_.extent( 1 ),
-                    dst_.extent( 2 ),
-                    dst_.extent( 3 ),
-                } ),
-            *this );
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, det::max_abs( src_ ), det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+                Kokkos::parallel_for(
+                    "matvec",
+                    Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
+                        { 0, 0, 0, 0 },
+                        {
+                            dst_.extent( 0 ),
+                            dst_.extent( 1 ),
+                            dst_.extent( 2 ),
+                            dst_.extent( 3 ),
+                        } ),
+                    *this );
+        } );
 
         Kokkos::fence();
 
@@ -286,8 +299,8 @@ class RestrictionVecConstant
 
                 for ( int d = 0; d < VecDim; ++d )
                 {
-                    Kokkos::atomic_add(
-                        &dst_( local_subdomain_id, x_coarse, y_coarse, r_coarse, d ),
+                    det::add(
+                        fp_, &dst_( local_subdomain_id, x_coarse, y_coarse, r_coarse, d ),
                         weight * mask_weight *
                             src_( local_subdomain_id, fine_stencil_x, fine_stencil_y, fine_stencil_r, d ) );
                 }

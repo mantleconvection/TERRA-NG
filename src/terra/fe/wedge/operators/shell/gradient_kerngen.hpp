@@ -46,6 +46,7 @@
 #include "linalg/vector.hpp"
 #include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -226,6 +227,9 @@ class GradientKerngen
         operator_communication_mode_ = operator_communication_mode;
     }
 
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
         util::Timer timer_apply( "gradient_apply" );
@@ -245,29 +249,32 @@ class GradientKerngen
             policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
         }
 
-        if ( kernel_path_ == KernelPath::Slow )
-        {
-            Kokkos::parallel_for(
-                "gradient_apply_kernel_slow", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                    this->run_team_slow( team );
-                } );
-        }
-        else if ( kernel_path_ == KernelPath::FastFreeslip )
-        {
-            Kokkos::parallel_for(
-                "gradient_apply_kernel_fast_fs", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                    this->template run_team_fast< /*Freeslip=*/true >( team );
-                } );
-        }
-        else
-        {
-            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > dn_policy( blocks_, team_size_ );
-            dn_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
-            Kokkos::parallel_for(
-                "gradient_apply_kernel_fast_dn", dn_policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                    this->template run_team_fast< /*Freeslip=*/false >( team );
-                } );
-        }
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, det::max_abs( src_ ), det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+                if ( kernel_path_ == KernelPath::Slow )
+                {
+                    Kokkos::parallel_for(
+                        "gradient_apply_kernel_slow", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                            this->run_team_slow( team );
+                        } );
+                }
+                else if ( kernel_path_ == KernelPath::FastFreeslip )
+                {
+                    Kokkos::parallel_for(
+                        "gradient_apply_kernel_fast_fs", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                            this->template run_team_fast< /*Freeslip=*/true >( team );
+                        } );
+                }
+                else
+                {
+                    Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > dn_policy( blocks_, team_size_ );
+                    dn_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
+                    Kokkos::parallel_for(
+                        "gradient_apply_kernel_fast_dn", dn_policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                            this->template run_team_fast< /*Freeslip=*/false >( team );
+                        } );
+                }
+        } );
 
         Kokkos::fence();
         timer_kernel.stop();
@@ -522,7 +529,7 @@ class GradientKerngen
             dst_d[0] = dst_loc[0].template slice< 6 >( d * 6 );
             dst_d[1] = dst_loc[1].template slice< 6 >( d * 6 );
             atomically_add_local_wedge_vector_coefficients(
-                dst_, s, x_cell, y_cell, r_cell, d, dst_d );
+                dst_, s, x_cell, y_cell, r_cell, d, dst_d, fp_ );
         }
     }
 
@@ -793,9 +800,9 @@ class GradientKerngen
                         }
                     }
 
-                    Kokkos::atomic_add( &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 0 ), c0 );
-                    Kokkos::atomic_add( &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 1 ), c1 );
-                    Kokkos::atomic_add( &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 2 ), c2 );
+                    det::add( fp_, &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 0 ), c0 );
+                    det::add( fp_, &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 1 ), c1 );
+                    det::add( fp_, &dst_( local_subdomain_id, xc_base + ddx, yc_base + ddy, rc_base + ddr, 2 ), c2 );
                 }
             }
         }

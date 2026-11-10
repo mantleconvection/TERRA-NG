@@ -63,6 +63,7 @@
 #include "linalg/vector.hpp"
 #include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -223,6 +224,9 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
     KernelPath  kernel_path() const { return kernel_path_; }
     void        force_slow_path() { kernel_path_ = KernelPath::Slow; }
 
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
         util::Timer timer_apply( "ad_supg_apply" );
@@ -239,48 +243,51 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
         if ( kernel_path_ == KernelPath::Fast )
             policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
 
-        if ( kernel_path_ == KernelPath::Slow )
-        {
-            Kokkos::parallel_for( "ad_supg_apply_kernel_slow", policy,
-                                  KOKKOS_CLASS_LAMBDA( const Team& team ) { this->run_team_slow( team ); } );
-        }
-        else
-        {
-            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > fast_policy( blocks_, team_size_ );
-            fast_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, det::max_abs( src_ ), det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+                if ( kernel_path_ == KernelPath::Slow )
+                {
+                    Kokkos::parallel_for( "ad_supg_apply_kernel_slow", policy,
+                                          KOKKOS_CLASS_LAMBDA( const Team& team ) { this->run_team_slow( team ); } );
+                }
+                else
+                {
+                    Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > fast_policy( blocks_, team_size_ );
+                    fast_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
 
-            // 2x2x2 = 8 template variants; host-side branch on runtime flags.
-            if ( diagonal_ )
-            {
-                if ( treat_boundary_ && lumped_mass_ )
-                    Kokkos::parallel_for( "ad_supg_fast_D_L_TB", fast_policy,
-                        KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< true, true, true >( t ); } );
-                else if ( treat_boundary_ )
-                    Kokkos::parallel_for( "ad_supg_fast_D_TB", fast_policy,
-                        KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< false, true, true >( t ); } );
-                else if ( lumped_mass_ )
-                    Kokkos::parallel_for( "ad_supg_fast_D_L", fast_policy,
-                        KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< true, true, false >( t ); } );
-                else
-                    Kokkos::parallel_for( "ad_supg_fast_D", fast_policy,
-                        KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< false, true, false >( t ); } );
-            }
-            else
-            {
-                if ( treat_boundary_ && lumped_mass_ )
-                    Kokkos::parallel_for( "ad_supg_fast_L_TB", fast_policy,
-                        KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< true, false, true >( t ); } );
-                else if ( treat_boundary_ )
-                    Kokkos::parallel_for( "ad_supg_fast_TB", fast_policy,
-                        KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< false, false, true >( t ); } );
-                else if ( lumped_mass_ )
-                    Kokkos::parallel_for( "ad_supg_fast_L", fast_policy,
-                        KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< true, false, false >( t ); } );
-                else
-                    Kokkos::parallel_for( "ad_supg_fast", fast_policy,
-                        KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< false, false, false >( t ); } );
-            }
-        }
+                    // 2x2x2 = 8 template variants; host-side branch on runtime flags.
+                    if ( diagonal_ )
+                    {
+                        if ( treat_boundary_ && lumped_mass_ )
+                            Kokkos::parallel_for( "ad_supg_fast_D_L_TB", fast_policy,
+                                KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< true, true, true >( t ); } );
+                        else if ( treat_boundary_ )
+                            Kokkos::parallel_for( "ad_supg_fast_D_TB", fast_policy,
+                                KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< false, true, true >( t ); } );
+                        else if ( lumped_mass_ )
+                            Kokkos::parallel_for( "ad_supg_fast_D_L", fast_policy,
+                                KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< true, true, false >( t ); } );
+                        else
+                            Kokkos::parallel_for( "ad_supg_fast_D", fast_policy,
+                                KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< false, true, false >( t ); } );
+                    }
+                    else
+                    {
+                        if ( treat_boundary_ && lumped_mass_ )
+                            Kokkos::parallel_for( "ad_supg_fast_L_TB", fast_policy,
+                                KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< true, false, true >( t ); } );
+                        else if ( treat_boundary_ )
+                            Kokkos::parallel_for( "ad_supg_fast_TB", fast_policy,
+                                KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< false, false, true >( t ); } );
+                        else if ( lumped_mass_ )
+                            Kokkos::parallel_for( "ad_supg_fast_L", fast_policy,
+                                KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< true, false, false >( t ); } );
+                        else
+                            Kokkos::parallel_for( "ad_supg_fast", fast_policy,
+                                KOKKOS_CLASS_LAMBDA( const Team& t ) { this->template run_team_fast< false, false, false >( t ); } );
+                    }
+                }
+        } );
 
         Kokkos::fence();
         timer_kernel.stop();
@@ -512,7 +519,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
         dst[0] = ( M[0] + A[0] ) * src[0];
         dst[1] = ( M[1] + A[1] ) * src[1];
 
-        atomically_add_local_wedge_scalar_coefficients( dst_, s, x_cell, y_cell, r_cell, dst );
+        atomically_add_local_wedge_scalar_coefficients( dst_, s, x_cell, y_cell, r_cell, dst, fp_ );
     }
 
     // ----------------------------------------------------------
@@ -973,7 +980,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                         const int ddx = WEDGE_NODE_OFF[w][i][0];
                         const int ddy = WEDGE_NODE_OFF[w][i][1];
                         const int ddr = WEDGE_NODE_OFF[w][i][2];
-                        Kokkos::atomic_add( &dst_( local_subdomain_id, xc + ddx, yc + ddy, rc + ddr ), dst_acc[i] );
+                        det::add( fp_, &dst_( local_subdomain_id, xc + ddx, yc + ddy, rc + ddr ), dst_acc[i] );
                     }
                 }
             } // end wedge loop

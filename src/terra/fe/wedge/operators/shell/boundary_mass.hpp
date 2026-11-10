@@ -10,6 +10,7 @@
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
 #include "linalg/vector_w1.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -69,6 +70,9 @@ class BoundaryMass
         }
     }
 
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
         if ( operator_apply_mode_ == linalg::OperatorApplyMode::Replace )
@@ -79,30 +83,33 @@ class BoundaryMass
         src_ = src.grid_data();
         dst_ = dst.grid_data();
 
-        if ( boundary_flag_ == grid::shell::ShellBoundaryFlag::CMB )
-        {
-            Kokkos::parallel_for(
-                "matvec",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
-                    { 0, 0, 0, 0 },
-                    { static_cast< long long >( domain_.subdomains().size() ),
-                      domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
-                      domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
-                      1 } ),
-                *this );
-        }
-        else if ( boundary_flag_ == grid::shell::ShellBoundaryFlag::SURFACE )
-        {
-            Kokkos::parallel_for(
-                "matvec",
-                Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
-                    { 0, 0, 0, domain_.domain_info().subdomain_num_nodes_radially() - 2 },
-                    { static_cast< long long >( domain_.subdomains().size() ),
-                      domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
-                      domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
-                      domain_.domain_info().subdomain_num_nodes_radially() - 1 } ),
-                *this );
-        }
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, det::max_abs( src_ ), det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+                if ( boundary_flag_ == grid::shell::ShellBoundaryFlag::CMB )
+                {
+                    Kokkos::parallel_for(
+                        "matvec",
+                        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                            { 0, 0, 0, 0 },
+                            { static_cast< long long >( domain_.subdomains().size() ),
+                              domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
+                              domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
+                              1 } ),
+                        *this );
+                }
+                else if ( boundary_flag_ == grid::shell::ShellBoundaryFlag::SURFACE )
+                {
+                    Kokkos::parallel_for(
+                        "matvec",
+                        Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                            { 0, 0, 0, domain_.domain_info().subdomain_num_nodes_radially() - 2 },
+                            { static_cast< long long >( domain_.subdomains().size() ),
+                              domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
+                              domain_.domain_info().subdomain_num_nodes_per_side_laterally() - 1,
+                              domain_.domain_info().subdomain_num_nodes_radially() - 1 } ),
+                        *this );
+                }
+        } );
 
         Kokkos::fence();
 
@@ -191,7 +198,7 @@ class BoundaryMass
         dst[0] = A[0] * src[0];
         dst[1] = A[1] * src[1];
 
-        atomically_add_local_wedge_scalar_coefficients( dst_, local_subdomain_id, x_cell, y_cell, r_cell, dst );
+        atomically_add_local_wedge_scalar_coefficients( dst_, local_subdomain_id, x_cell, y_cell, r_cell, dst, fp_ );
     }
 };
 
