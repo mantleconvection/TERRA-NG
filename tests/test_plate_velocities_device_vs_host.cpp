@@ -102,7 +102,7 @@ void compare_at_level( plates::PlateVelocityProvider& oracle, const int level, c
         auto radii_h  = Kokkos::create_mirror_view( radii_grid );
         Kokkos::deep_copy( coords_h, coords );
         Kokkos::deep_copy( radii_h, radii_grid );
-        auto host_h = create_mirror( Kokkos::HostSpace{}, host_v );
+        auto host_h = create_mirror( host_v );
         for ( int d = 0; d < 3; ++d )
             Kokkos::deep_copy( host_h.comp_[d], ScalarType( 0 ) );
 
@@ -197,8 +197,8 @@ void compare_at_level( plates::PlateVelocityProvider& oracle, const int level, c
 
     // ---- DIAGNOSTIC: do host/device disagree where the tangent frame differs? -----------------------------
     {
-        auto dev_h  = create_mirror( Kokkos::HostSpace{}, device_v );
-        auto host_h = create_mirror( Kokkos::HostSpace{}, host_v );
+        auto dev_h  = create_mirror( device_v );
+        auto host_h = create_mirror( host_v );
         deep_copy( dev_h, device_v );
         deep_copy( host_h, host_v );
 
