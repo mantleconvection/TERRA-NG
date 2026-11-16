@@ -12,7 +12,7 @@
 //      and two-node stencils used where a full window does not fit.
 //   2. The limiter itself, on step data: unlimited, the one-sided end slope drags the first interval to
 //      -0.125; limited, the interval does not leave the data at all.
-//   3. evaluate_cubic_scalar / evaluate_cubic_vec on the tensor product: exact to round-off for a field that
+//   3. evaluate_high_order_scalar / evaluate_high_order_vec on the tensor product: exact to round-off for a field that
 //      is quadratic in each lateral index direction and in the radius, over every cell of the block, both
 //      triangles of each hex cell, and reference coordinates including the cell corners. Q1 runs alongside on
 //      the same data and is asserted to be wrong by ~1e-1 -- without that guard the exactness check would
@@ -25,6 +25,7 @@
 //      own interval's endpoints and the three compose -- so the clip after the sweeps is only load-bearing
 //      for a foot point that has drifted out of its cell, which is checked separately.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
@@ -184,9 +185,9 @@ ScalarType worst_cell_range_escape( const FieldView&     field,
                         {
                             const WedgeCell cell{ x, y, r, w };
 
-                            const ScalarType value = fe::wedge::sl::evaluate_cubic_scalar(
+                            const ScalarType value = fe::wedge::sl::evaluate_high_order_scalar(
                                 field, 0, cell, sample_xi[s], sample_eta[s], sample_zeta[t], radii, stencil,
-                                valid, true );
+                                valid, fe::wedge::sl::CellRangeLimiter::Clip );
 
                             ScalarType lo = 0.0, hi = 0.0;
                             fe::wedge::sl::cell_value_range( field, 0, cell, lo, hi );
@@ -247,12 +248,12 @@ void test_tensor_product()
                                 fe::wedge::sl::wedge_radius_from_zeta( 0, cell, radii, zeta );
                             const ScalarType exact = tri_quadratic( u, v, rho );
 
-                            const ScalarType cubic = fe::wedge::sl::evaluate_cubic_scalar(
-                                field, 0, cell, xi, eta, zeta, radii, stencil, valid, false );
+                            const ScalarType cubic = fe::wedge::sl::evaluate_high_order_scalar(
+                                field, 0, cell, xi, eta, zeta, radii, stencil, valid, fe::wedge::sl::CellRangeLimiter::None );
                             const ScalarType q1 =
                                 fe::wedge::sl::evaluate_q1_scalar( field, 0, cell, xi, eta, zeta );
 
-                            const auto vec = fe::wedge::sl::evaluate_cubic_vec< ScalarType, 2 >(
+                            const auto vec = fe::wedge::sl::evaluate_high_order_vec< ScalarType, 2 >(
                                 vfield, 0, cell, xi, eta, zeta, radii, stencil, valid, false );
 
                             max_cubic_error = std::max( max_cubic_error, std::abs( cubic - exact ) );
@@ -266,8 +267,8 @@ void test_tensor_product()
     std::cout << "  tri-quadratic field: cubic err=" << fmt( max_cubic_error )
               << "  cubic_vec err=" << fmt( max_vec_error ) << "  Q1 err=" << fmt( max_q1_error ) << std::endl;
 
-    check( max_cubic_error < 1e-12, "evaluate_cubic_scalar is not exact for a tri-quadratic field" );
-    check( max_vec_error < 1e-12, "evaluate_cubic_vec disagrees with the scalar reconstruction" );
+    check( max_cubic_error < 1e-12, "evaluate_high_order_scalar is not exact for a tri-quadratic field" );
+    check( max_vec_error < 1e-12, "evaluate_high_order_vec disagrees with the scalar reconstruction" );
 
     // Without this the checks above would pass on a silent fallback: Q1 cannot reproduce this field, so the
     // exactness only means something as long as Q1 is measurably wrong on the same data.
@@ -306,8 +307,8 @@ void test_fallbacks_and_limiter()
                                      StencilRange{ 0, num_nodes - 1 },
                                      StencilRange{ 0, num_nodes - 1 } };
 
-        check_close( fe::wedge::sl::evaluate_cubic_scalar(
-                         field, 0, cell, xi, eta, zeta, radii, trimmed, valid, false ),
+        check_close( fe::wedge::sl::evaluate_high_order_scalar(
+                         field, 0, cell, xi, eta, zeta, radii, trimmed, valid, fe::wedge::sl::CellRangeLimiter::None ),
                      fe::wedge::sl::evaluate_q1_scalar( field, 0, cell, xi, eta, zeta ),
                      1e-14,
                      "a cell outside the stencil bounds does not fall back to Q1" );
@@ -320,11 +321,11 @@ void test_fallbacks_and_limiter()
         const WedgeCell cell{ 2, 2, 2, 0 };
 
         const ScalarType with_valid_stencil =
-            fe::wedge::sl::evaluate_cubic_scalar( field, 0, cell, xi, eta, zeta, radii, stencil, valid, false );
+            fe::wedge::sl::evaluate_high_order_scalar( field, 0, cell, xi, eta, zeta, radii, stencil, valid, fe::wedge::sl::CellRangeLimiter::None );
 
         valid( 0, 1, 1 ) = 0;
         const ScalarType fallback =
-            fe::wedge::sl::evaluate_cubic_scalar( field, 0, cell, xi, eta, zeta, radii, stencil, valid, false );
+            fe::wedge::sl::evaluate_high_order_scalar( field, 0, cell, xi, eta, zeta, radii, stencil, valid, fe::wedge::sl::CellRangeLimiter::None );
         valid( 0, 1, 1 ) = 1;
 
         check_close( fallback,
@@ -358,9 +359,9 @@ void test_fallbacks_and_limiter()
         {
             const WedgeCell cell{ 2, 2, r, 0 };
             min_unlimited = std::min( min_unlimited,
-                                      fe::wedge::sl::evaluate_cubic_scalar( field, 0, cell, sample_xi[0],
+                                      fe::wedge::sl::evaluate_high_order_scalar( field, 0, cell, sample_xi[0],
                                                                             sample_eta[0], sample_zeta[t],
-                                                                            radii, stencil, valid, false ) );
+                                                                            radii, stencil, valid, fe::wedge::sl::CellRangeLimiter::None ) );
         }
 
     for ( int i = 0; i < num_nodes; ++i )
@@ -419,10 +420,10 @@ void test_fallbacks_and_limiter()
     const WedgeCell  drifted{ 2, 2, 0, 0 };
     const ScalarType drifted_zeta = 1.8;
 
-    const ScalarType drifted_limited = fe::wedge::sl::evaluate_cubic_scalar(
-        field, 0, drifted, 0.1, 0.2, drifted_zeta, radii, stencil, valid, true );
-    const ScalarType drifted_unlimited = fe::wedge::sl::evaluate_cubic_scalar(
-        field, 0, drifted, 0.1, 0.2, drifted_zeta, radii, stencil, valid, false );
+    const ScalarType drifted_limited = fe::wedge::sl::evaluate_high_order_scalar(
+        field, 0, drifted, 0.1, 0.2, drifted_zeta, radii, stencil, valid, fe::wedge::sl::CellRangeLimiter::Clip );
+    const ScalarType drifted_unlimited = fe::wedge::sl::evaluate_high_order_scalar(
+        field, 0, drifted, 0.1, 0.2, drifted_zeta, radii, stencil, valid, fe::wedge::sl::CellRangeLimiter::None );
 
     check_close( drifted_limited,
                  0.0,
@@ -430,6 +431,48 @@ void test_fallbacks_and_limiter()
                  "a drifted foot point is not clipped into the range of its own cell's nodes" );
     check( drifted_unlimited > 1e-3,
            "the drifted foot point no longer leaves its cell's range, so the clip check above is vacuous" );
+
+    // (e) CellRangeLimiter::Q1Fallback: an in-range reconstruction is returned unchanged, an out-of-range one is
+    //     replaced by the Q1 value of the cell, clipped into the same range. Checked at every sample point of
+    //     the radial jump field for the cubic and the quintic stencil.
+    {
+        const ScalarType drifted_fallback = fe::wedge::sl::evaluate_high_order_scalar(
+            field, 0, drifted, 0.1, 0.2, drifted_zeta, radii, stencil, valid,
+            fe::wedge::sl::CellRangeLimiter::Q1Fallback );
+        check_close( drifted_fallback, 0.0, 1e-15, "Q1 fallback leaves the drifted foot point outside its cell's range" );
+
+        int    num_fallbacks = 0;
+        double worst         = 0.0;
+        for ( const int width : { fe::wedge::sl::cubic_stencil_size, fe::wedge::sl::quintic_stencil_size } )
+            for ( int cx = 0; cx < num_nodes - 1; ++cx )
+                for ( int cr = 0; cr < num_nodes - 1; ++cr )
+                    for ( int w = 0; w < 2; ++w )
+                        for ( const ScalarType zeta : { -0.9, -0.3, 0.4, 0.95 } )
+                        {
+                            const WedgeCell  cell{ cx, 2, cr, w };
+                            const ScalarType xi = 0.2, eta = 0.3;
+
+                            const ScalarType raw = fe::wedge::sl::evaluate_high_order_scalar(
+                                field, 0, cell, xi, eta, zeta, radii, stencil, valid,
+                                fe::wedge::sl::CellRangeLimiter::None, false, width );
+                            const ScalarType fb = fe::wedge::sl::evaluate_high_order_scalar(
+                                field, 0, cell, xi, eta, zeta, radii, stencil, valid,
+                                fe::wedge::sl::CellRangeLimiter::Q1Fallback, false, width );
+
+                            ScalarType lo = 0.0, hi = 0.0;
+                            fe::wedge::sl::cell_value_range( field, 0, cell, lo, hi );
+                            const bool       inside   = raw >= lo && raw <= hi;
+                            const ScalarType q1       = fe::wedge::sl::evaluate_q1_scalar( field, 0, cell, xi, eta, zeta );
+                            const ScalarType expected = inside ? raw : std::clamp( q1, lo, hi );
+                            if ( !inside )
+                                ++num_fallbacks;
+                            worst = std::max( worst, static_cast< double >( std::abs( fb - expected ) ) );
+                        }
+
+        std::cout << "  Q1 fallback: " << num_fallbacks << " out-of-range reconstructions replaced, max deviation "
+                  << fmt( worst ) << std::endl;
+        check( worst <= 1e-15, "Q1 fallback does not return the reconstruction or the clipped Q1 value" );
+    }
 }
 
 } // namespace

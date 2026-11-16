@@ -1137,11 +1137,10 @@ void fill_dirichlet_temperature(
 /// Semi-Lagrangian (MMOC) energy solve with split implicit diffusion.
 ///
 /// One step is  A(dt) -> D(dt), where A is the modified method of characteristics
-/// (\ref terra::fe::wedge::operators::shell::MMOCTransport, RK4 foot-point tracing, quintic reconstruction)
-/// and D is the implicit Galerkin diffusion solve (the advection-diffusion operator at zero velocity with
-/// SUPG off, i.e. M + dt*K_diff). Lie splitting on purpose: the diffusion solve is backward Euler, so Strang
-/// would double the Krylov cost without raising the order. Diffusion runs last so the Dirichlet values are the
-/// ones imposed at the end of the step.
+/// (\ref terra::fe::wedge::operators::shell::MMOCTransport, RK4 foot-point tracing, quintic reconstruction by
+/// default) and D is the implicit Galerkin diffusion solve (the advection-diffusion operator at zero velocity
+/// with SUPG off, i.e. M + dt*K_diff). Diffusion runs last so the Dirichlet values are the ones imposed at the
+/// end of the step.
 ///
 /// The heat sources enter the diffusion right-hand side exactly as in the EV solver, through the same
 /// coefficient functors and linear forms: q += dt * ( K_H * 1 + adiabatic + shear ), evaluated with the
@@ -1149,7 +1148,7 @@ void fill_dirichlet_temperature(
 ///
 /// The characteristic tracing has no stability limit of its own; the timestep is bounded by the requirement
 /// that a departure point stays inside the ghost layer, i.e. a Courant number below
-/// \ref MMOCTransport::max_courant (0.9 * ghost width).
+/// \ref MMOCTransport::max_courant (0.9 * ghost width, set with --mmoc-ghost-width).
 template < typename ScalarType, typename CoeffType >
 class MMOCSolver : public EnergySolver< ScalarType >
 {
@@ -1194,7 +1193,7 @@ class MMOCSolver : public EnergySolver< ScalarType >
     , h_( h )
     , prm_( prm )
     , table_( std::move( table ) )
-    , transport_( *domain, ownership_mask, fe::wedge::operators::shell::TimeSteppingScheme::RK4 )
+    , transport_( *domain, ownership_mask, transport_options( prm ) )
     , u_prev_( "mmoc_u_prev", *domain, ownership_mask )
     , u_zero_( "mmoc_u_zero", *domain, ownership_mask )
     , g_( "mmoc_g", *domain, ownership_mask )
@@ -1249,8 +1248,11 @@ class MMOCSolver : public EnergySolver< ScalarType >
             table_,
             DiagSolverT( diag_ ) );
 
-        util::logroot << "MMOC energy solver ready (max Courant " << Transport::max_courant()
-                      << ", RK4 tracing, quintic reconstruction, point-location tolerance "
+        const auto& ep = prm_.energy_solver_parameters;
+        util::logroot << "MMOC energy solver ready (ghost width " << transport_.ghost_width() << ", max Courant "
+                      << transport_.max_courant() << ", RK4 tracing, temperature stencil width "
+                      << ep.mmoc_interpolation_width << ", velocity stencil width "
+                      << ep.mmoc_velocity_interpolation_width << ", point-location tolerance "
                       << transport_.locate_tolerance() << ")." << std::endl;
     }
 
@@ -1259,7 +1261,7 @@ class MMOCSolver : public EnergySolver< ScalarType >
         const auto max_vel = kernels::common::max_vector_magnitude( velocity_.grid_data() );
         // Diffusion is implicit and the characteristic tracing is unconditionally stable; the bound is that
         // the departure point must stay inside the ghost layer (Courant < max_courant).
-        const auto dt_courant = Transport::max_courant() * h_ / max_vel;
+        const auto dt_courant = transport_.max_courant() * h_ / max_vel;
         const auto dt_cfl     = std::min(
             static_cast< ScalarType >( prm_.time_stepping_parameters.cfl_number ) * h_ / max_vel, dt_courant );
         // The dt_min floor must never raise dt above the Courant-stable step.
@@ -1301,12 +1303,30 @@ class MMOCSolver : public EnergySolver< ScalarType >
             util::logroot << "    NOTE: " << transport_.last_escapes()
                           << " departure points could not be located and were interpolated at the nearest point of the last located cell. If this "
                              "count grows with dt, lower the CFL number below "
-                          << Transport::max_courant()
+                          << transport_.max_courant()
                           << "; if it is constant, it is the fixed set of degenerate corner regions." << std::endl;
         }
     }
 
   private:
+    static fe::wedge::operators::shell::MMOCTransportOptions transport_options( const Parameters& prm )
+    {
+        namespace sl    = fe::wedge::sl;
+        const auto& ep  = prm.energy_solver_parameters;
+        auto        lim = sl::CellRangeLimiter::Clip;
+        if ( ep.mmoc_cell_limiter == MMOCCellLimiter::Q1_FALLBACK )
+            lim = sl::CellRangeLimiter::Q1Fallback;
+        else if ( ep.mmoc_cell_limiter == MMOCCellLimiter::NONE )
+            lim = sl::CellRangeLimiter::None;
+
+        return fe::wedge::operators::shell::MMOCTransportOptions{
+            .scheme                       = fe::wedge::operators::shell::TimeSteppingScheme::RK4,
+            .interpolation_width          = ep.mmoc_interpolation_width,
+            .velocity_interpolation_width = ep.mmoc_velocity_interpolation_width,
+            .limiter                      = lim,
+            .ghost_width                  = ep.mmoc_ghost_width };
+    }
+
     /// Component-wise copy: the vector grid data is stored as separate views per component (SoA).
     static void copy_velocity(
         const linalg::VectorW1Vec< ScalarType, 3 >& src,

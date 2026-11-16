@@ -299,6 +299,15 @@ enum class EnergySolverType
     ENTROPY_VISCOSITY,
     MMOC,
 };
+
+/// How the MMOC foot-point reconstruction is bounded by the node range of its cell.
+enum class MMOCCellLimiter
+{
+    CLIP,        ///< clip into the cell's node range
+    Q1_FALLBACK, ///< replace an out-of-range value by the (clipped) Q1 value
+    NONE,        ///< unbounded
+};
+
 struct EnergySolverParameters
 {
     int    krylov_restart            = 5;
@@ -320,6 +329,12 @@ struct EnergySolverParameters
     /// If true, log global min/max/mean of the per-wedge ν_h field once per
     /// output_frequency to <outdir>/nu_h_stats.csv (timestep, min, max, mean).
     bool ev_dump_nu_h = false;
+
+    /// MMOC parameters (only used when `energy_solver == MMOC`).
+    int             mmoc_ghost_width                  = 3; ///< ghost layers; max Courant number is 0.9x this
+    int             mmoc_interpolation_width          = 6; ///< temperature stencil: 2 = Q1, 4 = cubic, 6 = quintic
+    int             mmoc_velocity_interpolation_width = 2; ///< velocity stencil, same encoding
+    MMOCCellLimiter mmoc_cell_limiter                 = MMOCCellLimiter::CLIP;
 
     EnergySolverType energy_solver = EnergySolverType::ENTROPY_VISCOSITY;
 };
@@ -976,6 +991,37 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Energy Solver" );
     add_option_with_default( app, "--ev-dump-nu-h", parameters.energy_solver_parameters.ev_dump_nu_h )
         ->group( "Energy Solver" );
+
+    add_option_with_default( app, "--mmoc-ghost-width", parameters.energy_solver_parameters.mmoc_ghost_width )
+        ->check( CLI::PositiveNumber )
+        ->group( "Energy Solver" )
+        ->description(
+            "MMOC ghost layer width in nodes. The departure point must stay inside it, so the timestep is capped "
+            "at a Courant number of 0.9 x this width; wider layers cost memory and a larger halo exchange." );
+    add_option_with_default(
+        app, "--mmoc-interpolation-width", parameters.energy_solver_parameters.mmoc_interpolation_width )
+        ->check( CLI::IsMember( { 2, 4, 6 } ) )
+        ->group( "Energy Solver" )
+        ->description( "MMOC temperature reconstruction at the departure point: 2 = Q1, 4 = cubic, 6 = quintic." );
+    add_option_with_default(
+        app,
+        "--mmoc-velocity-interpolation-width",
+        parameters.energy_solver_parameters.mmoc_velocity_interpolation_width )
+        ->check( CLI::IsMember( { 2, 4, 6 } ) )
+        ->group( "Energy Solver" )
+        ->description( "MMOC velocity reconstruction along the characteristics: 2 = Q1, 4 = cubic, 6 = quintic." );
+
+    std::map< std::string, MMOCCellLimiter > mmoc_cell_limiter_map{
+        { "clip", MMOCCellLimiter::CLIP },
+        { "q1", MMOCCellLimiter::Q1_FALLBACK },
+        { "none", MMOCCellLimiter::NONE },
+    };
+    add_option_with_default( app, "--mmoc-cell-limiter", parameters.energy_solver_parameters.mmoc_cell_limiter )
+        ->transform( CLI::CheckedTransformer( mmoc_cell_limiter_map, CLI::ignore_case ) )
+        ->group( "Energy Solver" )
+        ->description(
+            "Bounding of the MMOC departure-point value by its cell's node range. 'clip': clamp into the range. "
+            "'q1': where the high-order value leaves the range, use the Q1 value instead. 'none': unbounded." );
 
     //////////////////////
     /// Input / output ///

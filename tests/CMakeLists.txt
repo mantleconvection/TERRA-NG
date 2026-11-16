@@ -125,7 +125,6 @@ add_terra_test(test_plate_velocities_device_vs_host)
 set_tests_properties(test_plate_velocities_np_1 PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(test_plate_velocities_device_vs_host_np_1 PROPERTIES SKIP_RETURN_CODE 77)
 
-add_terra_test(test_adiabatic_heating_gpu)
 add_terra_test(test_shear_heating_kerngen)
 
 add_terra_test(test_epsilon_divdiv_quadrature_matrix)

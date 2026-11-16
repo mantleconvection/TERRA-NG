@@ -43,6 +43,7 @@ grid::Grid4DDataVec< T, 3 > ghosted_unit_sphere_coords(
     const int num_sub  = exchange.num_subdomains();
     const int num_lat  = exchange.num_nodes_lateral();
     const int num_radg = exchange.num_nodes_radial_ghosted();
+    const int gw       = exchange.ghost_width();
 
     // Replicate the lateral directions over every radial layer, ghosts included.
     Kokkos::parallel_for(
@@ -50,7 +51,7 @@ grid::Grid4DDataVec< T, 3 > ghosted_unit_sphere_coords(
         Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { num_sub, num_lat, num_lat, num_radg } ),
         KOKKOS_LAMBDA( const int sd, const int x, const int y, const int r ) {
             for ( int d = 0; d < 3; ++d )
-                ghosted( sd, to_ghosted_index( x ), to_ghosted_index( y ), r, d ) = owned( sd, x, y, d );
+                ghosted( sd, to_ghosted_index( x, gw ), to_ghosted_index( y, gw ), r, d ) = owned( sd, x, y, d );
         } );
     Kokkos::fence();
 
@@ -75,6 +76,7 @@ grid::Grid2DDataScalar< T > ghosted_shell_radii(
     const int  layers          = num_nodes_rad - 1;
     const auto radii           = domain.domain_info().radii();
     const int  num_global      = static_cast< int >( radii.size() );
+    const int  ghost_width     = exchange.ghost_width();
 
     grid::Grid2DDataScalar< T > device( "sl_ghosted_shell_radii", exchange.num_subdomains(), num_nodes_rad_g );
     auto                        host = Kokkos::create_mirror_view( device );
@@ -127,7 +129,8 @@ Kokkos::View< uint8_t*** > ghosted_lateral_validity(
     const grid::Grid4DDataVec< T, 3 >& coords_g )
 {
     const int num_sub = exchange.num_subdomains();
-    const int n_lat_g = exchange.num_nodes_lateral_ghosted();
+    const int n_lat_g     = exchange.num_nodes_lateral_ghosted();
+    const int ghost_width = exchange.ghost_width();
 
     Kokkos::View< uint8_t*** > valid( "sl_lateral_validity", num_sub, n_lat_g, n_lat_g );
     Kokkos::deep_copy( valid, static_cast< uint8_t >( 1 ) );

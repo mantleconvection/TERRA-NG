@@ -37,7 +37,6 @@ using ScalarType = double;
 using fe::wedge::sl::GhostExchange;
 using fe::wedge::sl::IndexBounds;
 using fe::wedge::sl::WedgeCell;
-using fe::wedge::sl::ghost_width;
 using fe::wedge::sl::to_ghosted_index;
 
 namespace
@@ -64,7 +63,7 @@ void check( const bool ok, const std::string& what )
 } // namespace
 
 void test( const int level, const int subdomain_level = 0, const ScalarType r_lo = 0.5,
-           const ScalarType r_hi = 1.0 )
+           const ScalarType r_hi = 1.0, const int ghost_width = fe::wedge::sl::default_ghost_width )
 {
     // subdomain_level > 0 splits every diamond into (2^k)^2 x 2^k subdomains, which is what the mantle
     // circulation app runs with -- and which creates many more interface corners than one subdomain per
@@ -72,7 +71,9 @@ void test( const int level, const int subdomain_level = 0, const ScalarType r_lo
     const auto domain = grid::shell::DistributedDomain::create_uniform(
         level, level, r_lo, r_hi, subdomain_level, subdomain_level );
 
-    const GhostExchange exchange( domain );
+    const GhostExchange exchange( domain, ghost_width );
+    std::cout << "level " << level << ", subdomain level " << subdomain_level << ", ghost width " << ghost_width
+              << std::endl;
 
     const int num_sub  = exchange.num_subdomains();
     const int n_lat    = exchange.num_nodes_lateral();
@@ -180,9 +181,9 @@ void test( const int level, const int subdomain_level = 0, const ScalarType r_lo
                 if ( !near_boundary )
                     return;
 
-                const int gx = to_ghosted_index( x );
-                const int gy = to_ghosted_index( y );
-                const int gr = to_ghosted_index( r );
+                const int gx = to_ghosted_index( x, ghost_width );
+                const int gy = to_ghosted_index( y, ghost_width );
+                const int gr = to_ghosted_index( r, ghost_width );
 
                 dense::Vec< ScalarType, 3 > p;
                 for ( int d = 0; d < 3; ++d )
@@ -193,7 +194,7 @@ void test( const int level, const int subdomain_level = 0, const ScalarType r_lo
                 const int nx = ( x + 1 < n_lat ) ? x + 1 : x - 1;
                 dense::Vec< ScalarType, 3 > q;
                 for ( int d = 0; d < 3; ++d )
-                    q( d ) = coords_g( sd, to_ghosted_index( nx ), gy, gr, d );
+                    q( d ) = coords_g( sd, to_ghosted_index( nx, ghost_width ), gy, gr, d );
                 const ScalarType h = ( q * radii_g( sd, gr ) - X0 ).norm();
 
                 // An orthonormal tangent frame at X0.
@@ -210,9 +211,9 @@ void test( const int level, const int subdomain_level = 0, const ScalarType r_lo
                                                 e_r( 2 ) * e1( 0 ) - e_r( 0 ) * e1( 2 ),
                                                 e_r( 0 ) * e1( 1 ) - e_r( 1 ) * e1( 0 ) };
 
-                const WedgeCell seed{ to_ghosted_index( Kokkos::min( x, n_lat - 2 ) ),
-                                      to_ghosted_index( Kokkos::min( y, n_lat - 2 ) ),
-                                      to_ghosted_index( Kokkos::min( r, n_rad - 2 ) ),
+                const WedgeCell seed{ to_ghosted_index( Kokkos::min( x, n_lat - 2 ), ghost_width ),
+                                      to_ghosted_index( Kokkos::min( y, n_lat - 2 ), ghost_width ),
+                                      to_ghosted_index( Kokkos::min( r, n_rad - 2 ), ghost_width ),
                                       0 };
 
                 for ( int k = 0; k < 8; ++k )
@@ -269,7 +270,7 @@ void test( const int level, const int subdomain_level = 0, const ScalarType r_lo
         const int corners[4][2] = { { 0, 0 }, { 0, last }, { last, 0 }, { last, last } };
         // Reference against the nearest *owned* diagonal node, which is ghost_width steps in; at width 1 that
         // is the immediate neighbour, as before.
-        constexpr int gw        = fe::wedge::sl::ghost_width;
+        const int     gw        = ghost_width;
         const int     inner[4][2] = { { gw, gw }, { gw, last - gw }, { last - gw, gw }, { last - gw, last - gw } };
 
         auto coords_h = Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace{}, coords_g.comp_[0] );
@@ -295,9 +296,9 @@ void test( const int level, const int subdomain_level = 0, const ScalarType r_lo
                     ( dir( sd, corners[k][0], corners[k][1] ) - dir( sd, inner[k][0], inner[k][1] ) ).norm() / h;
                 // The inner reference is one node diagonally inside the *owned* block, so the separation grows
                 // with the layer width.
-                const double expected = std::sqrt( 2.0 ) * fe::wedge::sl::ghost_width;
+                const double expected = std::sqrt( 2.0 ) * ghost_width;
                 worst                 = std::max( worst, std::abs( d - expected ) );
-                if ( std::abs( d - expected ) > 0.5 * fe::wedge::sl::ghost_width )
+                if ( std::abs( d - expected ) > 0.5 * ghost_width )
                 {
                     ++num_bad;
                     if ( num_bad <= 6 )
@@ -364,7 +365,7 @@ void test( const int level, const int subdomain_level = 0, const ScalarType r_lo
                 acc += 1;
                 // The degenerate region is the ghost_width x ghost_width block at each corner: with a layer
                 // wider than one node every node of that block lies diagonally outside the subdomain.
-                constexpr int gw        = fe::wedge::sl::ghost_width;
+                const int     gw        = ghost_width;
                 const bool    corner_x  = ( x < gw ) || ( x >= n_lat_g - gw );
                 const bool    corner_y  = ( y < gw ) || ( y >= n_lat_g - gw );
                 const bool    is_corner = corner_x && corner_y;
@@ -380,7 +381,7 @@ void test( const int level, const int subdomain_level = 0, const ScalarType r_lo
 
         check( num_non_corner_invalid == 0, "validity mask rejected a node that is not a diagonal corner" );
         check( num_invalid > 0, "validity mask rejected nothing -- degenerate-corner detection is not firing" );
-        check( num_invalid <= 4 * fe::wedge::sl::ghost_width * fe::wedge::sl::ghost_width * num_sub,
+        check( num_invalid <= 4 * ghost_width * ghost_width * num_sub,
                "validity mask rejected more than the four corner blocks per subdomain" );
     }
 
@@ -400,18 +401,18 @@ void test( const int level, const int subdomain_level = 0, const ScalarType r_lo
             "self_location",
             Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >( { 0, 0, 0, 0 }, { num_sub, n_lat, n_lat, n_rad } ),
             KOKKOS_LAMBDA( const int sd, const int x, const int y, const int r, long long& acc ) {
-                const int gx = to_ghosted_index( x );
-                const int gy = to_ghosted_index( y );
-                const int gr = to_ghosted_index( r );
+                const int gx = to_ghosted_index( x, ghost_width );
+                const int gy = to_ghosted_index( y, ghost_width );
+                const int gr = to_ghosted_index( r, ghost_width );
 
                 dense::Vec< ScalarType, 3 > p;
                 for ( int d = 0; d < 3; ++d )
                     p( d ) = coords_g( sd, gx, gy, gr, d );
                 const auto X = p * radii_g( sd, gr );
 
-                const WedgeCell seed{ to_ghosted_index( Kokkos::min( x, n_lat - 2 ) ),
-                                      to_ghosted_index( Kokkos::min( y, n_lat - 2 ) ),
-                                      to_ghosted_index( Kokkos::min( r, n_rad - 2 ) ),
+                const WedgeCell seed{ to_ghosted_index( Kokkos::min( x, n_lat - 2 ), ghost_width ),
+                                      to_ghosted_index( Kokkos::min( y, n_lat - 2 ), ghost_width ),
+                                      to_ghosted_index( Kokkos::min( r, n_rad - 2 ), ghost_width ),
                                       0 };
 
                 const auto res = fe::wedge::sl::locate_point(
@@ -455,6 +456,8 @@ int main( int argc, char** argv )
     test( 4 );
     test( 4, 1 );                  // the mantle circulation app's decomposition
     test( 4, 1, 1.22, 2.22 );      // ... and its geometry
+    test( 4, 1, 1.22, 2.22, 1 );   // other ghost widths
+    test( 4, 1, 1.22, 2.22, 4 );
 
     int failures = g_failures;
     MPI_Allreduce( MPI_IN_PLACE, &failures, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD );

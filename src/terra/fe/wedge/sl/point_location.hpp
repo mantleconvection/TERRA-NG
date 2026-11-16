@@ -13,11 +13,11 @@
 /// Point location and evaluation of Q1 wedge fields at arbitrary physical points.
 ///
 /// Two evaluators are offered once a point has been located: \ref evaluate_q1_scalar / \ref evaluate_q1_vec use
-/// the Q1 wedge shape functions of the containing cell and are second order, and \ref evaluate_cubic_scalar /
-/// \ref evaluate_cubic_vec reconstruct the field with a tensor product of Hermite cubics over
-/// the structured index stencil around the cell, which is third order. A semi-Lagrangian scheme commits its
-/// interpolation error afresh at every timestep, where it shows up as numerical diffusion, so the cubic is what
-/// the transport uses.
+/// the Q1 wedge shape functions of the containing cell and are second order, and \ref evaluate_high_order_scalar /
+/// \ref evaluate_high_order_vec reconstruct the field with a tensor product of one-dimensional interpolants
+/// (Hermite cubics on four nodes, Lagrange quintics on six) over the structured index stencil around the cell.
+/// A semi-Lagrangian scheme commits its interpolation error afresh at every timestep, where it shows up as
+/// numerical diffusion, so the transport uses the high-order reconstruction for the transported field.
 ///
 /// This is the geometric core of the semi-Lagrangian (MMOC) transport scheme. It exploits the fact that the
 /// shell mesh is a tensor product of a laterally triangulated sphere and a set of radial shells, so that the
@@ -820,7 +820,7 @@ struct StencilRange
     int hi = 0;
 };
 
-/// @brief Node index ranges the cubic interpolation stencil may read from.
+/// @brief Node index ranges the high-order interpolation stencil may read from.
 ///
 /// Both lateral ranges should be the **owned** block, not the ghosted index space. A lateral ghost row does
 /// carry a neighbour's real values, but it belongs to a different diamond of the icosahedral grid, and the map
@@ -1210,13 +1210,27 @@ KOKKOS_INLINE_FUNCTION void cell_value_range(
             }
 }
 
-/// @brief Evaluates a scalar wedge field by monotone cubic interpolation on the structured index stencil.
+/// @brief How \ref evaluate_high_order_scalar bounds a reconstructed value by the range of the cell's nodes.
+enum class CellRangeLimiter
+{
+    /// Return the reconstruction unbounded.
+    None,
+    /// Clip the reconstruction into the range of the eight nodes of the containing cell.
+    Clip,
+    /// Where the reconstruction leaves that range, use the Q1 value of the containing wedge instead (clipped
+    /// as well, since Q1 is only bounded when the point actually lies inside the wedge).
+    Q1Fallback,
+};
+
+/// @brief Evaluates a scalar wedge field by high-order interpolation on the structured index stencil.
 ///
 /// A drop-in, higher-order replacement for \ref evaluate_q1_scalar. The multilinear Q1 evaluation is only
 /// second order, and in a semi-Lagrangian scheme that error is committed once per timestep and accumulates as
-/// numerical diffusion; this instead reconstructs the field with a tensor product of the \f$ C^1 \f$,
-/// PCHIP-limited cubics of \ref pchip_interpolate_1d, laterally over the \f$ (x, y) \f$ index grid and radially
-/// over the shell radii.
+/// numerical diffusion; this instead reconstructs the field with a tensor product of one-dimensional
+/// interpolants, laterally over the \f$ (x, y) \f$ index grid and radially over the shell radii. The order is
+/// set by `preferred_width`, the number of stencil nodes per direction: 2 is the Q1 evaluation itself, 4 the
+/// \f$ C^1 \f$ cubics of \ref pchip_interpolate_1d, and 6 (\ref quintic_stencil_size) quintic Lagrange
+/// interpolation through \ref lagrange_interpolate_1d.
 ///
 /// Laterally the stencil is uniform in index space (the map from index space to the sphere is smooth, so the
 /// field is a smooth function of the indices and interpolating there is legitimate); radially it uses the
@@ -1230,14 +1244,16 @@ KOKKOS_INLINE_FUNCTION void cell_value_range(
 /// the evaluation falls back to \ref evaluate_q1_scalar on the located wedge, whose three lateral nodes the
 /// point location has already vetted. That affects at most the four hex cells at each corner of a subdomain.
 ///
-/// **Bounding the result.** `clip_to_cell` clips the reconstruction into the range of the eight nodes of the
-/// cell that contains the point — the property Q1 has for free, since it is a convex combination of exactly
+/// **Bounding the result.** `limiter` = \ref CellRangeLimiter::Clip clips the reconstruction into the range of
+/// the eight nodes of the cell that contains the point — the property Q1 has for free, since it is a convex combination of exactly
 /// those values, and the one a semi-Lagrangian step needs: a value outside that range is a new extremum the
 /// transport then has to carry. This is the Bermejo-Staniforth filter, and it is what the transport relies on.
 /// It matters most for a foot point that has drifted out of its cell: \ref locate_point reports
 /// \f$ \xi, \eta, \zeta \f$ straight from the closed-form inverse and does not clamp them onto the reference
 /// wedge, so a departure point can arrive here sitting in a neighbouring cell of the same stencil, where the
-/// tensor-product sweeps are bounded by *that* cell's nodes instead.
+/// tensor-product sweeps are bounded by *that* cell's nodes instead. \ref CellRangeLimiter::Q1Fallback instead
+/// replaces an out-of-range value by the Q1 value, which degrades the order locally at an overshoot rather than
+/// flattening it to the cell's extremum.
 ///
 /// `limit_slopes` additionally PCHIP-limits the nodal derivatives inside each one-dimensional sweep. **Leave it
 /// off.** It is off by default because applying it here does not give a monotone three-dimensional
@@ -1247,13 +1263,13 @@ KOKKOS_INLINE_FUNCTION void cell_value_range(
 /// revolution of the cone, with the limiter on: the peak is held at 0.644 of the exact 1.0, but the field
 /// spreads into a plateau — 185 nodes sit above 90% of the peak where the exact field has 1 — and the total
 /// mass grows monotonically to 3.0x its initial value, which is what drives an L2 error of 1.79. With the
-/// limiter off and only `clip_to_cell` in force the peak is lower at 0.355, but the plateau is gone (37 nodes
+/// limiter off and only the cell-range clip in force the peak is lower at 0.355, but the plateau is gone (37 nodes
 /// above 90% of the peak), mass ends within 12% of exact, and the L2 error falls to 0.845 -- better than the
 /// 0.896 of the Q1 evaluation this replaces, and inside the test's tolerance where 1.79 was not. The high peak
 /// the limiter appears to buy is mass it invented, not a peak it preserved.
 ///
 template < typename T, typename FieldViewType, typename CoordsRadiiType, typename LateralValidityType >
-KOKKOS_INLINE_FUNCTION T evaluate_cubic_scalar(
+KOKKOS_INLINE_FUNCTION T evaluate_high_order_scalar(
     const FieldViewType&       field,
     const int                  subdomain,
     const WedgeCell&           cell,
@@ -1263,8 +1279,8 @@ KOKKOS_INLINE_FUNCTION T evaluate_cubic_scalar(
     const CoordsRadiiType&     coords_radii,
     const StencilBounds&       stencil,
     const LateralValidityType& lateral_valid,
-    const bool                 clip_to_cell = true,
-    const bool                 limit_slopes = false,
+    const CellRangeLimiter     limiter         = CellRangeLimiter::Clip,
+    const bool                 limit_slopes    = false,
     const int                  preferred_width = cubic_stencil_size )
 {
     // A width of two asks for the Q1 wedge evaluation itself, which is what the stencil ladder bottoms out at
@@ -1313,25 +1329,28 @@ KOKKOS_INLINE_FUNCTION T evaluate_cubic_scalar(
     const T value = ( nr > cubic_stencil_size ) ? lagrange_interpolate_1d( rs, f_r, nr, rho )
                                                 : pchip_interpolate_1d( rs, f_r, nr, rho, limit_slopes );
 
-    if ( !clip_to_cell )
+    if ( limiter == CellRangeLimiter::None )
         return value;
 
     T lo = T( 0 ), hi = T( 0 );
     cell_value_range( field, subdomain, cell, lo, hi );
+    if ( limiter == CellRangeLimiter::Q1Fallback && ( value < lo || value > hi ) )
+        return Kokkos::clamp( evaluate_q1_scalar( field, subdomain, cell, xi, eta, zeta ), lo, hi );
     return Kokkos::clamp( value, lo, hi );
 }
 
-/// @brief Evaluates a vector wedge field by monotone cubic interpolation on the structured index stencil.
+/// @brief Evaluates a vector wedge field by high-order interpolation on the structured index stencil.
 ///
-/// Componentwise \ref evaluate_cubic_scalar; see there for the stencil and boundary handling. For a velocity
-/// this wants `monotone = false`: a velocity is smooth by construction, so the limiter can only cost accuracy.
+/// Componentwise \ref evaluate_high_order_scalar without the cell-range limiter; see there for the stencil, the
+/// boundary handling and the meaning of `preferred_width`. For a velocity this wants `monotone = false`: a
+/// velocity is smooth by construction, so the limiter can only cost accuracy.
 ///
 /// @note Whether a velocity is worth reconstructing this way is not obvious and should be measured. The MMOC
-///       transport keeps its velocity on \ref evaluate_q1_vec: in the rotation test the two are
-///       indistinguishable (the rigid-rotation velocity is linear in \f$ x \f$, which Q1 reproduces exactly
-///       while this reconstruction does not), and Q1 is an order of magnitude cheaper.
+///       transport defaults to \ref evaluate_q1_vec for the velocity (selectable): in the rotation test the two
+///       are indistinguishable (the rigid-rotation velocity is linear in \f$ x \f$, which Q1 reproduces
+///       exactly), and Q1 is an order of magnitude cheaper.
 template < typename T, int VecDim, typename FieldViewType, typename CoordsRadiiType, typename LateralValidityType >
-KOKKOS_INLINE_FUNCTION dense::Vec< T, VecDim > evaluate_cubic_vec(
+KOKKOS_INLINE_FUNCTION dense::Vec< T, VecDim > evaluate_high_order_vec(
     const FieldViewType&       field,
     const int                  subdomain,
     const WedgeCell&           cell,
@@ -1341,16 +1360,17 @@ KOKKOS_INLINE_FUNCTION dense::Vec< T, VecDim > evaluate_cubic_vec(
     const CoordsRadiiType&     coords_radii,
     const StencilBounds&       stencil,
     const LateralValidityType& lateral_valid,
-    const bool                 monotone = false )
+    const bool                 monotone        = false,
+    const int                  preferred_width = cubic_stencil_size )
 {
-    if ( !cell_inside_stencil_range( cell.x, stencil.x ) || !cell_inside_stencil_range( cell.y, stencil.y ) ||
-         !cell_inside_stencil_range( cell.r, stencil.r ) )
+    if ( preferred_width <= 2 || !cell_inside_stencil_range( cell.x, stencil.x ) ||
+         !cell_inside_stencil_range( cell.y, stencil.y ) || !cell_inside_stencil_range( cell.r, stencil.r ) )
         return evaluate_q1_vec< T, VecDim >( field, subdomain, cell, xi, eta, zeta );
 
     int       bx = 0, by = 0, br = 0;
-    const int nu = cubic_stencil_window( cell.x, stencil.x, bx );
-    const int nv = cubic_stencil_window( cell.y, stencil.y, by );
-    const int nr = cubic_stencil_window( cell.r, stencil.r, br );
+    const int nu = stencil_window( cell.x, stencil.x, preferred_width, bx );
+    const int nv = stencil_window( cell.y, stencil.y, preferred_width, by );
+    const int nr = stencil_window( cell.r, stencil.r, preferred_width, br );
 
     if ( !cubic_stencil_lateral_valid( subdomain, bx, by, nu, nv, lateral_valid ) )
         return evaluate_q1_vec< T, VecDim >( field, subdomain, cell, xi, eta, zeta );
@@ -1380,11 +1400,14 @@ KOKKOS_INLINE_FUNCTION dense::Vec< T, VecDim > evaluate_cubic_vec(
                 for ( int i = 0; i < nu; ++i )
                     f_u[i] = field( subdomain, bx + i, by + j, br + k, d );
 
-                f_v[j] = pchip_interpolate_1d( us, f_u, nu, u, monotone );
+                f_v[j] = ( nu > cubic_stencil_size ) ? lagrange_interpolate_1d( us, f_u, nu, u )
+                                                    : pchip_interpolate_1d( us, f_u, nu, u, monotone );
             }
-            f_r[k] = pchip_interpolate_1d( vs, f_v, nv, v, monotone );
+            f_r[k] = ( nv > cubic_stencil_size ) ? lagrange_interpolate_1d( vs, f_v, nv, v )
+                                                 : pchip_interpolate_1d( vs, f_v, nv, v, monotone );
         }
-        value( d ) = pchip_interpolate_1d( rs, f_r, nr, rho, monotone );
+        value( d ) = ( nr > cubic_stencil_size ) ? lagrange_interpolate_1d( rs, f_r, nr, rho )
+                                                 : pchip_interpolate_1d( rs, f_r, nr, rho, monotone );
     }
     return value;
 }

@@ -13,7 +13,9 @@
 //      solution is the initial condition again. Reports the L2 error and the worst over/undershoot so the
 //      numbers can be put next to the SUPG, entropy-viscosity and FCT results.
 
+#include <chrono>
 #include <cmath>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -35,6 +37,12 @@ using ScalarType = double;
 // into two shells. Both are decomposition, not resolution -- the answer must not depend on either.
 int g_lateral_subdomain_level = 0;
 int g_radial_subdomain_level  = 0;
+
+// Reconstruction settings of the cone test, settable from the command line (see main).
+int                            g_interpolation_width          = fe::wedge::sl::quintic_stencil_size;
+int                            g_velocity_interpolation_width = 2;
+fe::wedge::sl::CellRangeLimiter g_limiter                      = fe::wedge::sl::CellRangeLimiter::Clip;
+bool                           g_write_xdmf                   = true;
 
 using grid::Grid2DDataScalar;
 using grid::Grid3DDataVec;
@@ -280,7 +288,13 @@ void test_cone_revolution( const int level, const ScalarType cfl )
     Kokkos::fence();
     Kokkos::deep_copy( T_ref.grid_data(), T.grid_data() );
 
-    MMOCTransport< ScalarType > transport( domain, mask, TimeSteppingScheme::RK4 );
+    MMOCTransport< ScalarType > transport(
+        domain,
+        mask,
+        fe::wedge::operators::shell::MMOCTransportOptions{ .scheme                       = TimeSteppingScheme::RK4,
+                                                           .interpolation_width          = g_interpolation_width,
+                                                           .velocity_interpolation_width = g_velocity_interpolation_width,
+                                                           .limiter                      = g_limiter } );
 
     const ScalarType h           = grid::shell::min_radial_h( domain.domain_info().radii() );
     const ScalarType t_end       = 2.0 * M_PI;
@@ -295,16 +309,45 @@ void test_cone_revolution( const int level, const ScalarType cfl )
     constexpr int  vtk_interval = 25;
     io::XDMFOutput xdmf( "./output/test_mmoc_rotation_out", domain, coords, radii );
     xdmf.add( T.grid_data() );
-    xdmf.write( 0 );
+    if ( g_write_xdmf )
+        xdmf.write( 0 );
 
     long long escapes_total = 0;
+    double    step_seconds  = 0.0;
     for ( int step = 0; step < num_steps; ++step )
     {
+        const auto t0 = std::chrono::steady_clock::now();
         transport.step( T, u, u, dt, sub );
+        step_seconds += std::chrono::duration< double >( std::chrono::steady_clock::now() - t0 ).count();
         escapes_total += transport.last_escapes();
 
-        if ( ( step + 1 ) % vtk_interval == 0 || step + 1 == num_steps )
+        if ( g_write_xdmf && ( ( step + 1 ) % vtk_interval == 0 || step + 1 == num_steps ) )
             xdmf.write( step + 1 );
+    }
+
+    // Nodal sums of the owned nodes, final over initial: a cheap proxy for mass conservation.
+    ScalarType sum_T = 0, sum_ref = 0;
+    {
+        const auto d = T.grid_data();
+        const auto e = T_ref.grid_data();
+        Kokkos::parallel_reduce(
+            "nodal_sums",
+            Kokkos::MDRangePolicy< Kokkos::Rank< 4 > >(
+                { 0, 0, 0, 0 },
+                { static_cast< int >( d.extent( 0 ) ), static_cast< int >( d.extent( 1 ) ),
+                  static_cast< int >( d.extent( 2 ) ), static_cast< int >( d.extent( 3 ) ) } ),
+            KOKKOS_LAMBDA( int sd, int x, int y, int r, ScalarType& a, ScalarType& b ) {
+                if ( util::has_flag( mask( sd, x, y, r ), grid::NodeOwnershipFlag::OWNED ) )
+                {
+                    a += d( sd, x, y, r );
+                    b += e( sd, x, y, r );
+                }
+            },
+            sum_T,
+            sum_ref );
+        Kokkos::fence();
+        MPI_Allreduce( MPI_IN_PLACE, &sum_T, 1, MPI_DOUBLE, MPI_SUM, domain.comm() );
+        MPI_Allreduce( MPI_IN_PLACE, &sum_ref, 1, MPI_DOUBLE, MPI_SUM, domain.comm() );
     }
 
     const auto err_l2 = l2_relative_error( T.grid_data(), T_ref.grid_data(), mask, domain.comm() );
@@ -332,6 +375,13 @@ void test_cone_revolution( const int level, const ScalarType cfl )
     util::logroot << "    L2 rel error after one revolution: " << err_l2 << std::endl;
     util::logroot << "    T range (exact [0,1])            : [" << t_min << ", " << t_max << "]" << std::endl;
     util::logroot << "    escapes                          : " << escapes_total << std::endl;
+    util::logroot << "    mass ratio (nodal sum)           : " << sum_T / sum_ref << std::endl;
+    util::logroot << "    transport time per step [s]      : " << step_seconds / num_steps << std::endl;
+    util::logroot << "RESULT level=" << level << " width=" << g_interpolation_width
+                  << " vel_width=" << g_velocity_interpolation_width << " limiter=" << static_cast< int >( g_limiter )
+                  << " steps=" << num_steps << " l2=" << err_l2 << " tmin=" << t_min << " tmax=" << t_max
+                  << " mass=" << sum_T / sum_ref << " escapes=" << escapes_total
+                  << " s_per_step=" << step_seconds / num_steps << std::endl;
 
     check( err_l2 < 1.0, "cone was destroyed" );
     check( t_min > -1e-10, "undershoot below the global limiter bound" );
@@ -360,6 +410,18 @@ int main( int argc, char** argv )
             g_lateral_subdomain_level = std::atoi( argv[3] );
         if ( argc > 4 )
             g_radial_subdomain_level = std::atoi( argv[4] );
+        // Reconstruction: argv[5] temperature stencil width (2/4/6), argv[6] velocity stencil width,
+        // argv[7] cell limiter (clip | q1 | none), argv[8] "noxdmf" to skip the output frames.
+        if ( argc > 5 )
+            g_interpolation_width = std::atoi( argv[5] );
+        if ( argc > 6 )
+            g_velocity_interpolation_width = std::atoi( argv[6] );
+        if ( argc > 7 )
+            g_limiter = std::strcmp( argv[7], "q1" ) == 0   ? fe::wedge::sl::CellRangeLimiter::Q1Fallback :
+                        std::strcmp( argv[7], "none" ) == 0 ? fe::wedge::sl::CellRangeLimiter::None :
+                                                              fe::wedge::sl::CellRangeLimiter::Clip;
+        if ( argc > 8 )
+            g_write_xdmf = std::strcmp( argv[8], "noxdmf" ) != 0;
         test_cone_revolution( level, ( argc > 2 ) ? std::atof( argv[2] ) : 0.5 );
         // Same timestep as test_supg_rotation.cpp / test_finite_volume_rotation.cpp (dt = 0.5 * 0.1 * h), so
         // the errors can be compared directly.

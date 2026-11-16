@@ -33,12 +33,13 @@
 ///       \f$ \tau = (m + c_k)/M \f$; reusing the raw stage weight \f$ c_k \f$ per substep drops the order to first.
 ///
 /// Advectively unconditionally stable (no CFL from the tracing); the implementation is bounded by the ghost-layer
-/// width, since a foot point must stay inside the subdomain plus its ghosts.
-/// \ref MMOCTransport::recommended_substeps converts a Courant number into a substep count within that budget.
+/// width (\ref MMOCTransportOptions::ghost_width), since a foot point must stay inside the subdomain plus its
+/// ghosts. \ref MMOCTransport::substeps_for_accuracy converts a Courant number into a substep count.
 ///
-/// **Interpolation.** The foot-point value uses \ref terra::fe::wedge::sl::evaluate_cubic_scalar over the
+/// **Interpolation.** The foot-point value uses \ref terra::fe::wedge::sl::evaluate_high_order_scalar over the
 /// structured index stencil (not the Q1 wedge shape functions, which are only second order and dominate the
-/// numerical diffusion).
+/// numerical diffusion). The velocity along the trajectory uses Q1 by default; see
+/// \ref MMOCTransportOptions::velocity_interpolation_width.
 ///
 /// Accuracy (test_mmoc_rotation, one revolution of a cone): the scheme retains the shape of the rotating cone
 /// better than entropy viscosity and SUPG on the same mesh, it has no phase lag, and it is less diffusive, so the
@@ -131,6 +132,28 @@ ButcherTableau< ScalarType > butcher_tableau( const TimeSteppingScheme scheme )
     return t;
 }
 
+/// @brief Configuration of \ref MMOCTransport.
+struct MMOCTransportOptions
+{
+    /// Runge-Kutta scheme of the backward trajectory integration.
+    TimeSteppingScheme scheme = TimeSteppingScheme::RK4;
+
+    /// Stencil nodes per direction for the transported field at the foot point: 2 = Q1, 4 = cubic,
+    /// 6 = quintic; see \ref terra::fe::wedge::sl::evaluate_high_order_scalar.
+    int interpolation_width = sl::quintic_stencil_size;
+
+    /// Stencil nodes per direction for the velocity along the trajectory, same meaning as above. Q1 (2) by
+    /// default: a Stokes velocity is smooth, and Q1 is an order of magnitude cheaper per RK stage.
+    int velocity_interpolation_width = 2;
+
+    /// How the foot-point value is bounded by the range of its cell's nodes.
+    sl::CellRangeLimiter limiter = sl::CellRangeLimiter::Clip;
+
+    /// Ghost layer width in nodes. Bounds the admissible Courant number (\ref MMOCTransport::max_courant) and
+    /// sets the size of every ghost exchange.
+    int ghost_width = sl::default_ghost_width;
+};
+
 /// @brief Semi-Lagrangian (MMOC) advection of a Q1 nodal scalar field.
 template < typename ScalarType >
 class MMOCTransport
@@ -143,13 +166,24 @@ class MMOCTransport
         const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& ownership_mask,
         const TimeSteppingScheme                    scheme = TimeSteppingScheme::RK4,
         const int                                   interpolation_width = sl::quintic_stencil_size )
+    : MMOCTransport( domain,
+                     ownership_mask,
+                     MMOCTransportOptions{ .scheme = scheme, .interpolation_width = interpolation_width } )
+    {}
+
+    MMOCTransport(
+        const grid::shell::DistributedDomain&                    domain,
+        const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >& ownership_mask,
+        const MMOCTransportOptions&                              options )
     : domain_( &domain )
     , ownership_mask_( ownership_mask )
-    , exchange_( domain )
-    , tableau_( butcher_tableau< ScalarType >( scheme ) )
-    , interp_width_( interpolation_width )
+    , exchange_( domain, options.ghost_width )
+    , tableau_( butcher_tableau< ScalarType >( options.scheme ) )
+    , interp_width_( options.interpolation_width )
+    , vel_interp_width_( options.velocity_interpolation_width )
+    , limiter_( options.limiter )
     {
-        links_          = build_lateral_links( domain );
+        links_          = build_lateral_links( domain, exchange_.ghost_width() );
         multiplicity_   = build_multiplicity( domain, ownership_mask );
         coords_g_       = sl::ghosted_unit_sphere_coords< ScalarType >( domain, exchange_ );
         radii_g_        = sl::ghosted_shell_radii< ScalarType >( domain, exchange_ );
@@ -163,7 +197,7 @@ class MMOCTransport
         // the cells sharing that vertex until max_walk is spent, and is reported as an escape although it never
         // moved (28% of all nodes at level 10). Scale the tolerance with the mesh instead.
         {
-            const int gw = sl::ghost_width;
+            const int gw = exchange_.ghost_width();
             // coords_g_ is SoA: one 4D view per component. Owned node (0,0) and its x-neighbour of subdomain 0.
             double dot = 0;
             for ( int d = 0; d < 3; ++d )
@@ -201,12 +235,15 @@ class MMOCTransport
     /// What is bounded is the *distance* the departure point may travel: it has to stay inside the local
     /// subdomain plus its ghost layer, because that is all the data available to interpolate from. Substepping
     /// does **not** relax this: substeps refine the trajectory but the foot point still ends up a full Courant
-    /// number away. Raising the limit means widening \ref terra::fe::wedge::sl::ghost_width.
-    [[nodiscard]] static constexpr ScalarType max_courant()
+    /// number away. Raising the limit means widening the ghost layer (\ref MMOCTransportOptions::ghost_width).
+    [[nodiscard]] ScalarType max_courant() const
     {
         // A margin below the ghost width, so that the foot point stays strictly inside the ghosted region.
-        return ScalarType( 0.9 ) * sl::ghost_width;
+        return ScalarType( 0.9 ) * exchange_.ghost_width();
     }
+
+    /// @brief Ghost layer width in nodes.
+    [[nodiscard]] int ghost_width() const { return exchange_.ghost_width(); }
 
     /// @brief Substeps giving a trajectory error comparable to the interpolation error.
     ///
@@ -225,7 +262,7 @@ class MMOCTransport
     /// @param u             velocity at t^{n+1}
     /// @param u_old         velocity at t^n
     /// @param dt            the full timestep
-    /// @param substeps      number of substeps; see \ref recommended_substeps
+    /// @param substeps      number of substeps; see \ref substeps_for_accuracy
     /// @param global_limiter clip the interpolated value to the global range of T^n
     void step(
         linalg::VectorW1Scalar< ScalarType >&          T,
@@ -322,13 +359,14 @@ class MMOCTransport
     }
 
     /// @brief Builds the same-diamond, same-device lateral links; see sl::canonicalise_lateral_cell.
-    static sl::LateralSubdomainLinks build_lateral_links( const grid::shell::DistributedDomain& domain )
+    static sl::LateralSubdomainLinks
+        build_lateral_links( const grid::shell::DistributedDomain& domain, const int ghost_width )
     {
         const auto& subdomains = domain.subdomains();
 
         sl::LateralSubdomainLinks links;
         links.owned_nodes = domain.domain_info().subdomain_num_nodes_per_side_laterally();
-        links.ghost       = sl::ghost_width;
+        links.ghost       = ghost_width;
         links.link         = Kokkos::View< int* [4] >( "sl_lateral_links", subdomains.size() );
         links.same_diamond = Kokkos::View< int* [4] >( "sl_same_diamond", subdomains.size() );
 
@@ -387,9 +425,10 @@ class MMOCTransport
 
     /// @brief Number of nodes whose departure point could not be located in the last \ref step.
     ///
-    /// Those nodes keep their previous value (no advection). A non-zero count means the per-substep Courant
-    /// number exceeded the ghost layer width, or that the departure point fell into one of the degenerate
-    /// corner regions at the twelve pentagonal points of the icosahedral grid.
+    /// Those nodes are interpolated at the point of the last located wedge closest to the departure point (a
+    /// bounded, first-order error). A non-zero count means the Courant number exceeded the ghost layer width, or
+    /// that the departure point fell into one of the degenerate corner regions at the twelve pentagonal points
+    /// of the icosahedral grid.
     [[nodiscard]] long long last_escapes() const { return last_escapes_; }
 
     /// @brief Containment tolerance of the lateral point location, relative to |X| (mesh dependent).
@@ -411,7 +450,9 @@ class MMOCTransport
                                       exchange_.num_nodes_lateral_ghosted(),
                                       exchange_.num_nodes_radial_ghosted() };
 
-        const sl::RadialSliceCoords< decltype( coords_g_ ) > lateral{ coords_g_, sl::ghost_width };
+        const int gw = exchange_.ghost_width();
+
+        const sl::RadialSliceCoords< decltype( coords_g_ ) > lateral{ coords_g_, gw };
 
         const auto coords_g = coords_g_;
         const auto radii_g  = radii_g_;
@@ -428,10 +469,12 @@ class MMOCTransport
         const auto r_min   = r_min_;
         const auto r_max   = r_max_;
 
-        const int        interp_width = interp_width_;
+        const int        interp_width     = interp_width_;
+        const int        vel_interp_width = vel_interp_width_;
+        const auto       limiter          = limiter_;
         const ScalarType h        = dt / static_cast< ScalarType >( substeps );
         const ScalarType inv_M    = ScalarType( 1 ) / static_cast< ScalarType >( substeps );
-        constexpr int    max_walk = 4 * sl::ghost_width + 4;
+        const int        max_walk = 4 * gw + 4;
         const ScalarType eps      = locate_eps_;
 
         const auto T_old         = T.grid_data();
@@ -444,9 +487,9 @@ class MMOCTransport
             "mmoc_trace_characteristics",
             grid::shell::local_domain_md_range_policy_nodes( *domain_ ),
             KOKKOS_LAMBDA( const int sd, const int x, const int y, const int r, long long& esc ) {
-                const int gx = sl::to_ghosted_index( x );
-                const int gy = sl::to_ghosted_index( y );
-                const int gr = sl::to_ghosted_index( r );
+                const int gx = sl::to_ghosted_index( x, gw );
+                const int gy = sl::to_ghosted_index( y, gw );
+                const int gr = sl::to_ghosted_index( r, gw );
 
                 Vec3 p;
                 for ( int d = 0; d < 3; ++d )
@@ -454,7 +497,7 @@ class MMOCTransport
 
                 Vec3 X = p * radii_g( sd, gr );
 
-                // Stencil the cubic interpolation may read from. Laterally it is the owned block only: a
+                // Stencil the high-order interpolation may read from. Laterally it is the owned block only: a
                 // lateral ghost row holds a neighbour's real values, but it belongs to another diamond, and
                 // the index-space parametrisation kinks at that seam -- a stencil straddling it is
                 // inconsistent, not just less accurate. Radially the ghost layers outside the CMB and the
@@ -462,8 +505,8 @@ class MMOCTransport
                 // no field data at all, so trim them off too. In both directions the window then slides
                 // inwards near the edge (one-sided but never extrapolating), and a foot point that lands
                 // outside the range altogether falls back to the Q1 evaluation.
-                sl::StencilBounds stencil{ { sl::ghost_width, n_lat_g - 1 - sl::ghost_width },
-                                           { sl::ghost_width, n_lat_g - 1 - sl::ghost_width },
+                sl::StencilBounds stencil{ { gw, n_lat_g - 1 - gw },
+                                           { gw, n_lat_g - 1 - gw },
                                            { 0, n_rad_g - 1 } };
                 {
                     const ScalarType r_tol = ScalarType( 1e-12 ) * r_max;
@@ -475,9 +518,9 @@ class MMOCTransport
 
                 // Seed with a cell all of whose nodes are owned: it always contains this node as a vertex,
                 // and it can never be one of the degenerate ghost-corner wedges.
-                sl::WedgeCell cell{ sl::to_ghosted_index( Kokkos::min( x, n_lat_owned - 2 ) ),
-                                    sl::to_ghosted_index( Kokkos::min( y, n_lat_owned - 2 ) ),
-                                    sl::to_ghosted_index( Kokkos::min( r, n_rad_owned - 2 ) ),
+                sl::WedgeCell cell{ sl::to_ghosted_index( Kokkos::min( x, n_lat_owned - 2 ), gw ),
+                                    sl::to_ghosted_index( Kokkos::min( y, n_lat_owned - 2 ), gw ),
+                                    sl::to_ghosted_index( Kokkos::min( r, n_rad_owned - 2 ), gw ),
                                     0 };
 
                 bool escaped = false;
@@ -504,14 +547,15 @@ class MMOCTransport
                         }
                         cell = res.cell;
 
-                        // Q1 for the velocity. An error here displaces the foot point and enters T just as
-                        // directly as an error in T itself, but the cubic reconstruction buys nothing on this
-                        // grid: a Stokes velocity is smooth, and in the rotation test the two are
-                        // indistinguishable while Q1 is an order of magnitude cheaper.
-                        const auto u_new_s =
-                            sl::evaluate_q1_vec< ScalarType, 3 >( u_g, sd, res.cell, res.xi, res.eta, res.zeta );
-                        const auto u_old_s = sl::evaluate_q1_vec< ScalarType, 3 >(
-                            u_old_g, sd, res.cell, res.xi, res.eta, res.zeta );
+                        // Q1 for the velocity by default. An error here displaces the foot point and enters T
+                        // just as directly as an error in T itself, but in the rotation test the high-order
+                        // reconstruction is indistinguishable while Q1 is an order of magnitude cheaper.
+                        const auto u_new_s = sl::evaluate_high_order_vec< ScalarType, 3 >(
+                            u_g, sd, res.cell, res.xi, res.eta, res.zeta, radii_g, stencil, lateral_valid,
+                            /*monotone=*/false, vel_interp_width );
+                        const auto u_old_s = sl::evaluate_high_order_vec< ScalarType, 3 >(
+                            u_old_g, sd, res.cell, res.xi, res.eta, res.zeta, radii_g, stencil, lateral_valid,
+                            /*monotone=*/false, vel_interp_width );
 
                         // Global pseudo-time of this stage, in [0, 1] across the whole timestep.
                         const ScalarType tau = ( static_cast< ScalarType >( m ) + tableau.c[s] ) * inv_M;
@@ -552,9 +596,9 @@ class MMOCTransport
                         sl::radial_coords_from_radius( ev_sd, X.norm(), radii_g, n_rad_g - 1, r_min, r_max,
                                                        ev_cell.r, ev_zeta );
 
-                        const ScalarType value = sl::evaluate_cubic_scalar(
+                        const ScalarType value = sl::evaluate_high_order_scalar(
                             T_g, ev_sd, ev_cell, res.xi, res.eta, ev_zeta, radii_g, ev_stencil, lateral_valid,
-                            /*clip_to_cell=*/true, /*limit_slopes=*/false, interp_width );
+                            limiter, /*limit_slopes=*/false, interp_width );
                         T_new( sd, x, y, r ) = Kokkos::clamp( value, t_min, t_max );
                         return;
                     }
@@ -572,9 +616,9 @@ class MMOCTransport
                     sl::radial_coords_from_radius( sd, X.norm(), radii_g, n_rad_g - 1, r_min, r_max,
                                                    ev_cell.r, zeta );
 
-                    const ScalarType value = sl::evaluate_cubic_scalar(
+                    const ScalarType value = sl::evaluate_high_order_scalar(
                         T_g, sd, ev_cell, xi, eta, zeta, radii_g, stencil, lateral_valid,
-                        /*clip_to_cell=*/true, /*limit_slopes=*/false, interp_width );
+                        limiter, /*limit_slopes=*/false, interp_width );
                     T_new( sd, x, y, r )   = Kokkos::clamp( value, t_min, t_max );
                 }
                 esc += 1;
@@ -616,6 +660,12 @@ class MMOCTransport
     /// Nodes per direction the foot-point reconstruction asks for; see sl::stencil_window for the ladder it
     /// steps down when a centred window of this width does not fit.
     int interp_width_ = sl::quintic_stencil_size;
+
+    /// Nodes per direction of the velocity reconstruction along the trajectory (2 = Q1).
+    int vel_interp_width_ = 2;
+
+    /// Bounding of the foot-point value by its cell's node range.
+    sl::CellRangeLimiter limiter_ = sl::CellRangeLimiter::Clip;
 
     /// Lateral links to same-diamond neighbours resident on this device; see sl::canonicalise_lateral_cell.
     sl::LateralSubdomainLinks links_;

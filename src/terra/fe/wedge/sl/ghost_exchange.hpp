@@ -14,17 +14,17 @@
 
 /// @file
 ///
-/// Width-1 ghost (halo) layers for Q1 nodal subdomain fields.
+/// Ghost (halo) layers of configurable width for Q1 nodal subdomain fields.
 ///
 /// The ordinary shell communication (\ref terra::communication::shell) treats subdomain interfaces as *shared*
 /// nodes and reduces them additively -- it never makes a neighbouring subdomain's *interior* data available
 /// locally. The semi-Lagrangian transport needs exactly that: a departure point may fall into the first cell
 /// beyond the local subdomain, and evaluating the Q1 basis there requires the six nodes of that cell.
 ///
-/// A ghosted field of a subdomain block with `n x n x n_r` nodes is stored as `(n+2) x (n+2) x (n_r+2)`, with
-/// the owned block at ghosted indices `[1, n]`. Ghost plane `0` (respectively `n+1`) holds the neighbouring
-/// subdomain's *depth-1* plane, i.e. the layer just inside its own shared boundary plane -- the shared plane
-/// itself is already present in the owned block.
+/// With a ghost width `w`, a ghosted field of a subdomain block with `n x n x n_r` nodes is stored as
+/// `(n+2w) x (n+2w) x (n_r+2w)`, with the owned block at ghosted indices `[w, n+w-1]`. Ghost plane `w-d`
+/// (respectively `n+w-1+d`) holds the neighbouring subdomain's *depth-d* plane, i.e. the layer `d` nodes inside
+/// its own shared boundary plane -- the shared plane itself is already present in the owned block.
 ///
 /// **Filling edges and corners.** Only the *face* neighbourhood is used. The lateral face exchange is run
 /// **twice**: the first pass fills the four lateral face ghosts, and because each pass sends the full extent of
@@ -41,11 +41,12 @@
 namespace terra::fe::wedge::sl
 {
 
-/// @brief Ghost layer width. Bounds the admissible per-substep Courant number of the transport.
-inline constexpr int ghost_width = 3;
+/// @brief Default ghost layer width. The width bounds the admissible Courant number of the transport; it is a
+///        runtime property of \ref GhostExchange (see \ref GhostExchange::ghost_width).
+inline constexpr int default_ghost_width = 3;
 
-/// @brief Ghosted index of an owned node index.
-KOKKOS_INLINE_FUNCTION constexpr int to_ghosted_index( const int owned_index )
+/// @brief Ghosted index of an owned node index, for a ghost layer of width `ghost_width`.
+KOKKOS_INLINE_FUNCTION constexpr int to_ghosted_index( const int owned_index, const int ghost_width )
 {
     return owned_index + ghost_width;
 }
@@ -78,16 +79,16 @@ KOKKOS_INLINE_FUNCTION auto& view_element( const V& v, const int sd, const int x
 }
 
 /// Index of the ghost plane `depth` outside a boundary at `position`, for `depth` in `1 .. ghost_width`.
-KOKKOS_INLINE_FUNCTION constexpr int
-    ghost_plane_index( const grid::BoundaryPosition position, const int size_ghosted, const int depth )
+KOKKOS_INLINE_FUNCTION constexpr int ghost_plane_index(
+    const grid::BoundaryPosition position, const int size_ghosted, const int depth, const int ghost_width )
 {
     return position == grid::BoundaryPosition::P0 ? ghost_width - depth : size_ghosted - 1 - ghost_width + depth;
 }
 
 /// Index of the owned plane `depth` inside a boundary at `position` -- the data a neighbour needs for its ghost
 /// plane at the same depth, the boundary plane itself being shared and already present on both sides.
-KOKKOS_INLINE_FUNCTION constexpr int
-    depth_plane_index( const grid::BoundaryPosition position, const int size_ghosted, const int depth )
+KOKKOS_INLINE_FUNCTION constexpr int depth_plane_index(
+    const grid::BoundaryPosition position, const int size_ghosted, const int depth, const int ghost_width )
 {
     return position == grid::BoundaryPosition::P0 ? ghost_width + depth : size_ghosted - 1 - ghost_width - depth;
 }
@@ -101,7 +102,7 @@ KOKKOS_INLINE_FUNCTION constexpr int
 } // namespace detail
 
 
-/// @brief Packs the depth-`ghost_width` plane at `face` of subdomain `sd`, iterating the varying directions
+/// @brief Packs the depth-`depth` plane at `face` of subdomain `sd`, iterating the varying directions
 ///        forward -- the buffer index *is* the sender's own coordinate, which is what lets the receiver apply
 ///        its own unpack ordering.
 ///
@@ -118,6 +119,7 @@ void pack_face_plane(
     const int                num_lat_ghosted,
     const int                num_rad_ghosted,
     const int                depth,
+    const int                ghost_width,
     const size_t             buffer_offset )
 {
     constexpr int vec_dim = detail::view_vec_dim< FieldView >::value;
@@ -133,21 +135,21 @@ void pack_face_plane(
             int x = 0, y = 0, r = 0;
             if ( px != grid::BoundaryPosition::PV )
             {
-                x = detail::depth_plane_index( px, num_lat_ghosted, depth );
+                x = detail::depth_plane_index( px, num_lat_ghosted, depth, ghost_width );
                 y = i;
                 r = j;
             }
             else if ( py != grid::BoundaryPosition::PV )
             {
                 x = i;
-                y = detail::depth_plane_index( py, num_lat_ghosted, depth );
+                y = detail::depth_plane_index( py, num_lat_ghosted, depth, ghost_width );
                 r = j;
             }
             else
             {
                 x = i;
                 y = j;
-                r = detail::depth_plane_index( pr, num_rad_ghosted, depth );
+                r = detail::depth_plane_index( pr, num_rad_ghosted, depth, ghost_width );
             }
 
             for ( int d = 0; d < vec_dim; ++d )
@@ -170,6 +172,7 @@ void unpack_ghost_plane(
     const int                     num_lat_ghosted,
     const int                     num_rad_ghosted,
     const int                     depth,
+    const int                     ghost_width,
     const size_t                  buffer_offset )
 {
     constexpr int vec_dim = detail::view_vec_dim< FieldView >::value;
@@ -185,21 +188,21 @@ void unpack_ghost_plane(
             int x = 0, y = 0, r = 0;
             if ( px != grid::BoundaryPosition::PV )
             {
-                x = detail::ghost_plane_index( px, num_lat_ghosted, depth );
+                x = detail::ghost_plane_index( px, num_lat_ghosted, depth, ghost_width );
                 y = detail::varying_index( i, num_lat_ghosted, d0 );
                 r = detail::varying_index( j, num_rad_ghosted, d1 );
             }
             else if ( py != grid::BoundaryPosition::PV )
             {
                 x = detail::varying_index( i, num_lat_ghosted, d0 );
-                y = detail::ghost_plane_index( py, num_lat_ghosted, depth );
+                y = detail::ghost_plane_index( py, num_lat_ghosted, depth, ghost_width );
                 r = detail::varying_index( j, num_rad_ghosted, d1 );
             }
             else
             {
                 x = detail::varying_index( i, num_lat_ghosted, d0 );
                 y = detail::varying_index( j, num_lat_ghosted, d1 );
-                r = detail::ghost_plane_index( pr, num_rad_ghosted, depth );
+                r = detail::ghost_plane_index( pr, num_rad_ghosted, depth, ghost_width );
             }
 
             for ( int d = 0; d < vec_dim; ++d )
@@ -208,7 +211,7 @@ void unpack_ghost_plane(
         } );
 }
 
-/// @brief Precomputed plan for filling width-1 ghost layers of Q1 subdomain fields.
+/// @brief Precomputed plan for filling the ghost layers of Q1 subdomain fields.
 ///
 /// Construct once per domain and reuse for every field and every timestep.
 class GhostExchange
@@ -216,14 +219,25 @@ class GhostExchange
   public:
     GhostExchange() = default;
 
-    explicit GhostExchange( const grid::shell::DistributedDomain& domain )
+    /// @param ghost_width number of ghost node layers on every side. A neighbour can only supply planes it owns,
+    ///                    so the width must be smaller than the number of nodes per subdomain side, laterally
+    ///                    and radially.
+    explicit GhostExchange( const grid::shell::DistributedDomain& domain, const int ghost_width = default_ghost_width )
     : comm_( domain.comm() )
+    , ghost_width_( ghost_width )
     {
         num_subdomains_ = static_cast< int >( domain.subdomains().size() );
         num_lat_        = domain.domain_info().subdomain_num_nodes_per_side_laterally();
         num_rad_        = domain.domain_info().subdomain_num_nodes_radially();
-        num_lat_ghost_  = num_lat_ + 2 * ghost_width;
-        num_rad_ghost_  = num_rad_ + 2 * ghost_width;
+
+        if ( ghost_width_ < 1 || ghost_width_ > num_lat_ - 1 || ghost_width_ > num_rad_ - 1 )
+        {
+            Kokkos::abort( "GhostExchange: the ghost width must be at least 1 and smaller than the number of nodes "
+                           "per subdomain side (laterally and radially)." );
+        }
+
+        num_lat_ghost_  = num_lat_ + 2 * ghost_width_;
+        num_rad_ghost_  = num_rad_ + 2 * ghost_width_;
 
         // Map every subdomain that lives on this rank to its local index, so that a neighbour on the same rank
         // can be served by a straight device-to-device copy instead of a message.
@@ -264,6 +278,7 @@ class GhostExchange
         assign_tags();
     }
 
+    [[nodiscard]] int ghost_width() const { return ghost_width_; }
     [[nodiscard]] int num_subdomains() const { return num_subdomains_; }
     [[nodiscard]] int num_nodes_lateral() const { return num_lat_; }
     [[nodiscard]] int num_nodes_radial() const { return num_rad_; }
@@ -291,6 +306,7 @@ class GhostExchange
     void copy_interior( const SrcView& src, const DstView& dst ) const
     {
         constexpr int vec_dim = detail::view_vec_dim< DstView >::value;
+        const int     gw      = ghost_width_;
 
         Kokkos::parallel_for(
             "sl_ghost_copy_interior",
@@ -300,7 +316,7 @@ class GhostExchange
                 for ( int d = 0; d < vec_dim; ++d )
                 {
                     detail::view_element(
-                        dst, sd, to_ghosted_index( x ), to_ghosted_index( y ), to_ghosted_index( r ), d ) =
+                        dst, sd, to_ghosted_index( x, gw ), to_ghosted_index( y, gw ), to_ghosted_index( r, gw ), d ) =
                         detail::view_element( src, sd, x, y, r, d );
                 }
             } );
@@ -458,14 +474,14 @@ class GhostExchange
             // One buffer per link carrying every depth, so a wider ghost layer costs a fatter message rather
             // than more of them: the exchange is latency-bound at these sizes.
             const size_t plane = static_cast< size_t >( link.buf_n0 ) * link.buf_n1 * vec_dim;
-            const size_t n     = plane * ghost_width;
+            const size_t n     = plane * ghost_width_;
 
             send_buffers[i] = Kokkos::View< ScalarType* >( Kokkos::view_alloc( "sl_ghost_send", Kokkos::WithoutInitializing ), n );
             recv_buffers[i] = Kokkos::View< ScalarType* >( Kokkos::view_alloc( "sl_ghost_recv", Kokkos::WithoutInitializing ), n );
 
-            for ( int d = 1; d <= ghost_width; ++d )
+            for ( int d = 1; d <= ghost_width_; ++d )
                 pack_face_plane( field, link.my_sd, link.my_face, send_buffers[i], link.buf_n0,
-                                 link.buf_n1, num_lat_ghost_, num_rad_ghost_, d, ( d - 1 ) * plane );
+                                 link.buf_n1, num_lat_ghost_, num_rad_ghost_, d, ghost_width_, ( d - 1 ) * plane );
         }
         Kokkos::fence();
 
@@ -484,9 +500,10 @@ class GhostExchange
             {
                 // Same rank: pack the neighbour's depth planes directly into our receive buffer.
                 const size_t plane = static_cast< size_t >( link.buf_n0 ) * link.buf_n1 * vec_dim;
-                for ( int d = 1; d <= ghost_width; ++d )
+                for ( int d = 1; d <= ghost_width_; ++d )
                     pack_face_plane( field, link.nb_local_sd, link.nb_face, recv_buffers[i], link.buf_n0,
-                                     link.buf_n1, num_lat_ghost_, num_rad_ghost_, d, ( d - 1 ) * plane );
+                                     link.buf_n1, num_lat_ghost_, num_rad_ghost_, d, ghost_width_,
+                                     ( d - 1 ) * plane );
                 continue;
             }
 
@@ -518,9 +535,9 @@ class GhostExchange
             if ( link.nb_local_sd < 0 )
                 Kokkos::deep_copy( recv_buffers[i], host_recv[i] );
             const size_t plane = static_cast< size_t >( link.buf_n0 ) * link.buf_n1 * vec_dim;
-            for ( int d = 1; d <= ghost_width; ++d )
+            for ( int d = 1; d <= ghost_width_; ++d )
                 unpack_ghost_plane( field, link.my_sd, link.my_face, link.d0, link.d1, recv_buffers[i],
-                                    link.buf_n0, link.buf_n1, num_lat_ghost_, num_rad_ghost_, d,
+                                    link.buf_n0, link.buf_n1, num_lat_ghost_, num_rad_ghost_, d, ghost_width_,
                                     ( d - 1 ) * plane );
         }
         Kokkos::fence();
@@ -538,6 +555,7 @@ class GhostExchange
     }
 
     MPI_Comm          comm_           = MPI_COMM_WORLD;
+    int               ghost_width_    = default_ghost_width;
     int               num_subdomains_ = 0;
     int               num_lat_        = 0;
     int               num_rad_        = 0;
