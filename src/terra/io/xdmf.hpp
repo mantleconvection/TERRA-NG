@@ -598,12 +598,14 @@ class XDMFOutput
     {
         // Copy mesh to host.
         // We assume the mesh is only written once so we throw away the host copies after this method returns.
-        const typename grid::Grid3DDataVec< InputGridScalarType, 3 >::host_mirror_type coords_shell_host =
-            Kokkos::create_mirror_view( coords_shell_device_ );
-        Kokkos::deep_copy( coords_shell_host, coords_shell_device_ );
-        const typename grid::Grid2DDataScalar< InputGridScalarType >::host_mirror_type coords_radii_host =
-            Kokkos::create_mirror_view( coords_radii_device_ );
-        Kokkos::deep_copy( coords_radii_host, coords_radii_device_ );
+        // Mirror into host_mirror_type's memory space (not HostSpace): on APUs this is the device space, so
+        // no allocation or copy happens and the device view itself is returned after a fence.
+        using CoordsShellHost = typename grid::Grid3DDataVec< InputGridScalarType, 3 >::host_mirror_type;
+        using CoordsRadiiHost = typename grid::Grid2DDataScalar< InputGridScalarType >::host_mirror_type;
+        const CoordsShellHost coords_shell_host = Kokkos::create_mirror_view_and_copy(
+            typename CoordsShellHost::memory_space{}, coords_shell_device_ );
+        const CoordsRadiiHost coords_radii_host = Kokkos::create_mirror_view_and_copy(
+            typename CoordsRadiiHost::memory_space{}, coords_radii_device_ );
 
         for ( int local_subdomain_id = 0; local_subdomain_id < coords_shell_host.extent( 0 ); local_subdomain_id++ )
         {
