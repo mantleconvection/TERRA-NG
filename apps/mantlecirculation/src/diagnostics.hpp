@@ -38,7 +38,7 @@ inline ScalarType compute_boundary_heat_flux_integral(
     ScalarType local_integral = 0;
 
     Kokkos::parallel_reduce(
-        "nusselt_surface_integral",
+        "heatflux_surface_integral",
         Kokkos::MDRangePolicy< Kokkos::Rank< 3 > >( { 0, 0, 0 }, { num_subdomains, nx - 1, nx - 1 } ),
         KOKKOS_LAMBDA( const int sd, const int x_cell, const int y_cell, ScalarType& sum ) {
             // Skip subdomains that are not at the actual boundary (radial subdomain decomposition).
@@ -117,6 +117,40 @@ inline ScalarType compute_boundary_heat_flux_integral(
     return global_integral;
 }
 
+/// @brief Compute heatflow integrals at the top (surface) and bottom (CMB) boundary and log with optional dimensionalisation.
+inline std::pair< ScalarType, ScalarType > compute_and_log_heatflow(
+    const grid::shell::DistributedDomain&                           domain,
+    const linalg::VectorW1Scalar< ScalarType >&                     T,
+    const grid::Grid3DDataVec< ScalarType, 3 >&                     coords_shell,
+    const grid::Grid2DDataScalar< ScalarType >&                     coords_radii,
+    const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
+    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&        ownership_mask,
+    const bool                                                      dimensionalise = false,
+    const ScalarType                                                dim_factor     = 1 )
+{
+    util::logroot << std::endl;
+
+    const ScalarType heatflow_surface = compute_boundary_heat_flux_integral(
+        domain, T.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, /*at_surface=*/true );
+    const ScalarType heatflow_cmb = compute_boundary_heat_flux_integral(
+        domain, T.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, /*at_surface=*/false );
+
+    if ( dimensionalise )
+    {
+        util::logroot << "Surface heatflow: " << heatflow_surface * dim_factor << " TW" << std::endl;
+        util::logroot << "CMB heatflow: " << heatflow_cmb * dim_factor << " TW" << std::endl;
+    }
+    else
+    {
+        util::logroot << "Surface heatflow (nondimensional): " << heatflow_surface << std::endl;
+        util::logroot << "CMB heatflow: " << heatflow_cmb << std::endl;
+    }
+
+    util::logroot << std::endl;
+
+    return { heatflow_surface, heatflow_cmb };
+}
+
 /// @brief Compute the Nusselt number at the top (surface) or bottom (CMB) boundary.
 ///
 /// Nu = ∫_Γ ∇T · n̂ dΓ  /  ∫_Γ ∇T_ref · n̂ dΓ
@@ -125,6 +159,7 @@ inline ScalarType compute_boundary_heat_flux_integral(
 /// matching the approach used in HyTeG (Ilangovan et al.).
 ///
 /// @param at_surface  If true, compute Nu at the outer surface; if false, at the CMB.
+/// @param heatflow_val Allows to pass already computed heatflow for numerator; recomputed if empty.
 inline ScalarType compute_nusselt(
     const grid::shell::DistributedDomain&                           domain,
     const linalg::VectorW1Scalar< ScalarType >&                     T,
@@ -133,10 +168,14 @@ inline ScalarType compute_nusselt(
     const grid::Grid2DDataScalar< ScalarType >&                     coords_radii,
     const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
     const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&        ownership_mask,
-    const bool                                                      at_surface )
+    const bool                                                      at_surface,
+    const std::optional< ScalarType >                               heatflow_val = std::nullopt )
 {
-    const ScalarType numerator = compute_boundary_heat_flux_integral(
-        domain, T.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, at_surface );
+    const ScalarType numerator =
+        heatflow_val.has_value() ?
+            *heatflow_val :
+            compute_boundary_heat_flux_integral(
+                domain, T.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, at_surface );
     const ScalarType denominator = compute_boundary_heat_flux_integral(
         domain, T_ref.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, at_surface );
 

@@ -642,9 +642,16 @@ Result<> run( const Parameters& prm )
         }
     }
 
-    // Time stepping
-
-    logroot << "Starting time stepping!" << std::endl;
+    // Heatflow at timestep 0
+    const auto [heatflow_surface_0, heatflow_cmb_0] = compute_and_log_heatflow(
+        ( *domains[velocity_level] ),
+        T,
+        coords_shell[velocity_level],
+        coords_radii[velocity_level],
+        boundary_mask_data[velocity_level],
+        ownership_mask_data[velocity_level],
+        prm.devel_parameters.output_dimensional,
+        prm.devel_parameters.output_dimensional ? prm.physics_parameters.calc_heatflow_TW : 1.0 );
 
     // Compute Nusselt at timestep 0 for diagnostics.
     if ( prm.devel_parameters.extended_diagnostics )
@@ -657,12 +664,18 @@ Result<> run( const Parameters& prm )
             coords_radii[velocity_level],
             boundary_mask_data[velocity_level],
             ownership_mask_data[velocity_level],
-            true );
+            true,
+            heatflow_surface_0 );
+
         const auto V_rms_0 = compute_v_rms(
             ( *domains[velocity_level] ), u.block_1(), coords_shell[velocity_level], coords_radii[velocity_level] );
         logroot << "Nu_top (W1) = " << Nu_top_0 << ", V_rms = " << V_rms_0 << "  [timestep 0, before time stepping]"
                 << std::endl;
     }
+
+    // Time stepping
+
+    logroot << "Starting time stepping!" << std::endl;  
 
     for ( int timestep = prm.time_stepping_parameters.timestep_initial + 1;
           timestep < prm.time_stepping_parameters.max_timesteps;
@@ -846,10 +859,22 @@ Result<> run( const Parameters& prm )
             }
         }
 
+        // Heatflow computation
+        const auto [heatflow_surface, heatflow_cmb] = compute_and_log_heatflow(
+            ( *domains[velocity_level] ),
+            T,
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            boundary_mask_data[velocity_level],
+            ownership_mask_data[velocity_level],
+            prm.devel_parameters.output_dimensional,
+            prm.devel_parameters.output_dimensional ? prm.physics_parameters.calc_heatflow_TW : 1.0 );
+
         // Nusselt number: computed and appended to <outdir>/nu.csv at the
         // same cadence as XDMF output (output_frequency).
         if ( write_output && prm.devel_parameters.extended_diagnostics )
         {
+            // Heatflow for T is already computed
             const auto Nu_top = compute_nusselt(
                 ( *domains[velocity_level] ),
                 T,
@@ -858,7 +883,9 @@ Result<> run( const Parameters& prm )
                 coords_radii[velocity_level],
                 boundary_mask_data[velocity_level],
                 ownership_mask_data[velocity_level],
-                /*at_surface=*/true );
+                /*at_surface=*/true,
+                heatflow_surface );
+
             const auto V_rms = compute_v_rms(
                 ( *domains[velocity_level] ), u.block_1(), coords_shell[velocity_level], coords_radii[velocity_level] );
             if ( timestep % 10 == 0 )

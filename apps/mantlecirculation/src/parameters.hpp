@@ -215,6 +215,7 @@ struct PhysicsParameters
 
     double calc_cm_per_year = 3e-4; // from non-dim velocity to cm/a
     double calc_time_Ma     = 1e6;  // from non-dim time to Ma
+    double calc_heatflow_TW = 1;    // from non-dim heatflow to TW
 
     // Parameter radial profiles
     std::string density_profile_csv_path = "";
@@ -438,6 +439,9 @@ inline void nondimensionalise( Parameters& prm )
         phys.calc_cm_per_year = phys.characteristic_velocity * 60 * 60 * 24 * 365 * 100; // Velocity in cm/a
 
         phys.calc_time_Ma = mesh.mantle_thickness_m / ( phys.calc_cm_per_year * 1e4 ); // Time in Ma
+
+        phys.calc_heatflow_TW =
+            mesh.mantle_thickness_m * boundary.delta_T_K * phys.thermal_conductivity * 1e-12; // Heatflow in TW
 
         // Acount for plate velocity scaling
         if ( boundary.plate_parameters.apply_plate_velocities )
