@@ -250,4 +250,26 @@ inline Result<> write_timer_tree( const IOParameters& io_parameters, const int t
     return { Ok{} };
 }
 
+inline void log_heatflow(
+    const ScalarType heatflow_surface,
+    const ScalarType heatflow_cmb,
+    const bool       dimensional = false,
+    const ScalarType dim_factor  = 1 )
+{
+    util::logroot << std::endl;
+
+    if ( dimensional )
+    {
+        util::logroot << "Surface heatflow: " << heatflow_surface * dim_factor << " TW" << std::endl;
+        util::logroot << "CMB heatflow: " << heatflow_cmb * dim_factor << " TW" << std::endl;
+    }
+    else
+    {
+        util::logroot << "Surface heatflow (nondimensional): " << heatflow_surface << std::endl;
+        util::logroot << "CMB heatflow (nondimensional): " << heatflow_cmb << std::endl;
+    }
+
+    util::logroot << std::endl;
+}
+
 } // namespace terra::mantlecirculation
