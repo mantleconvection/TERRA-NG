@@ -124,33 +124,12 @@ inline std::pair< ScalarType, ScalarType > compute_heatflow(
     const grid::Grid3DDataVec< ScalarType, 3 >&                     coords_shell,
     const grid::Grid2DDataScalar< ScalarType >&                     coords_radii,
     const grid::Grid4DDataScalar< grid::shell::ShellBoundaryFlag >& boundary_mask,
-    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&        ownership_mask,
-    const bool                                                      log            = true,
-    const bool                                                      dimensionalise = false,
-    const ScalarType                                                dim_factor     = 1 )
+    const grid::Grid4DDataScalar< grid::NodeOwnershipFlag >&        ownership_mask )
 {
     const ScalarType heatflow_surface = compute_boundary_heat_flux_integral(
         domain, T.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, /*at_surface=*/true );
     const ScalarType heatflow_cmb = compute_boundary_heat_flux_integral(
         domain, T.grid_data(), coords_shell, coords_radii, boundary_mask, ownership_mask, /*at_surface=*/false );
-
-    if ( log )
-    {
-        util::logroot << std::endl;
-
-        if ( dimensionalise )
-        {
-            util::logroot << "Surface heatflow: " << heatflow_surface * dim_factor << " TW" << std::endl;
-            util::logroot << "CMB heatflow: " << heatflow_cmb * dim_factor << " TW" << std::endl;
-        }
-        else
-        {
-            util::logroot << "Surface heatflow (nondimensional): " << heatflow_surface << std::endl;
-            util::logroot << "CMB heatflow: " << heatflow_cmb << std::endl;
-        }
-
-        util::logroot << std::endl;
-    }
 
     return { heatflow_surface, heatflow_cmb };
 }

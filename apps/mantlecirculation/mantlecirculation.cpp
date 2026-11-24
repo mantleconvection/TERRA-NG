@@ -649,10 +649,13 @@ Result<> run( const Parameters& prm )
         coords_shell[velocity_level],
         coords_radii[velocity_level],
         boundary_mask_data[velocity_level],
-        ownership_mask_data[velocity_level],
-        /*log=*/true,
+        ownership_mask_data[velocity_level] );
+
+    log_heatflow(
+        heatflow_surface_0,
+        heatflow_cmb_0,
         prm.devel_parameters.output_dimensional,
-        prm.devel_parameters.output_dimensional ? prm.physics_parameters.calc_heatflow_TW : 1.0 );
+        prm.physics_parameters.calc_heatflow_TW );
 
     // Constant heatflow from T_cond for Nusselt computation
     const auto [heatflow_surface_ref, heatflow_cmb_ref] = compute_heatflow(
@@ -661,8 +664,7 @@ Result<> run( const Parameters& prm )
         coords_shell[velocity_level],
         coords_radii[velocity_level],
         boundary_mask_data[velocity_level],
-        ownership_mask_data[velocity_level],
-        /*log=*/false );
+        ownership_mask_data[velocity_level] );
 
     // Compute Nusselt at timestep 0 for diagnostics.
     if ( prm.devel_parameters.extended_diagnostics )
@@ -868,10 +870,13 @@ Result<> run( const Parameters& prm )
             coords_shell[velocity_level],
             coords_radii[velocity_level],
             boundary_mask_data[velocity_level],
-            ownership_mask_data[velocity_level],
-            /*log=*/true,
+            ownership_mask_data[velocity_level] );
+
+        log_heatflow(
+            heatflow_surface,
+            heatflow_cmb,
             prm.devel_parameters.output_dimensional,
-            prm.devel_parameters.output_dimensional ? prm.physics_parameters.calc_heatflow_TW : 1.0 );
+            prm.physics_parameters.calc_heatflow_TW );
 
         // Nusselt number: computed and appended to <outdir>/nu.csv at the
         // same cadence as XDMF output (output_frequency).
