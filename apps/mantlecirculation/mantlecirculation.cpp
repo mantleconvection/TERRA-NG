@@ -643,29 +643,31 @@ Result<> run( const Parameters& prm )
     }
 
     // Heatflow at timestep 0
-    const auto [heatflow_surface_0, heatflow_cmb_0] = compute_and_log_heatflow(
+    const auto [heatflow_surface_0, heatflow_cmb_0] = compute_heatflow(
         ( *domains[velocity_level] ),
         T,
         coords_shell[velocity_level],
         coords_radii[velocity_level],
         boundary_mask_data[velocity_level],
         ownership_mask_data[velocity_level],
+        /*log=*/true,
         prm.devel_parameters.output_dimensional,
         prm.devel_parameters.output_dimensional ? prm.physics_parameters.calc_heatflow_TW : 1.0 );
+
+    // Constant heatflow from T_cond for Nusselt computation
+    const auto [heatflow_surface_ref, heatflow_cmb_ref] = compute_heatflow(
+        ( *domains[velocity_level] ),
+        T_cond,
+        coords_shell[velocity_level],
+        coords_radii[velocity_level],
+        boundary_mask_data[velocity_level],
+        ownership_mask_data[velocity_level],
+        /*log=*/false );
 
     // Compute Nusselt at timestep 0 for diagnostics.
     if ( prm.devel_parameters.extended_diagnostics )
     {
-        const auto Nu_top_0 = compute_nusselt(
-            ( *domains[velocity_level] ),
-            T,
-            T_cond,
-            coords_shell[velocity_level],
-            coords_radii[velocity_level],
-            boundary_mask_data[velocity_level],
-            ownership_mask_data[velocity_level],
-            true,
-            heatflow_surface_0 );
+        const auto Nu_top_0 = std::abs( heatflow_surface_0 ) / std::abs( heatflow_surface_ref );
 
         const auto V_rms_0 = compute_v_rms(
             ( *domains[velocity_level] ), u.block_1(), coords_shell[velocity_level], coords_radii[velocity_level] );
@@ -675,7 +677,7 @@ Result<> run( const Parameters& prm )
 
     // Time stepping
 
-    logroot << "Starting time stepping!" << std::endl;  
+    logroot << "Starting time stepping!" << std::endl;
 
     for ( int timestep = prm.time_stepping_parameters.timestep_initial + 1;
           timestep < prm.time_stepping_parameters.max_timesteps;
@@ -860,13 +862,14 @@ Result<> run( const Parameters& prm )
         }
 
         // Heatflow computation
-        const auto [heatflow_surface, heatflow_cmb] = compute_and_log_heatflow(
+        const auto [heatflow_surface, heatflow_cmb] = compute_heatflow(
             ( *domains[velocity_level] ),
             T,
             coords_shell[velocity_level],
             coords_radii[velocity_level],
             boundary_mask_data[velocity_level],
             ownership_mask_data[velocity_level],
+            /*log=*/true,
             prm.devel_parameters.output_dimensional,
             prm.devel_parameters.output_dimensional ? prm.physics_parameters.calc_heatflow_TW : 1.0 );
 
@@ -874,17 +877,7 @@ Result<> run( const Parameters& prm )
         // same cadence as XDMF output (output_frequency).
         if ( write_output && prm.devel_parameters.extended_diagnostics )
         {
-            // Heatflow for T is already computed
-            const auto Nu_top = compute_nusselt(
-                ( *domains[velocity_level] ),
-                T,
-                T_cond,
-                coords_shell[velocity_level],
-                coords_radii[velocity_level],
-                boundary_mask_data[velocity_level],
-                ownership_mask_data[velocity_level],
-                /*at_surface=*/true,
-                heatflow_surface );
+            const auto Nu_top = std::abs( heatflow_surface ) / std::abs( heatflow_surface_ref );
 
             const auto V_rms = compute_v_rms(
                 ( *domains[velocity_level] ), u.block_1(), coords_shell[velocity_level], coords_radii[velocity_level] );
