@@ -297,7 +297,17 @@ enum class EnergySolverType
 {
     SUPG,
     ENTROPY_VISCOSITY,
+    MMOC,
 };
+
+/// How the MMOC foot-point reconstruction is bounded by the node range of its cell.
+enum class MMOCCellLimiter
+{
+    CLIP,        ///< clip into the cell's node range
+    Q1_FALLBACK, ///< replace an out-of-range value by the (clipped) Q1 value
+    NONE,        ///< unbounded
+};
+
 struct EnergySolverParameters
 {
     int    krylov_restart            = 5;
@@ -319,6 +329,11 @@ struct EnergySolverParameters
     /// If true, log global min/max/mean of the per-wedge ν_h field once per
     /// output_frequency to <outdir>/nu_h_stats.csv (timestep, min, max, mean).
     bool ev_dump_nu_h = false;
+
+    /// MMOC parameters (only used when `energy_solver == MMOC`).
+    int             mmoc_interpolation_width          = 6; ///< temperature stencil: 2 = Q1, 4 = cubic, 6 = quintic
+    int             mmoc_velocity_interpolation_width = 2; ///< velocity stencil, same encoding
+    MMOCCellLimiter mmoc_cell_limiter                 = MMOCCellLimiter::CLIP;
 
     EnergySolverType energy_solver = EnergySolverType::ENTROPY_VISCOSITY;
 };
@@ -373,6 +388,15 @@ struct DeveloperOptions
 
     // Free-slip normals consistent with the discrete gradient (Bᵀ·1); false: r̂.
     bool consistent_freeslip_normals = true;
+
+    /// Abort threshold for the negative-temperature guard, in units of the nondimensional
+    /// temperature. MMOC is semi-Lagrangian with a quintic reconstruction and therefore not
+    /// monotone, so a small undershoot below T_min is expected and harmless; a strict
+    /// "any negative value" test aborts healthy runs on it. The run stops once the minimum
+    /// temperature falls below -negative_temperature_tolerance; the actual minimum is logged
+    /// whenever it sets a new (negative) record, so a genuine blow-up stays visible.
+    /// Set to 0 to restore the strict behaviour.
+    double negative_temperature_tolerance = 1e-3;
 };
 
 struct Parameters
@@ -837,7 +861,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->description(
             "Courant number C used to compute the timestep dt = C * h_min / v_max. It is chosen for accuracy "
             "(and, for EV, stability of the explicit viscosity term), not for advective stability. "
-            "Typical values are <= 0.5 (SUPG, EV)." )
+            "Typical values are <= 0.5 (SUPG, EV). For MMOC it also sizes the ghost layer: a departure point may "
+            "travel at most 0.9 x the layer width, so the layer is made wide enough for this C." )
         ->group( "Time Discretization" );
     add_option_with_default( app, "--t-end", parameters.time_stepping_parameters.t_end_Ma )
         ->group( "Time Discretization" )
@@ -935,6 +960,7 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         { "supg", EnergySolverType::SUPG },
         { "entropy_viscosity", EnergySolverType::ENTROPY_VISCOSITY },
         { "ev", EnergySolverType::ENTROPY_VISCOSITY },
+        { "mmoc", EnergySolverType::MMOC },
     };
 
     add_option_with_default( app, "--energy-solver", parameters.energy_solver_parameters.energy_solver )
@@ -943,7 +969,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Energy Solver" )
         ->description(
             "'ev': Implicit Galerkin advection-diffusion with entropy-viscosity stabilization (Guermond et. al, 2011, Kronbichler et. al, 2012) (default). "
-            "'supg': Implicit SUPG advection-diffusion with FGMRES solver." );
+            "'supg': Implicit SUPG advection-diffusion with FGMRES solver. "
+            "'mmoc': Semi-Lagrangian (modified method of characteristics) transport with split implicit diffusion." );
 
     add_option_with_default( app, "--energy-krylov-restart", parameters.energy_solver_parameters.krylov_restart )
         ->group( "Energy Solver" );
@@ -964,6 +991,31 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->group( "Energy Solver" );
     add_option_with_default( app, "--ev-dump-nu-h", parameters.energy_solver_parameters.ev_dump_nu_h )
         ->group( "Energy Solver" );
+
+    add_option_with_default(
+        app, "--mmoc-interpolation-width", parameters.energy_solver_parameters.mmoc_interpolation_width )
+        ->check( CLI::IsMember( { 2, 4, 6 } ) )
+        ->group( "Energy Solver" )
+        ->description( "MMOC temperature reconstruction at the departure point: 2 = Q1, 4 = cubic, 6 = quintic." );
+    add_option_with_default(
+        app,
+        "--mmoc-velocity-interpolation-width",
+        parameters.energy_solver_parameters.mmoc_velocity_interpolation_width )
+        ->check( CLI::IsMember( { 2, 4, 6 } ) )
+        ->group( "Energy Solver" )
+        ->description( "MMOC velocity reconstruction along the characteristics: 2 = Q1, 4 = cubic, 6 = quintic." );
+
+    std::map< std::string, MMOCCellLimiter > mmoc_cell_limiter_map{
+        { "clip", MMOCCellLimiter::CLIP },
+        { "q1", MMOCCellLimiter::Q1_FALLBACK },
+        { "none", MMOCCellLimiter::NONE },
+    };
+    add_option_with_default( app, "--mmoc-cell-limiter", parameters.energy_solver_parameters.mmoc_cell_limiter )
+        ->transform( CLI::CheckedTransformer( mmoc_cell_limiter_map, CLI::ignore_case ) )
+        ->group( "Energy Solver" )
+        ->description(
+            "Bounding of the MMOC departure-point value by its cell's node range. 'clip': clamp into the range. "
+            "'q1': where the high-order value leaves the range, use the Q1 value instead. 'none': unbounded." );
 
     //////////////////////
     /// Input / output ///
@@ -1021,6 +1073,12 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         add_flag_with_default( app, "--extended-diagnostics", parameters.devel_parameters.extended_diagnostics )
             ->group( "Developer settings" )
             ->description( "Log detailed diagnostics on solver setup, memory footprint, etc." );
+        add_option_with_default(
+            app, "--negative-temperature-tolerance", parameters.devel_parameters.negative_temperature_tolerance )
+            ->group( "Developer settings" )
+            ->description(
+                "Abort once the minimum temperature falls below minus this value. MMOC is not monotone, so a "
+                "small undershoot is expected; 0 restores the strict any-negative-value test." );
         add_flag_with_default(
             app,
             "--consistent-freeslip-normals,!--consistent-freeslip-normals-off",

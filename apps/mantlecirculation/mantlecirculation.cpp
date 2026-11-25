@@ -472,6 +472,9 @@ Result<> run( const Parameters& prm )
     ScalarType simulated_time    = ScalarType( 0 );
     ScalarType simulated_time_Ma = ScalarType( 0 );
 
+    // Most negative temperature seen so far; only a new record is logged (see the guard below).
+    ScalarType T_min_record = ScalarType( 0 );
+
     // We need some global h. Let's, for simplicity (does not need to be too accurate) just choose the smallest h in
     // radial direction.
     const auto h = grid::shell::min_radial_h( domains[velocity_level]->domain_info().radii() );
@@ -539,6 +542,56 @@ Result<> run( const Parameters& prm )
             T,
             diffusion_coefficient,
             prm.physics_parameters.thermal_diffusivity_nondim,
+            internal_heating_coefficient,
+            adiabatic_heating_coefficient,
+            shear_heating_coefficient,
+            h,
+            prm,
+            table );
+    }
+    break;
+    case EnergySolverType::MMOC: {
+        using EnergyEqnCoeffT = EnergyEquationCoeffT<
+            DiffusionCoefficient,
+            InternalHeatingCoefficient,
+            AdiabaticCoefficient,
+            ShearHeatingCoefficient >;
+
+        const auto diffusion_coefficient = DiffusionCoefficient(
+            prm.physics_parameters.peclet_number, rho_profile, cp_profile, coords_radii[velocity_level] );
+
+        const auto internal_heating_coefficient = InternalHeatingCoefficient(
+            prm.physics_parameters.internal_heating,
+            prm.physics_parameters.h_number,
+            cp_profile,
+            coords_radii[velocity_level] );
+
+        const auto adiabatic_heating_coefficient = AdiabaticCoefficient(
+            prm.physics_parameters.compressible,
+            prm.physics_parameters.dissipation_number,
+            alpha_profile,
+            cp_profile,
+            coords_radii[velocity_level] );
+
+        const auto shear_heating_coefficient = ShearHeatingCoefficient(
+            prm.physics_parameters.shear_heating,
+            prm.physics_parameters.dissipation_number,
+            prm.physics_parameters.peclet_number,
+            prm.physics_parameters.rayleigh_number,
+            rho_profile,
+            cp_profile,
+            coords_radii[velocity_level] );
+
+        energy = std::make_unique< MMOCSolver< ScalarType, EnergyEqnCoeffT > >(
+            domains[velocity_level],
+            coords_shell[velocity_level],
+            coords_radii[velocity_level],
+            boundary_mask_data[velocity_level],
+            ownership_mask_data[velocity_level],
+            stokes.eta_fine(),
+            u.block_1(),
+            T,
+            diffusion_coefficient,
             internal_heating_coefficient,
             adiabatic_heating_coefficient,
             shear_heating_coefficient,
@@ -953,10 +1006,23 @@ Result<> run( const Parameters& prm )
             break;
         }
 
-        if ( has_negative( T ) )
+        // MMOC is semi-Lagrangian with a quintic reconstruction, i.e. not monotone, so a small
+        // undershoot below T_min is expected and harmless -- a strict "any negative value" test
+        // aborts healthy runs on it. Abort past a tolerance instead, and report the minimum
+        // whenever it sets a new negative record so a genuine blow-up stays visible.
+        const ScalarType T_min_global = kernels::common::min_entry( T.grid_data() );
+        if ( T_min_global < T_min_record )
+        {
+            T_min_record = T_min_global;
+            logroot << "[WARN] minimum temperature " << T_min_global << " is negative (abort below "
+                    << -prm.devel_parameters.negative_temperature_tolerance << ")." << std::endl;
+        }
+
+        if ( T_min_global < -static_cast< ScalarType >( prm.devel_parameters.negative_temperature_tolerance ) )
         {
             logroot << "\nDETECTED NEGATIVE TEMPERATURE VALUES.\n"
-                       "Aborting simulation...\n"
+                       "Minimum temperature: "
+                    << T_min_global << "\nAborting simulation...\n"
                     << std::endl;
             break;
         }

@@ -23,6 +23,7 @@ target_sources(terra
         epsilon_divdiv_stokes.hpp
         zero.hpp
         kmass.hpp
+        mmoc_transport.hpp
         )
 
 add_subdirectory(optimized_laplace)
