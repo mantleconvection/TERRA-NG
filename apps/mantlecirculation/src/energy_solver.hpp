@@ -1148,7 +1148,8 @@ void fill_dirichlet_temperature(
 ///
 /// The characteristic tracing has no stability limit of its own; the timestep is bounded by the requirement
 /// that a departure point stays inside the ghost layer, i.e. a Courant number below
-/// \ref MMOCTransport::max_courant (0.9 * ghost width, set with --mmoc-ghost-width).
+/// \ref MMOCTransport::max_courant. The layer is sized from --cfl-number and the stencil width
+/// (\ref MMOCTransport::required_ghost_width), so the requested CFL number is always admissible.
 template < typename ScalarType, typename CoeffType >
 class MMOCSolver : public EnergySolver< ScalarType >
 {
@@ -1324,7 +1325,7 @@ class MMOCSolver : public EnergySolver< ScalarType >
             .interpolation_width          = ep.mmoc_interpolation_width,
             .velocity_interpolation_width = ep.mmoc_velocity_interpolation_width,
             .limiter                      = lim,
-            .ghost_width                  = ep.mmoc_ghost_width };
+            .max_courant                  = prm.time_stepping_parameters.cfl_number };
     }
 
     /// Component-wise copy: the vector grid data is stored as separate views per component (SoA).

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -33,7 +33,7 @@
 ///       \f$ \tau = (m + c_k)/M \f$; reusing the raw stage weight \f$ c_k \f$ per substep drops the order to first.
 ///
 /// Advectively unconditionally stable (no CFL from the tracing); the implementation is bounded by the ghost-layer
-/// width (\ref MMOCTransportOptions::ghost_width), since a foot point must stay inside the subdomain plus its
+/// width (sized from \ref MMOCTransportOptions::max_courant), since a foot point must stay inside the subdomain plus its
 /// ghosts. \ref MMOCTransport::substeps_for_accuracy converts a Courant number into a substep count.
 ///
 /// **Interpolation.** The foot-point value uses \ref terra::fe::wedge::sl::evaluate_high_order_scalar over the
@@ -149,9 +149,10 @@ struct MMOCTransportOptions
     /// How the foot-point value is bounded by the range of its cell's nodes.
     sl::CellRangeLimiter limiter = sl::CellRangeLimiter::Clip;
 
-    /// Ghost layer width in nodes. Bounds the admissible Courant number (\ref MMOCTransport::max_courant) and
-    /// sets the size of every ghost exchange.
-    int ghost_width = sl::default_ghost_width;
+    /// Largest Courant number the caller intends to step with. The ghost layer is sized from it and from
+    /// `interpolation_width` (see \ref MMOCTransport::required_ghost_width), so the two can never disagree. The
+    /// default reproduces the former fixed layer of \ref terra::fe::wedge::sl::default_ghost_width nodes.
+    double max_courant = 0.9 * sl::default_ghost_width;
 };
 
 /// @brief Semi-Lagrangian (MMOC) advection of a Q1 nodal scalar field.
@@ -177,7 +178,7 @@ class MMOCTransport
         const MMOCTransportOptions&                              options )
     : domain_( &domain )
     , ownership_mask_( ownership_mask )
-    , exchange_( domain, options.ghost_width )
+    , exchange_( domain, required_ghost_width( options.interpolation_width, options.max_courant ) )
     , tableau_( butcher_tableau< ScalarType >( options.scheme ) )
     , interp_width_( options.interpolation_width )
     , vel_interp_width_( options.velocity_interpolation_width )
@@ -235,7 +236,7 @@ class MMOCTransport
     /// What is bounded is the *distance* the departure point may travel: it has to stay inside the local
     /// subdomain plus its ghost layer, because that is all the data available to interpolate from. Substepping
     /// does **not** relax this: substeps refine the trajectory but the foot point still ends up a full Courant
-    /// number away. Raising the limit means widening the ghost layer (\ref MMOCTransportOptions::ghost_width).
+    /// number away. Raising the limit means asking for a larger \ref MMOCTransportOptions::max_courant.
     [[nodiscard]] ScalarType max_courant() const
     {
         // A margin below the ghost width, so that the foot point stays strictly inside the ghosted region.
@@ -244,6 +245,24 @@ class MMOCTransport
 
     /// @brief Ghost layer width in nodes.
     [[nodiscard]] int ghost_width() const { return exchange_.ghost_width(); }
+
+    /// @brief Ghost layer width needed for a stencil width and a Courant number.
+    ///
+    /// Two independent demands, and the layer has to meet both:
+    /// - **Tracing.** The foot point must stay inside the ghosted region, at most \ref max_courant = 0.9 x the
+    ///   width away.
+    /// - **Reconstruction.** Across an internal seam (same diamond) the stencil may read into the ghost ring
+    ///   (\ref terra::fe::wedge::sl::widen_across_internal_seams). A centred window of `w` nodes around a cell at
+    ///   the edge of the owned block reaches `w/2 - 1` nodes past it: 2 for quintic, 1 for cubic, 0 for Q1.
+    ///   Laterally across a diamond seam and radially the stencil never reads ghosts.
+    ///
+    /// At least one layer is always kept: the point location seeds its walk from the ghosted geometry.
+    [[nodiscard]] static int required_ghost_width( const int interpolation_width, const double max_courant )
+    {
+        const int for_stencil = interpolation_width / 2 - 1;
+        const int for_tracing = static_cast< int >( std::ceil( max_courant / 0.9 - 1e-12 ) );
+        return std::max( { 1, for_stencil, for_tracing } );
+    }
 
     /// @brief Substeps giving a trajectory error comparable to the interpolation error.
     ///

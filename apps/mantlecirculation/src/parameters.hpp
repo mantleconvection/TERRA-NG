@@ -331,7 +331,6 @@ struct EnergySolverParameters
     bool ev_dump_nu_h = false;
 
     /// MMOC parameters (only used when `energy_solver == MMOC`).
-    int             mmoc_ghost_width                  = 3; ///< ghost layers; max Courant number is 0.9x this
     int             mmoc_interpolation_width          = 6; ///< temperature stencil: 2 = Q1, 4 = cubic, 6 = quintic
     int             mmoc_velocity_interpolation_width = 2; ///< velocity stencil, same encoding
     MMOCCellLimiter mmoc_cell_limiter                 = MMOCCellLimiter::CLIP;
@@ -862,7 +861,8 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
         ->description(
             "Courant number C used to compute the timestep dt = C * h_min / v_max. It is chosen for accuracy "
             "(and, for EV, stability of the explicit viscosity term), not for advective stability. "
-            "Typical values are <= 0.5 (SUPG, EV)." )
+            "Typical values are <= 0.5 (SUPG, EV). For MMOC it also sizes the ghost layer: a departure point may "
+            "travel at most 0.9 x the layer width, so the layer is made wide enough for this C." )
         ->group( "Time Discretization" );
     add_option_with_default( app, "--t-end", parameters.time_stepping_parameters.t_end_Ma )
         ->group( "Time Discretization" )
@@ -992,12 +992,6 @@ inline util::Result< std::variant< CLIHelp, Parameters > > parse_parameters( int
     add_option_with_default( app, "--ev-dump-nu-h", parameters.energy_solver_parameters.ev_dump_nu_h )
         ->group( "Energy Solver" );
 
-    add_option_with_default( app, "--mmoc-ghost-width", parameters.energy_solver_parameters.mmoc_ghost_width )
-        ->check( CLI::PositiveNumber )
-        ->group( "Energy Solver" )
-        ->description(
-            "MMOC ghost layer width in nodes. The departure point must stay inside it, so the timestep is capped "
-            "at a Courant number of 0.9 x this width; wider layers cost memory and a larger halo exchange." );
     add_option_with_default(
         app, "--mmoc-interpolation-width", parameters.energy_solver_parameters.mmoc_interpolation_width )
         ->check( CLI::IsMember( { 2, 4, 6 } ) )

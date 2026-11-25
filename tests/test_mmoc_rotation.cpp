@@ -294,7 +294,8 @@ void test_cone_revolution( const int level, const ScalarType cfl )
         fe::wedge::operators::shell::MMOCTransportOptions{ .scheme                       = TimeSteppingScheme::RK4,
                                                            .interpolation_width          = g_interpolation_width,
                                                            .velocity_interpolation_width = g_velocity_interpolation_width,
-                                                           .limiter                      = g_limiter } );
+                                                           .limiter                      = g_limiter,
+                                                           .max_courant                  = cfl } );
 
     const ScalarType h           = grid::shell::min_radial_h( domain.domain_info().radii() );
     const ScalarType t_end       = 2.0 * M_PI;
