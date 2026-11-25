@@ -42,8 +42,7 @@ class DiagonalSolver
     /// @param A Operator (matrix), unused.
     /// @param x Solution vector (output).
     /// @param b Right-hand side vector (input).
-    template < typename OpT >
-    void solve_impl( OpT& A, SolutionVectorType& x, const RHSVectorType& b )
+    void solve_impl( OperatorType& A, SolutionVectorType& x, const RHSVectorType& b )
     {
         assign( x, b );
         scale_in_place( x, inv_diagonal_ );

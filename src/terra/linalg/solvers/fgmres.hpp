@@ -97,7 +97,6 @@ class FGMRES
     /// @brief Set the number of inner iterations before restart (FGMRES(m)).
     /// @param m Restart parameter (must be at least 1).
     void set_restart( int m ) { options_.restart = std::max( 1, m ); }
-    void set_absolute_tolerance( ScalarType t ) { options_.absolute_residual_tolerance = t; }
 
     /// @brief Solve the linear system \f$ Ax = b \f$ using flexible GMRES with restarts.
     ///
@@ -113,8 +112,7 @@ class FGMRES
     /// @param A Operator (matrix) to solve with.
     /// @param x Solution vector (input: initial guess, output: final solution).
     /// @param b Right-hand side vector (input).
-    template < typename OpT >
-    void solve_impl( OpT& A, SolutionVectorType& x, const RHSVectorType& b )
+    void solve_impl( OperatorType& A, SolutionVectorType& x, const RHSVectorType& b )
     {
         util::Timer timer_fgmres_solve( "fgmres_solve" );
 
@@ -382,7 +380,7 @@ class FGMRES
             }
         }
 
-        last_iterations_ = total_iters;   // budget exhausted rather than converged
+        last_iterations_ = total_iters; // budget exhausted rather than converged
     }
 
   private:
