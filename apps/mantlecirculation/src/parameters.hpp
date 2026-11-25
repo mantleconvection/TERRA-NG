@@ -252,11 +252,6 @@ struct PhysicsParameters
     std::string alpha_profile_value_key   = "alpha (1/K)";
     std::string cp_profile_value_key      = "Cp (J/kg K)";
 
-    // PDA parameters
-    std::string pda_mintable_path              = "";
-    std::string pda_pressure_profile_csv_path  = "";
-    std::string pda_pressure_profile_value_key = "pressure (Pa)";
-
     ViscosityParameters          viscosity_parameters{};
     InitialTemperatureParameters initial_temperature{};
     PDAParameters                pda_parameters{};
