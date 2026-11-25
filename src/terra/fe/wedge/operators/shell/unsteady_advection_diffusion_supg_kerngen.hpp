@@ -58,6 +58,7 @@
 #include "dense/vec.hpp"
 #include "fe/wedge/integrands.hpp"
 #include "fe/wedge/kernel_helpers.hpp"
+#include "fe/wedge/operators/shell/host_tile_cells.hpp"
 #include "grid/shell/spherical_shell.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
@@ -94,7 +95,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
     linalg::VectorW1Vec< ScalarT, VelocityVecDim > velocity_;
 
     CoefficientT diffusivity_;
-    
+
     ScalarT dt_;
 
     bool    treat_boundary_;
@@ -135,11 +136,6 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
 
     void update_kernel_path_flag_host_only()
     {
-        if constexpr ( std::is_same_v< Kokkos::DefaultExecutionSpace, Kokkos::Serial > )
-        {
-            kernel_path_ = KernelPath::Slow;
-            return;
-        }
         kernel_path_ = KernelPath::Fast;
     }
 
@@ -180,24 +176,8 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
         hex_lat_          = domain_info.subdomain_num_nodes_per_side_laterally() - 1;
         hex_rad_          = domain_info.subdomain_num_nodes_radially() - 1;
 
-        if constexpr ( std::is_same_v< Kokkos::DefaultExecutionSpace, Kokkos::Serial > )
-        {
-            lat_tile_ = 1; r_tile_ = 1; r_passes_ = 1;
-        }
-#ifdef KOKKOS_ENABLE_OPENMP
-        else if constexpr ( std::is_same_v< Kokkos::DefaultExecutionSpace, Kokkos::OpenMP > )
-        {
-            const int max_team = std::min( Kokkos::OpenMP().concurrency(),
-                                           static_cast< int >( Kokkos::Impl::HostThreadTeamData::max_team_members ) );
-            if ( max_team >= 64 )      { lat_tile_ = 4; r_tile_ = 4; r_passes_ = 4; }
-            else if ( max_team >= 16 ) { lat_tile_ = 4; r_tile_ = 1; r_passes_ = 16; }
-            else                        { lat_tile_ = 1; r_tile_ = 1; r_passes_ = 1; }
-        }
-#endif
-        else
-        {
-            lat_tile_ = 4; r_tile_ = 8; r_passes_ = 2;
-        }
+        lat_tile_ = 4; r_tile_ = 8; r_passes_ = 2;
+
         r_tile_block_ = r_tile_ * r_passes_;
         lat_tiles_    = ( hex_lat_ + lat_tile_ - 1 ) / lat_tile_;
         r_tiles_      = ( hex_rad_ + r_tile_block_ - 1 ) / r_tile_block_;
@@ -235,7 +215,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
         vel_grid_ = velocity_.grid_data();
 
         util::Timer          timer_kernel( "ad_supg_kernel" );
-        Kokkos::TeamPolicy<> policy( blocks_, team_size_ );
+        Kokkos::TeamPolicy<> policy( blocks_, tile_team_size( team_size_ ) );
         if ( kernel_path_ == KernelPath::Fast )
             policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
 
@@ -246,7 +226,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
         }
         else
         {
-            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > fast_policy( blocks_, team_size_ );
+            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > fast_policy( blocks_, tile_team_size( team_size_ ) );
             fast_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
 
             // 2x2x2 = 8 template variants; host-side branch on runtime flags.
@@ -345,19 +325,27 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
         int local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell;
         decode_team_indices( team, local_subdomain_id, x0, y0, r0, tx, ty, tr, x_cell, y_cell, r_cell );
 
-        if ( tr >= r_tile_ )
-            return;
+        // One cell per team thread on a device; on the host the single team thread walks the whole tile.
+        for_each_tile_cell( team, team_size_, [&]( const int cell ) {
+            const int tr     = cell % r_tile_;
+            const int tx     = ( cell / r_tile_ ) % lat_tile_;
+            const int ty     = cell / ( r_tile_ * lat_tile_ );
+            const int x_cell = x0 + tx;
+            const int y_cell = y0 + ty;
+            if ( tr >= r_tile_ )
+                return;
 
-        for ( int pass = 0; pass < r_passes_; ++pass )
-        {
-            const int r_cell_pass = r0 + pass * r_tile_ + tr;
-            if ( r_cell_pass >= hex_rad_ )
-                break;
-            if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
-                continue;
+            for ( int pass = 0; pass < r_passes_; ++pass )
+            {
+                const int r_cell_pass = r0 + pass * r_tile_ + tr;
+                if ( r_cell_pass >= hex_rad_ )
+                    break;
+                if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
+                    continue;
 
-            process_cell_legacy( local_subdomain_id, x_cell, y_cell, r_cell_pass );
-        }
+                process_cell_legacy( local_subdomain_id, x_cell, y_cell, r_cell_pass );
+            }
+        } );
     }
 
     // Per-cell legacy math (replica of UnsteadyAdvectionDiffusionSUPG::operator()).
@@ -399,9 +387,9 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
             {
                 const auto&   uq         = vel_interp[wedge][q];
                 const ScalarT vel_norm_q = uq.norm();
-                
+
                 ScalarT diffusivity_coeff = 0.0;
-                
+
                 if constexpr ( std::is_same_v< CoefficientT, double > )
                 {
                     diffusivity_coeff = diffusivity_;
@@ -432,7 +420,7 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
                 const auto vel              = vel_interp[wedge][q];
 
                 ScalarT diffusivity_coeff = 0.0;
-                
+
                 if constexpr ( std::is_same_v< CoefficientT, double > )
                 {
                     diffusivity_coeff = diffusivity_;
@@ -599,385 +587,393 @@ class UnsteadyAdvectionDiffusionSUPGKerngen
 
         team.team_barrier();
 
-        if ( tr >= r_tile_ )
-            return;
-        if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
-            return;
+        // One cell per team thread on a device; on the host the single team thread walks the whole tile.
+        for_each_tile_cell( team, team_size_, [&]( const int cell ) {
+            const int tr     = cell % r_tile_;
+            const int tx     = ( cell / r_tile_ ) % lat_tile_;
+            const int ty     = cell / ( r_tile_ * lat_tile_ );
+            const int x_cell = x0 + tx;
+            const int y_cell = y0 + ty;
+            if ( tr >= r_tile_ )
+                return;
+            if ( x_cell >= hex_lat_ || y_cell >= hex_lat_ )
+                return;
 
-        // Wedge-node offset table.
-        constexpr int WEDGE_NODE_OFF[2][6][3] = {
-            { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 0, 1 }, { 0, 1, 1 } },
-            { { 1, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 1, 1 }, { 0, 1, 1 }, { 1, 0, 1 } } };
+            // Wedge-node offset table.
+            constexpr int WEDGE_NODE_OFF[2][6][3] = {
+                { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 0, 1 }, { 0, 1, 1 } },
+                { { 1, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 1, 1 }, { 0, 1, 1 }, { 1, 0, 1 } } };
 
-        // Felippa 3x2 quadrature points & weights, hoisted for compile-time propagation.
-        constexpr int NQ = 6;
-        constexpr double QUAD_W = 1.0 / 6.0;
-        //   (xi, eta, zeta)
-        //   points 0..2 share zeta = -1/sqrt(3); points 3..5 share zeta = +1/sqrt(3).
-        constexpr double ONE_OVER_SQRT3 = 0.5773502691896257;
-        //   Lateral barycentric coordinates per quadrature point:
-        //       (1-xi-eta, xi, eta)
-        constexpr double BARY[NQ][3] = {
-            { 1.0/6.0, 2.0/3.0, 1.0/6.0 },   // q=0: xi=2/3, eta=1/6
-            { 1.0/6.0, 1.0/6.0, 2.0/3.0 },   // q=1: xi=1/6, eta=2/3
-            { 2.0/3.0, 1.0/6.0, 1.0/6.0 },   // q=2: xi=1/6, eta=1/6
-            { 1.0/6.0, 2.0/3.0, 1.0/6.0 },   // q=3: same lat as 0
-            { 1.0/6.0, 1.0/6.0, 2.0/3.0 },   // q=4: same lat as 1
-            { 2.0/3.0, 1.0/6.0, 1.0/6.0 }    // q=5: same lat as 2
-        };
-        // Zeta half-width factor: grad_shape_rad returns ±0.5; shape_rad(j, zeta) = (1 ∓ zeta)/2.
-        //     j<3 (lower layer): shape_rad = (1 - zeta)/2
-        //     j>=3 (upper layer): shape_rad = (1 + zeta)/2
-        constexpr double ZETA_Q[NQ] = {
-            -ONE_OVER_SQRT3, -ONE_OVER_SQRT3, -ONE_OVER_SQRT3,
-            +ONE_OVER_SQRT3, +ONE_OVER_SQRT3, +ONE_OVER_SQRT3 };
+            // Felippa 3x2 quadrature points & weights, hoisted for compile-time propagation.
+            constexpr int NQ = 6;
+            constexpr double QUAD_W = 1.0 / 6.0;
+            //   (xi, eta, zeta)
+            //   points 0..2 share zeta = -1/sqrt(3); points 3..5 share zeta = +1/sqrt(3).
+            constexpr double ONE_OVER_SQRT3 = 0.5773502691896257;
+            //   Lateral barycentric coordinates per quadrature point:
+            //       (1-xi-eta, xi, eta)
+            constexpr double BARY[NQ][3] = {
+                { 1.0/6.0, 2.0/3.0, 1.0/6.0 },   // q=0: xi=2/3, eta=1/6
+                { 1.0/6.0, 1.0/6.0, 2.0/3.0 },   // q=1: xi=1/6, eta=2/3
+                { 2.0/3.0, 1.0/6.0, 1.0/6.0 },   // q=2: xi=1/6, eta=1/6
+                { 1.0/6.0, 2.0/3.0, 1.0/6.0 },   // q=3: same lat as 0
+                { 1.0/6.0, 1.0/6.0, 2.0/3.0 },   // q=4: same lat as 1
+                { 2.0/3.0, 1.0/6.0, 1.0/6.0 }    // q=5: same lat as 2
+            };
+            // Zeta half-width factor: grad_shape_rad returns ±0.5; shape_rad(j, zeta) = (1 ∓ zeta)/2.
+            //     j<3 (lower layer): shape_rad = (1 - zeta)/2
+            //     j>=3 (upper layer): shape_rad = (1 + zeta)/2
+            constexpr double ZETA_Q[NQ] = {
+                -ONE_OVER_SQRT3, -ONE_OVER_SQRT3, -ONE_OVER_SQRT3,
+                +ONE_OVER_SQRT3, +ONE_OVER_SQRT3, +ONE_OVER_SQRT3 };
 
-        // PHI[j][q] = shape_lat(j, xi, eta) * shape_rad(j, zeta)
-        // shape_lat(j=0|3, xi, eta) = 1 - xi - eta = BARY[q][0]
-        // shape_lat(j=1|4, ...) = xi                = BARY[q][1]
-        // shape_lat(j=2|5, ...) = eta               = BARY[q][2]
-        // shape_rad(j<3, zeta) = 0.5 (1 - zeta)
-        // shape_rad(j>=3,zeta) = 0.5 (1 + zeta)
-        auto phi = [&]( int j, int q ) -> double {
-            const double sl = BARY[q][j % 3];
-            const double sr = ( j < 3 ) ? 0.5 * ( 1.0 - ZETA_Q[q] ) : 0.5 * ( 1.0 + ZETA_Q[q] );
-            return sl * sr;
-        };
-        //   grad_shape_lat_xi(j=0|3) = -1, (1|4) = +1, (2|5) = 0
-        //   grad_shape_lat_eta(j=0|3) = -1, (1|4) = 0,  (2|5) = +1
-        //   grad_shape_rad(j<3) = -0.5, (j>=3) = +0.5
-        //   grad_shape(j, xi, eta, zeta)
-        //     = ( grad_lat_xi(j) * shape_rad(j, zeta),
-        //         grad_lat_eta(j) * shape_rad(j, zeta),
-        //         shape_lat(j, xi, eta) * grad_shape_rad(j) )
-        auto gref = [&]( int j, int q, int d ) -> double {
-            const double sr = ( j < 3 ) ? 0.5 * ( 1.0 - ZETA_Q[q] ) : 0.5 * ( 1.0 + ZETA_Q[q] );
-            const double grad_rad = ( j < 3 ) ? -0.5 : 0.5;
-            const int jmod = j % 3;
-            const double glat_xi  = ( jmod == 0 ) ? -1.0 : ( jmod == 1 ) ? 1.0 : 0.0;
-            const double glat_eta = ( jmod == 0 ) ? -1.0 : ( jmod == 1 ) ? 0.0 : 1.0;
-            const double sl = BARY[q][jmod];
-            if ( d == 0 ) return glat_xi * sr;
-            if ( d == 1 ) return glat_eta * sr;
-            return sl * grad_rad;
-        };
-
-        // Node neighbours for Jacobian surface-coord gather (lat-only).
-        const int n00 = node_id( tx,     ty     );
-        const int n01 = node_id( tx,     ty + 1 );
-        const int n10 = node_id( tx + 1, ty     );
-        const int n11 = node_id( tx + 1, ty + 1 );
-
-        // Per-pass radial loop.
-        for ( int pass = 0; pass < r_passes_; ++pass )
-        {
-            const int lvl0       = pass * r_tile_ + tr;
-            const int r_cell_abs = r0 + lvl0;
-            if ( r_cell_abs >= hex_rad_ )
-                break;
-
-            const double r_lower = r_sh( lvl0     );
-            const double r_upper = r_sh( lvl0 + 1 );
-            const double half_dr = 0.5 * ( r_upper - r_lower );
-            const double r_mid   = 0.5 * ( r_lower + r_upper );
-            const double h_cell  = r_upper - r_lower;
-
-            // Boundary flags (determine Dirichlet row/col elimination masks).
-            bool at_cmb = false, at_surface = false;
-            if constexpr ( TreatBoundary )
-            {
-                at_cmb     = util::has_flag( boundary_mask_( local_subdomain_id, x_cell, y_cell, r_cell_abs     ),
-                                             grid::shell::ShellBoundaryFlag::CMB );
-                at_surface = util::has_flag( boundary_mask_( local_subdomain_id, x_cell, y_cell, r_cell_abs + 1 ),
-                                             grid::shell::ShellBoundaryFlag::SURFACE );
-            }
-
-            // Dirichlet treatment helper: node j is a "boundary node" if
-            //   at_cmb     AND ddr_j == 0   (inner layer)   -> j in {0,1,2}
-            //   at_surface AND ddr_j == 1   (outer layer)   -> j in {3,4,5}
-            // We keep the diagonal (j == i) so row-elimination is handled in the scatter branch.
-            auto boundary_j_col = [&]( int j ) -> bool {
-                if constexpr ( !TreatBoundary ) return false;
-                return ( at_cmb && j < 3 ) || ( at_surface && j >= 3 );
+            // PHI[j][q] = shape_lat(j, xi, eta) * shape_rad(j, zeta)
+            // shape_lat(j=0|3, xi, eta) = 1 - xi - eta = BARY[q][0]
+            // shape_lat(j=1|4, ...) = xi                = BARY[q][1]
+            // shape_lat(j=2|5, ...) = eta               = BARY[q][2]
+            // shape_rad(j<3, zeta) = 0.5 (1 - zeta)
+            // shape_rad(j>=3,zeta) = 0.5 (1 + zeta)
+            auto phi = [&]( int j, int q ) -> double {
+                const double sl = BARY[q][j % 3];
+                const double sr = ( j < 3 ) ? 0.5 * ( 1.0 - ZETA_Q[q] ) : 0.5 * ( 1.0 + ZETA_Q[q] );
+                return sl * sr;
+            };
+            //   grad_shape_lat_xi(j=0|3) = -1, (1|4) = +1, (2|5) = 0
+            //   grad_shape_lat_eta(j=0|3) = -1, (1|4) = 0,  (2|5) = +1
+            //   grad_shape_rad(j<3) = -0.5, (j>=3) = +0.5
+            //   grad_shape(j, xi, eta, zeta)
+            //     = ( grad_lat_xi(j) * shape_rad(j, zeta),
+            //         grad_lat_eta(j) * shape_rad(j, zeta),
+            //         shape_lat(j, xi, eta) * grad_shape_rad(j) )
+            auto gref = [&]( int j, int q, int d ) -> double {
+                const double sr = ( j < 3 ) ? 0.5 * ( 1.0 - ZETA_Q[q] ) : 0.5 * ( 1.0 + ZETA_Q[q] );
+                const double grad_rad = ( j < 3 ) ? -0.5 : 0.5;
+                const int jmod = j % 3;
+                const double glat_xi  = ( jmod == 0 ) ? -1.0 : ( jmod == 1 ) ? 1.0 : 0.0;
+                const double glat_eta = ( jmod == 0 ) ? -1.0 : ( jmod == 1 ) ? 0.0 : 1.0;
+                const double sl = BARY[q][jmod];
+                if ( d == 0 ) return glat_xi * sr;
+                if ( d == 1 ) return glat_eta * sr;
+                return sl * grad_rad;
             };
 
-            for ( int w = 0; w < num_wedges_per_hex_cell; ++w )
+            // Node neighbours for Jacobian surface-coord gather (lat-only).
+            const int n00 = node_id( tx,     ty     );
+            const int n01 = node_id( tx,     ty + 1 );
+            const int n10 = node_id( tx + 1, ty     );
+            const int n11 = node_id( tx + 1, ty + 1 );
+
+            // Per-pass radial loop.
+            for ( int pass = 0; pass < r_passes_; ++pass )
             {
-                // Wedge surface vertices in the lateral plane (shmem lookup).
-                const int v0 = ( w == 0 ? n00 : n11 );
-                const int v1 = ( w == 0 ? n10 : n01 );
-                const int v2 = ( w == 0 ? n01 : n10 );
+                const int lvl0       = pass * r_tile_ + tr;
+                const int r_cell_abs = r0 + lvl0;
+                if ( r_cell_abs >= hex_rad_ )
+                    break;
 
-                // Surface coords P0, P1, P2 (3 doubles each).
-                const double P0[3] = { coords_sh( v0, 0 ), coords_sh( v0, 1 ), coords_sh( v0, 2 ) };
-                const double P1[3] = { coords_sh( v1, 0 ), coords_sh( v1, 1 ), coords_sh( v1, 2 ) };
-                const double P2[3] = { coords_sh( v2, 0 ), coords_sh( v2, 1 ), coords_sh( v2, 2 ) };
+                const double r_lower = r_sh( lvl0     );
+                const double r_upper = r_sh( lvl0 + 1 );
+                const double half_dr = 0.5 * ( r_upper - r_lower );
+                const double r_mid   = 0.5 * ( r_lower + r_upper );
+                const double h_cell  = r_upper - r_lower;
 
-                // Differences, hoisted (used per quad).
-                const double dP1_P0[3] = { P1[0] - P0[0], P1[1] - P0[1], P1[2] - P0[2] };
-                const double dP2_P0[3] = { P2[0] - P0[0], P2[1] - P0[1], P2[2] - P0[2] };
-
-                // Pre-pass 1: interpolate velocity at each quad point; compute tau_wedge.
-                // We cache vel_q[q][d] for reuse in main pass + boundary-diagonal pass.
-                double vel_q[NQ][3] = { { 0.0 } };
+                // Boundary flags (determine Dirichlet row/col elimination masks).
+                bool at_cmb = false, at_surface = false;
+                if constexpr ( TreatBoundary )
                 {
-                    double tau_sum = 0.0;
-                    double w_sum   = 0.0;
-                    for ( int q = 0; q < NQ; ++q )
+                    at_cmb     = util::has_flag( boundary_mask_( local_subdomain_id, x_cell, y_cell, r_cell_abs     ),
+                                                 grid::shell::ShellBoundaryFlag::CMB );
+                    at_surface = util::has_flag( boundary_mask_( local_subdomain_id, x_cell, y_cell, r_cell_abs + 1 ),
+                                                 grid::shell::ShellBoundaryFlag::SURFACE );
+                }
+
+                // Dirichlet treatment helper: node j is a "boundary node" if
+                //   at_cmb     AND ddr_j == 0   (inner layer)   -> j in {0,1,2}
+                //   at_surface AND ddr_j == 1   (outer layer)   -> j in {3,4,5}
+                // We keep the diagonal (j == i) so row-elimination is handled in the scatter branch.
+                auto boundary_j_col = [&]( int j ) -> bool {
+                    if constexpr ( !TreatBoundary ) return false;
+                    return ( at_cmb && j < 3 ) || ( at_surface && j >= 3 );
+                };
+
+                for ( int w = 0; w < num_wedges_per_hex_cell; ++w )
+                {
+                    // Wedge surface vertices in the lateral plane (shmem lookup).
+                    const int v0 = ( w == 0 ? n00 : n11 );
+                    const int v1 = ( w == 0 ? n10 : n01 );
+                    const int v2 = ( w == 0 ? n01 : n10 );
+
+                    // Surface coords P0, P1, P2 (3 doubles each).
+                    const double P0[3] = { coords_sh( v0, 0 ), coords_sh( v0, 1 ), coords_sh( v0, 2 ) };
+                    const double P1[3] = { coords_sh( v1, 0 ), coords_sh( v1, 1 ), coords_sh( v1, 2 ) };
+                    const double P2[3] = { coords_sh( v2, 0 ), coords_sh( v2, 1 ), coords_sh( v2, 2 ) };
+
+                    // Differences, hoisted (used per quad).
+                    const double dP1_P0[3] = { P1[0] - P0[0], P1[1] - P0[1], P1[2] - P0[2] };
+                    const double dP2_P0[3] = { P2[0] - P0[0], P2[1] - P0[1], P2[2] - P0[2] };
+
+                    // Pre-pass 1: interpolate velocity at each quad point; compute tau_wedge.
+                    // We cache vel_q[q][d] for reuse in main pass + boundary-diagonal pass.
+                    double vel_q[NQ][3] = { { 0.0 } };
                     {
-                        double ux = 0.0, uy = 0.0, uz = 0.0;
-
-                        ScalarT diffusivity_coeff = 0.0;
-                
-                        if constexpr ( std::is_same_v< CoefficientT, double > )
+                        double tau_sum = 0.0;
+                        double w_sum   = 0.0;
+                        for ( int q = 0; q < NQ; ++q )
                         {
-                            diffusivity_coeff = diffusivity_;
-                        }
-                        else
-                        {
-                            diffusivity_coeff = diffusivity_( local_subdomain_id, x_cell, y_cell, r_cell, w, dense::Vec< double, 3 >{ BARY[q][0], BARY[q][1], BARY[q][2] });
-                        }
+                            double ux = 0.0, uy = 0.0, uz = 0.0;
 
-#pragma unroll
-                        for ( int j = 0; j < num_nodes_per_wedge; ++j )
-                        {
-                            const int    ddx = WEDGE_NODE_OFF[w][j][0];
-                            const int    ddy = WEDGE_NODE_OFF[w][j][1];
-                            const int    ddr = WEDGE_NODE_OFF[w][j][2];
-                            const int    nid = node_id( tx + ddx, ty + ddy );
-                            const int    lvl = lvl0 + ddr;
-                            const double p   = phi( j, q );
-                            ux += p * vel_sh( nid, 0, lvl );
-                            uy += p * vel_sh( nid, 1, lvl );
-                            uz += p * vel_sh( nid, 2, lvl );
-                        }
-                        vel_q[q][0] = ux;
-                        vel_q[q][1] = uy;
-                        vel_q[q][2] = uz;
+                            ScalarT diffusivity_coeff = 0.0;
 
-                        const double vn   = Kokkos::sqrt( ux * ux + uy * uy + uz * uz );
-                        const double tauq = supg_tau< double >( vn, double( diffusivity_coeff ), h_cell, 1e-08 );
-                        tau_sum += tauq * QUAD_W;
-                        w_sum   += QUAD_W;
-                    }
-                    // volume-averaged tau (unchanged from legacy); zero out
-                    // when SUPG is disabled (EV pipeline) so the streamline
-                    // contributions degenerate cleanly.
-                    const double tau_wedge = ( supg_enabled_ && w_sum > 0.0 ) ? ( tau_sum / w_sum ) : 0.0;
-
-                    // Per-i accumulators for the 6 output nodes of this wedge.
-                    double dst_acc[num_nodes_per_wedge] = { 0.0 };
-                    // Lumped mass diagonal accumulator (per output node i); used only if LumpedMass.
-                    double lumped_Mii[num_nodes_per_wedge] = { 0.0 };
-
-                    // Main fused loop over quad points.
-                    for ( int q = 0; q < NQ; ++q )
-                    {
-                        ScalarT diffusivity_coeff = 0.0;
-                
-                        if constexpr ( std::is_same_v< CoefficientT, double > )
-                        {
-                            diffusivity_coeff = diffusivity_;
-                        }
-                        else
-                        {
-                            diffusivity_coeff = diffusivity_( local_subdomain_id, x_cell, y_cell, r_cell, w, dense::Vec< double, 3 >{ BARY[q][0], BARY[q][1], BARY[q][2] });
-                        }
-
-                        // Assemble J at this quad point.
-                        //   J_*_0 = r(zeta_q) * dP1_P0
-                        //   J_*_1 = r(zeta_q) * dP2_P0
-                        //   J_*_2 = half_dr * (BARY[q][0]*P0 + BARY[q][1]*P1 + BARY[q][2]*P2)
-                        const double r_at_q = r_mid + ZETA_Q[q] * half_dr;
-                        const double b0 = BARY[q][0], b1 = BARY[q][1], b2 = BARY[q][2];
-
-                        const double J00 = r_at_q * dP1_P0[0];
-                        const double J10 = r_at_q * dP1_P0[1];
-                        const double J20 = r_at_q * dP1_P0[2];
-                        const double J01 = r_at_q * dP2_P0[0];
-                        const double J11 = r_at_q * dP2_P0[1];
-                        const double J21 = r_at_q * dP2_P0[2];
-                        const double J02 = half_dr * ( b0 * P0[0] + b1 * P1[0] + b2 * P2[0] );
-                        const double J12 = half_dr * ( b0 * P0[1] + b1 * P1[1] + b2 * P2[1] );
-                        const double J22 = half_dr * ( b0 * P0[2] + b1 * P1[2] + b2 * P2[2] );
-
-                        const double J_det  = J00 * J11 * J22 - J00 * J12 * J21
-                                            - J01 * J10 * J22 + J01 * J12 * J20
-                                            + J02 * J10 * J21 - J02 * J11 * J20;
-                        const double abs_det = Kokkos::abs( J_det );
-                        const double inv_det = 1.0 / J_det;
-
-                        // invJ_T entries (row d of J^{-T} dot ∇_ref = physical gradient component d)
-                        const double i00 = inv_det * (  J11 * J22 - J12 * J21 );
-                        const double i01 = inv_det * ( -J10 * J22 + J12 * J20 );
-                        const double i02 = inv_det * (  J10 * J21 - J11 * J20 );
-                        const double i10 = inv_det * ( -J01 * J22 + J02 * J21 );
-                        const double i11 = inv_det * (  J00 * J22 - J02 * J20 );
-                        const double i12 = inv_det * ( -J00 * J21 + J01 * J20 );
-                        const double i20 = inv_det * (  J01 * J12 - J02 * J11 );
-                        const double i21 = inv_det * ( -J00 * J12 + J02 * J10 );
-                        const double i22 = inv_det * (  J00 * J11 - J01 * J10 );
-
-                        const double wdet = QUAD_W * abs_det;
-
-                        // Gather: T̂(q), ∇T(q). Column-elimination at Dirichlet boundary nodes.
-                        double T_hat = 0.0;
-                        double gT0 = 0.0, gT1 = 0.0, gT2 = 0.0;
-#pragma unroll
-                        for ( int j = 0; j < num_nodes_per_wedge; ++j )
-                        {
-                            if constexpr ( TreatBoundary )
-                                if ( boundary_j_col( j ) )
-                                    continue;
-
-                            const int    ddx = WEDGE_NODE_OFF[w][j][0];
-                            const int    ddy = WEDGE_NODE_OFF[w][j][1];
-                            const int    ddr = WEDGE_NODE_OFF[w][j][2];
-                            const int    nid = node_id( tx + ddx, ty + ddy );
-                            const int    lvl = lvl0 + ddr;
-                            const double Tj  = T_sh( nid, lvl );
-
-                            const double pj = phi( j, q );
-                            T_hat += pj * Tj;
-
-                            const double gx = gref( j, q, 0 );
-                            const double gy = gref( j, q, 1 );
-                            const double gz = gref( j, q, 2 );
-                            const double g0 = i00 * gx + i01 * gy + i02 * gz;
-                            const double g1 = i10 * gx + i11 * gy + i12 * gz;
-                            const double g2 = i20 * gx + i21 * gy + i22 * gz;
-                            gT0 += g0 * Tj;
-                            gT1 += g1 * Tj;
-                            gT2 += g2 * Tj;
-                        }
-
-                        const double ux = vel_q[q][0], uy = vel_q[q][1], uz = vel_q[q][2];
-                        const double u_dot_gT = ux * gT0 + uy * gT1 + uz * gT2;
-
-                        // A_scalar and B_vec, with LumpedMass handling.
-                        // For LumpedMass: exclude the mass term from A_scalar (handled in diagonal acc below).
-                        const double mass_in_scalar = LumpedMass ? 0.0 : ( double( mass_scaling_ ) * T_hat );
-                        const double A_scalar = mass_in_scalar + double( dt_ ) * u_dot_gT;
-                        const double dkappa   = double( dt_ ) * double( diffusivity_coeff );
-                        const double dtau     = double( dt_ ) * tau_wedge * u_dot_gT;
-                        const double Bx = dkappa * gT0 + dtau * ux;
-                        const double By = dkappa * gT1 + dtau * uy;
-                        const double Bz = dkappa * gT2 + dtau * uz;
-
-                        // Scatter accumulate into each output node's dst_acc.
-#pragma unroll
-                        for ( int i = 0; i < num_nodes_per_wedge; ++i )
-                        {
-                            const double pi  = phi( i, q );
-                            const double gxi = gref( i, q, 0 );
-                            const double gyi = gref( i, q, 1 );
-                            const double gzi = gref( i, q, 2 );
-                            const double gi0 = i00 * gxi + i01 * gyi + i02 * gzi;
-                            const double gi1 = i10 * gxi + i11 * gyi + i12 * gzi;
-                            const double gi2 = i20 * gxi + i21 * gyi + i22 * gzi;
-
-                            // Boundary row: only the i=j diagonal term contributes.
-                            bool is_boundary_i = false;
-                            if constexpr ( TreatBoundary )
+                            if constexpr ( std::is_same_v< CoefficientT, double > )
                             {
-                                is_boundary_i = ( at_cmb && i < 3 ) || ( at_surface && i >= 3 );
+                                diffusivity_coeff = diffusivity_;
+                            }
+                            else
+                            {
+                                diffusivity_coeff = diffusivity_( local_subdomain_id, x_cell, y_cell, r_cell, w, dense::Vec< double, 3 >{ BARY[q][0], BARY[q][1], BARY[q][2] });
                             }
 
-                            // Diagonal accumulators (used when is_boundary_i or Diagonal==true).
-                            // When LumpedMass is true, the mass contribution uses the row-sum form
-                            //   M_ii_lumped = m · Σ_q wdet · φ_i(q)        (since Σⱼ φ_j ≡ 1)
-                            // When LumpedMass is false, the mass diagonal is the unlumped one:
-                            //   M_ii        = m · Σ_q wdet · φ_i(q) · φ_i(q)
-                            // A's diagonal (diff + adv + supg) is identical for lumped and unlumped.
-                            auto add_diagonal_contribution = [&]() {
+#pragma unroll
+                            for ( int j = 0; j < num_nodes_per_wedge; ++j )
+                            {
+                                const int    ddx = WEDGE_NODE_OFF[w][j][0];
+                                const int    ddy = WEDGE_NODE_OFF[w][j][1];
+                                const int    ddr = WEDGE_NODE_OFF[w][j][2];
+                                const int    nid = node_id( tx + ddx, ty + ddy );
+                                const int    lvl = lvl0 + ddr;
+                                const double p   = phi( j, q );
+                                ux += p * vel_sh( nid, 0, lvl );
+                                uy += p * vel_sh( nid, 1, lvl );
+                                uz += p * vel_sh( nid, 2, lvl );
+                            }
+                            vel_q[q][0] = ux;
+                            vel_q[q][1] = uy;
+                            vel_q[q][2] = uz;
+
+                            const double vn   = Kokkos::sqrt( ux * ux + uy * uy + uz * uz );
+                            const double tauq = supg_tau< double >( vn, double( diffusivity_coeff ), h_cell, 1e-08 );
+                            tau_sum += tauq * QUAD_W;
+                            w_sum   += QUAD_W;
+                        }
+                        // volume-averaged tau (unchanged from legacy); zero out
+                        // when SUPG is disabled (EV pipeline) so the streamline
+                        // contributions degenerate cleanly.
+                        const double tau_wedge = ( supg_enabled_ && w_sum > 0.0 ) ? ( tau_sum / w_sum ) : 0.0;
+
+                        // Per-i accumulators for the 6 output nodes of this wedge.
+                        double dst_acc[num_nodes_per_wedge] = { 0.0 };
+                        // Lumped mass diagonal accumulator (per output node i); used only if LumpedMass.
+                        double lumped_Mii[num_nodes_per_wedge] = { 0.0 };
+
+                        // Main fused loop over quad points.
+                        for ( int q = 0; q < NQ; ++q )
+                        {
+                            ScalarT diffusivity_coeff = 0.0;
+
+                            if constexpr ( std::is_same_v< CoefficientT, double > )
+                            {
+                                diffusivity_coeff = diffusivity_;
+                            }
+                            else
+                            {
+                                diffusivity_coeff = diffusivity_( local_subdomain_id, x_cell, y_cell, r_cell, w, dense::Vec< double, 3 >{ BARY[q][0], BARY[q][1], BARY[q][2] });
+                            }
+
+                            // Assemble J at this quad point.
+                            //   J_*_0 = r(zeta_q) * dP1_P0
+                            //   J_*_1 = r(zeta_q) * dP2_P0
+                            //   J_*_2 = half_dr * (BARY[q][0]*P0 + BARY[q][1]*P1 + BARY[q][2]*P2)
+                            const double r_at_q = r_mid + ZETA_Q[q] * half_dr;
+                            const double b0 = BARY[q][0], b1 = BARY[q][1], b2 = BARY[q][2];
+
+                            const double J00 = r_at_q * dP1_P0[0];
+                            const double J10 = r_at_q * dP1_P0[1];
+                            const double J20 = r_at_q * dP1_P0[2];
+                            const double J01 = r_at_q * dP2_P0[0];
+                            const double J11 = r_at_q * dP2_P0[1];
+                            const double J21 = r_at_q * dP2_P0[2];
+                            const double J02 = half_dr * ( b0 * P0[0] + b1 * P1[0] + b2 * P2[0] );
+                            const double J12 = half_dr * ( b0 * P0[1] + b1 * P1[1] + b2 * P2[1] );
+                            const double J22 = half_dr * ( b0 * P0[2] + b1 * P1[2] + b2 * P2[2] );
+
+                            const double J_det  = J00 * J11 * J22 - J00 * J12 * J21
+                                                - J01 * J10 * J22 + J01 * J12 * J20
+                                                + J02 * J10 * J21 - J02 * J11 * J20;
+                            const double abs_det = Kokkos::abs( J_det );
+                            const double inv_det = 1.0 / J_det;
+
+                            // invJ_T entries (row d of J^{-T} dot ∇_ref = physical gradient component d)
+                            const double i00 = inv_det * (  J11 * J22 - J12 * J21 );
+                            const double i01 = inv_det * ( -J10 * J22 + J12 * J20 );
+                            const double i02 = inv_det * (  J10 * J21 - J11 * J20 );
+                            const double i10 = inv_det * ( -J01 * J22 + J02 * J21 );
+                            const double i11 = inv_det * (  J00 * J22 - J02 * J20 );
+                            const double i12 = inv_det * ( -J00 * J21 + J01 * J20 );
+                            const double i20 = inv_det * (  J01 * J12 - J02 * J11 );
+                            const double i21 = inv_det * ( -J00 * J12 + J02 * J10 );
+                            const double i22 = inv_det * (  J00 * J11 - J01 * J10 );
+
+                            const double wdet = QUAD_W * abs_det;
+
+                            // Gather: T̂(q), ∇T(q). Column-elimination at Dirichlet boundary nodes.
+                            double T_hat = 0.0;
+                            double gT0 = 0.0, gT1 = 0.0, gT2 = 0.0;
+#pragma unroll
+                            for ( int j = 0; j < num_nodes_per_wedge; ++j )
+                            {
+                                if constexpr ( TreatBoundary )
+                                    if ( boundary_j_col( j ) )
+                                        continue;
+
+                                const int    ddx = WEDGE_NODE_OFF[w][j][0];
+                                const int    ddy = WEDGE_NODE_OFF[w][j][1];
+                                const int    ddr = WEDGE_NODE_OFF[w][j][2];
+                                const int    nid = node_id( tx + ddx, ty + ddy );
+                                const int    lvl = lvl0 + ddr;
+                                const double Tj  = T_sh( nid, lvl );
+
+                                const double pj = phi( j, q );
+                                T_hat += pj * Tj;
+
+                                const double gx = gref( j, q, 0 );
+                                const double gy = gref( j, q, 1 );
+                                const double gz = gref( j, q, 2 );
+                                const double g0 = i00 * gx + i01 * gy + i02 * gz;
+                                const double g1 = i10 * gx + i11 * gy + i12 * gz;
+                                const double g2 = i20 * gx + i21 * gy + i22 * gz;
+                                gT0 += g0 * Tj;
+                                gT1 += g1 * Tj;
+                                gT2 += g2 * Tj;
+                            }
+
+                            const double ux = vel_q[q][0], uy = vel_q[q][1], uz = vel_q[q][2];
+                            const double u_dot_gT = ux * gT0 + uy * gT1 + uz * gT2;
+
+                            // A_scalar and B_vec, with LumpedMass handling.
+                            // For LumpedMass: exclude the mass term from A_scalar (handled in diagonal acc below).
+                            const double mass_in_scalar = LumpedMass ? 0.0 : ( double( mass_scaling_ ) * T_hat );
+                            const double A_scalar = mass_in_scalar + double( dt_ ) * u_dot_gT;
+                            const double dkappa   = double( dt_ ) * double( diffusivity_coeff );
+                            const double dtau     = double( dt_ ) * tau_wedge * u_dot_gT;
+                            const double Bx = dkappa * gT0 + dtau * ux;
+                            const double By = dkappa * gT1 + dtau * uy;
+                            const double Bz = dkappa * gT2 + dtau * uz;
+
+                            // Scatter accumulate into each output node's dst_acc.
+#pragma unroll
+                            for ( int i = 0; i < num_nodes_per_wedge; ++i )
+                            {
+                                const double pi  = phi( i, q );
+                                const double gxi = gref( i, q, 0 );
+                                const double gyi = gref( i, q, 1 );
+                                const double gzi = gref( i, q, 2 );
+                                const double gi0 = i00 * gxi + i01 * gyi + i02 * gzi;
+                                const double gi1 = i10 * gxi + i11 * gyi + i12 * gzi;
+                                const double gi2 = i20 * gxi + i21 * gyi + i22 * gzi;
+
+                                // Boundary row: only the i=j diagonal term contributes.
+                                bool is_boundary_i = false;
+                                if constexpr ( TreatBoundary )
+                                {
+                                    is_boundary_i = ( at_cmb && i < 3 ) || ( at_surface && i >= 3 );
+                                }
+
+                                // Diagonal accumulators (used when is_boundary_i or Diagonal==true).
+                                // When LumpedMass is true, the mass contribution uses the row-sum form
+                                //   M_ii_lumped = m · Σ_q wdet · φ_i(q)        (since Σⱼ φ_j ≡ 1)
+                                // When LumpedMass is false, the mass diagonal is the unlumped one:
+                                //   M_ii        = m · Σ_q wdet · φ_i(q) · φ_i(q)
+                                // A's diagonal (diff + adv + supg) is identical for lumped and unlumped.
+                                auto add_diagonal_contribution = [&]() {
+                                    const int    ddx = WEDGE_NODE_OFF[w][i][0];
+                                    const int    ddy = WEDGE_NODE_OFF[w][i][1];
+                                    const int    ddr = WEDGE_NODE_OFF[w][i][2];
+                                    const int    nid = node_id( tx + ddx, ty + ddy );
+                                    const int    lvl = lvl0 + ddr;
+                                    const double Ti  = T_sh( nid, lvl );
+
+                                    const double u_dot_gi = ux * gi0 + uy * gi1 + uz * gi2;
+                                    const double diff_ii  = double( diffusivity_coeff ) * ( gi0 * gi0 + gi1 * gi1 + gi2 * gi2 );
+                                    const double adv_ii   = pi * u_dot_gi;
+                                    const double supg_ii  = tau_wedge * u_dot_gi * u_dot_gi;
+                                    const double A_ii     = diff_ii + adv_ii + supg_ii;
+
+                                    if constexpr ( LumpedMass )
+                                    {
+                                        // Row-sum lumped mass (partition of unity).
+                                        lumped_Mii[i] += wdet * double( mass_scaling_ ) * pi;
+                                        dst_acc[i]    += wdet * double( dt_ ) * A_ii * Ti;
+                                    }
+                                    else
+                                    {
+                                        const double M_ii_q = double( mass_scaling_ ) * pi * pi;
+                                        dst_acc[i] += wdet * ( M_ii_q + double( dt_ ) * A_ii ) * Ti;
+                                    }
+                                };
+
+                                if ( is_boundary_i )
+                                {
+                                    add_diagonal_contribution();
+                                }
+                                else
+                                {
+                                    if constexpr ( Diagonal )
+                                    {
+                                        add_diagonal_contribution();
+                                    }
+                                    else
+                                    {
+                                        // Standard fused interior contribution.
+                                        const double contrib = wdet * ( pi * A_scalar + gi0 * Bx + gi1 * By + gi2 * Bz );
+                                        dst_acc[i] += contrib;
+                                        if constexpr ( LumpedMass )
+                                        {
+                                            // Row-sum lumped mass (partition of unity).
+                                            lumped_Mii[i] += wdet * double( mass_scaling_ ) * pi;
+                                        }
+                                    }
+                                }
+                            }
+                        } // end quad loop
+
+                        // Apply lumped mass: dst_i += M_ii_lumped · T_i
+                        if constexpr ( LumpedMass )
+                        {
+#pragma unroll
+                            for ( int i = 0; i < num_nodes_per_wedge; ++i )
+                            {
+                                // For interior nodes: lumped_Mii[i] is Σ_q wdet · m · φ_i(q).
+                                // For boundary nodes: lumped_Mii[i] is Σ_q wdet · m · φ_i(q)·φ_i(q).
+                                // Both are diagonal contributions to be multiplied by T_i.
                                 const int    ddx = WEDGE_NODE_OFF[w][i][0];
                                 const int    ddy = WEDGE_NODE_OFF[w][i][1];
                                 const int    ddr = WEDGE_NODE_OFF[w][i][2];
                                 const int    nid = node_id( tx + ddx, ty + ddy );
                                 const int    lvl = lvl0 + ddr;
                                 const double Ti  = T_sh( nid, lvl );
-
-                                const double u_dot_gi = ux * gi0 + uy * gi1 + uz * gi2;
-                                const double diff_ii  = double( diffusivity_coeff ) * ( gi0 * gi0 + gi1 * gi1 + gi2 * gi2 );
-                                const double adv_ii   = pi * u_dot_gi;
-                                const double supg_ii  = tau_wedge * u_dot_gi * u_dot_gi;
-                                const double A_ii     = diff_ii + adv_ii + supg_ii;
-
-                                if constexpr ( LumpedMass )
-                                {
-                                    // Row-sum lumped mass (partition of unity).
-                                    lumped_Mii[i] += wdet * double( mass_scaling_ ) * pi;
-                                    dst_acc[i]    += wdet * double( dt_ ) * A_ii * Ti;
-                                }
-                                else
-                                {
-                                    const double M_ii_q = double( mass_scaling_ ) * pi * pi;
-                                    dst_acc[i] += wdet * ( M_ii_q + double( dt_ ) * A_ii ) * Ti;
-                                }
-                            };
-
-                            if ( is_boundary_i )
-                            {
-                                add_diagonal_contribution();
-                            }
-                            else
-                            {
-                                if constexpr ( Diagonal )
-                                {
-                                    add_diagonal_contribution();
-                                }
-                                else
-                                {
-                                    // Standard fused interior contribution.
-                                    const double contrib = wdet * ( pi * A_scalar + gi0 * Bx + gi1 * By + gi2 * Bz );
-                                    dst_acc[i] += contrib;
-                                    if constexpr ( LumpedMass )
-                                    {
-                                        // Row-sum lumped mass (partition of unity).
-                                        lumped_Mii[i] += wdet * double( mass_scaling_ ) * pi;
-                                    }
-                                }
+                                dst_acc[i] += lumped_Mii[i] * Ti;
                             }
                         }
-                    } // end quad loop
 
-                    // Apply lumped mass: dst_i += M_ii_lumped · T_i
-                    if constexpr ( LumpedMass )
-                    {
+                        // Final atomic scatter to global dst_.
+                        // Use the scalar-wedge helper by materialising the two-wedge buffer in order.
+                        // atomically_add_local_wedge_scalar_coefficients expects a [2][6] layout
+                        // for both wedges at once, so we accumulate per-wedge and emit inline atomics.
+                        const int xc = x_cell;
+                        const int yc = y_cell;
+                        const int rc = r_cell_abs;
 #pragma unroll
                         for ( int i = 0; i < num_nodes_per_wedge; ++i )
                         {
-                            // For interior nodes: lumped_Mii[i] is Σ_q wdet · m · φ_i(q).
-                            // For boundary nodes: lumped_Mii[i] is Σ_q wdet · m · φ_i(q)·φ_i(q).
-                            // Both are diagonal contributions to be multiplied by T_i.
-                            const int    ddx = WEDGE_NODE_OFF[w][i][0];
-                            const int    ddy = WEDGE_NODE_OFF[w][i][1];
-                            const int    ddr = WEDGE_NODE_OFF[w][i][2];
-                            const int    nid = node_id( tx + ddx, ty + ddy );
-                            const int    lvl = lvl0 + ddr;
-                            const double Ti  = T_sh( nid, lvl );
-                            dst_acc[i] += lumped_Mii[i] * Ti;
+                            const int ddx = WEDGE_NODE_OFF[w][i][0];
+                            const int ddy = WEDGE_NODE_OFF[w][i][1];
+                            const int ddr = WEDGE_NODE_OFF[w][i][2];
+                            Kokkos::atomic_add( &dst_( local_subdomain_id, xc + ddx, yc + ddy, rc + ddr ), dst_acc[i] );
                         }
                     }
-
-                    // Final atomic scatter to global dst_.
-                    // Use the scalar-wedge helper by materialising the two-wedge buffer in order.
-                    // atomically_add_local_wedge_scalar_coefficients expects a [2][6] layout
-                    // for both wedges at once, so we accumulate per-wedge and emit inline atomics.
-                    const int xc = x_cell;
-                    const int yc = y_cell;
-                    const int rc = r_cell_abs;
-#pragma unroll
-                    for ( int i = 0; i < num_nodes_per_wedge; ++i )
-                    {
-                        const int ddx = WEDGE_NODE_OFF[w][i][0];
-                        const int ddy = WEDGE_NODE_OFF[w][i][1];
-                        const int ddr = WEDGE_NODE_OFF[w][i][2];
-                        Kokkos::atomic_add( &dst_( local_subdomain_id, xc + ddx, yc + ddy, rc + ddr ), dst_acc[i] );
-                    }
-                }
-            } // end wedge loop
-        } // end pass loop
+                } // end wedge loop
+            } // end pass loop
+        } );
     }
 };
 
