@@ -1,0 +1,71 @@
+## MT1024 production run: "C5" case, dimensional, variable viscosity, effective
+## Ra = 1e7. TALA-compressible, Frank-Kamenetskii rmu = 100 on the Lin et al.
+## 2022 radial profile, free slip at both boundaries, broadband initial condition
+## over spherical-harmonic degrees 8..96.
+##
+## The profile loader wants the DIMENSIONAL CSV columns; a missing column yields
+## a profile of zeros with no error, so leave the two profile keys alone.
+##
+## Mesh and subdomain levels come from the command line:
+##   --refinement-level-mesh-min 4 --refinement-level-mesh-max 10
+##   --radial-extra-levels -1 --lat-sdr 4 --rad-sdr 0
+
+compressible=true
+adiabat-surface-temperature=0.41
+
+reference-viscosity=3.38322e20
+reference-density=4686
+thermal-expansivity=2e-5
+thermal-conductivity=3.0
+specific-heat-capacity=1250
+
+radius-cmb=3480000
+radius-surface=6371000
+temperature-cmb=4200
+temperature-surface=300
+
+viscosity-min=1e18
+viscosity-max=1e28
+viscosity-law="fk-type2"
+viscosity-rmu=100
+
+velocity-bc-cmb="freeslip"
+velocity-bc-surface="freeslip"
+
+initial-temperature-profile="conductive"
+perturbation-amplitude=0.05
+initial-temperature-sph-degree-min=8
+initial-temperature-sph-degree-max=96
+initial-temperature-sph-seed=7
+
+dt-scaling=2.7
+dt-min=1e-8
+dt-max=1000
+t-end=1e9
+max-timesteps=1000000
+energy-solver="mmoc"
+energy-substeps=1
+picard-iterations=1
+
+stokes-krylov-restart=30
+stokes-krylov-max-iterations=10
+stokes-krylov-relative-tolerance=1e-06
+stokes-krylov-absolute-tolerance=1e-12
+stokes-viscous-pc-num-vcycles=1
+stokes-viscous-pc-cheby-order=2
+stokes-viscous-pc-num-smoothing-steps-prepost=3
+stokes-viscous-pc-num-power-iterations=10
+stokes-viscous-pc-agglom-factors=[]
+stokes-penalty-epsilon=1e-7
+
+energy-krylov-max-iterations=20
+energy-krylov-relative-tolerance=1e-3
+
+outdir-overwrite=1
+output-frequency=100
+
+## Lin et al. 2022 radial viscosity profile. Path is relative to the repository
+## root; make it absolute if the app runs from elsewhere.
+viscosity-profile-csv-path="data/radialprofiles/ViscosityProfile_Lin_et_al_2022.csv"
+viscosity-radial-profile-radii-key="Radius (m)"
+viscosity-radial-profile-value-key="Viscosity (Pa s)"
