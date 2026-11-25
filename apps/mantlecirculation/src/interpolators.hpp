@@ -90,7 +90,6 @@ struct BuoyancyForceAssembly
     Grid2DDataScalar< ScalarType > data_rho_;
     Grid2DDataScalar< ScalarType > alpha_;
     ScalarType                     Ra_over_Pe_;
-    ScalarType                     prefactor_;
 
     BuoyancyForceAssembly(
         const Grid3DDataVec< ScalarType, 3 >& grid,
@@ -99,8 +98,7 @@ struct BuoyancyForceAssembly
         const Grid4DDataScalar< ScalarType >& data_T,
         const Grid2DDataScalar< ScalarType >& data_rho,
         const Grid2DDataScalar< ScalarType >& alpha,
-        const ScalarType                      Ra_over_Pe,
-        const ScalarType                      prefactor = ScalarType( 1 ) )
+        const ScalarType                      Ra_over_Pe )
     : grid_( grid )
     , radii_( radii )
     , data_f_( data_f )
@@ -108,7 +106,6 @@ struct BuoyancyForceAssembly
     , data_rho_( data_rho )
     , alpha_( alpha )
     , Ra_over_Pe_( Ra_over_Pe )
-    , prefactor_( prefactor )
     {}
 
     KOKKOS_INLINE_FUNCTION
@@ -120,7 +117,7 @@ struct BuoyancyForceAssembly
         for ( int d = 0; d < 3; d++ )
         {
             data_f_( id, x, y, r, d ) =
-                prefactor_ * Ra_over_Pe_ * n( d ) * alpha_( id, r ) * data_rho_( id, r ) * data_T_( id, x, y, r );
+                Ra_over_Pe_ * n( d ) * alpha_( id, r ) * data_rho_( id, r ) * data_T_( id, x, y, r );
         }
     }
 };
@@ -132,21 +129,18 @@ struct BuoyancyForceAssemblyPDA
     Grid4DDataVec< ScalarType, 3 > data_f_;
     Grid4DDataScalar< ScalarType > data_rho_;
     ScalarType                     Ra_pda_over_Pe_;
-    ScalarType                     prefactor_;
 
     BuoyancyForceAssemblyPDA(
         const Grid3DDataVec< ScalarType, 3 >& grid,
         const Grid2DDataScalar< ScalarType >& radii,
         const Grid4DDataVec< ScalarType, 3 >& data_f,
         const Grid4DDataScalar< ScalarType >& data_rho,
-        const ScalarType                      Ra_pda_over_Pe,
-        const ScalarType                      prefactor = ScalarType( -1 ) )
+        const ScalarType                      Ra_pda_over_Pe )
     : grid_( grid )
     , radii_( radii )
     , data_f_( data_f )
     , data_rho_( data_rho )
     , Ra_pda_over_Pe_( Ra_pda_over_Pe )
-    , prefactor_( prefactor )
     {}
 
     KOKKOS_INLINE_FUNCTION
@@ -157,7 +151,7 @@ struct BuoyancyForceAssemblyPDA
 
         for ( int d = 0; d < 3; d++ )
         {
-            data_f_( id, x, y, r, d ) = prefactor_ * Ra_pda_over_Pe_ * n( d ) * data_rho_( id, x, y, r );
+            data_f_( id, x, y, r, d ) = -Ra_pda_over_Pe_ * n( d ) * data_rho_( id, x, y, r );
         }
     }
 };

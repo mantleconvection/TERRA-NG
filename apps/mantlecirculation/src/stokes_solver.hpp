@@ -11,6 +11,7 @@
 
 #include "build_radii.hpp"
 #include "communication/shell/redistribute.hpp"
+#include "fe/solver_utils.hpp"
 #include "fe/strong_algebraic_dirichlet_enforcement.hpp"
 #include "fe/strong_algebraic_freeslip_enforcement.hpp"
 #include "fe/wedge/linearforms/shell/inv_rho_drho_dt.hpp"
@@ -51,7 +52,6 @@
 #include "util/logging.hpp"
 #include "util/table.hpp"
 #include "util/timer.hpp"
-#include "fe/solver_utils.hpp"
 
 namespace terra::mantlecirculation {
 
@@ -850,8 +850,7 @@ class StokesContext
                 T_for_buoyancy.grid_data(),
                 rho_profile,
                 alpha_profile,
-                prm_.physics_parameters.rayleigh_number / prm_.physics_parameters.peclet_number,
-                1.0 ) );
+                prm_.physics_parameters.rayleigh_number / prm_.physics_parameters.peclet_number ) );
 
         linalg::apply( *M_, triangular_prec_tmp_.block_1(), stok_vecs_["f"].block_1() );
 
@@ -908,8 +907,7 @@ class StokesContext
                 coords_radii_[velocity_level_],
                 triangular_prec_tmp_.block_1().grid_data(),
                 rho.grid_data(),
-                prm_.physics_parameters.pda_parameters.rayleigh_number_pda / prm_.physics_parameters.peclet_number,
-                -1.0 ) );
+                prm_.physics_parameters.pda_parameters.rayleigh_number_pda / prm_.physics_parameters.peclet_number ) );
 
         linalg::apply( *M_, triangular_prec_tmp_.block_1(), stok_vecs_["f"].block_1() );
 
@@ -1041,8 +1039,8 @@ class StokesContext
     grid::shell::BoundaryConditions                                         bcs_{}; // velocity BC set (owned copy)
     grid::Grid3DDataVec< ScalarType, 3 > freeslip_normals_cmb_;     // fine level, see consistent_freeslip_normals()
     grid::Grid3DDataVec< ScalarType, 3 > freeslip_normals_surface_; // fine level, see consistent_freeslip_normals()
-    const Parameters&                                                       prm_;
-    std::shared_ptr< util::Table >                                          table_;
+    const Parameters&                    prm_;
+    std::shared_ptr< util::Table >       table_;
 
     int  num_levels_;
     int  velocity_level_;
