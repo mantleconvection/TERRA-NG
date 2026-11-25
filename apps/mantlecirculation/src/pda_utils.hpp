@@ -13,8 +13,12 @@ using grid::Grid2DDataScalar;
 using grid::Grid4DDataScalar;
 using linalg::VectorW1Scalar;
 
-/// Time derivative of hydrostatic density via BDF2 (non-uniform timestep), evaluated using rho^n, rho^{n-1}, rho^{n-2}.
-struct ComputeDensityTimeDerivativeBDF2
+/// Time derivative of hydrostatic density using either
+/// first-order backward difference, evulated from rho^n and rho^{n-1}
+/// (for timestep 1, when rho^{n-2} is not yet available),
+/// or BDF2 with non-uniform timestep), evaluated from rho^n, rho^{n-1}
+/// and rho^{n-2}.
+struct ComputeDensityTimeDerivative
 {
     Grid4DDataScalar< ScalarType > time_derivative_;
     Grid4DDataScalar< ScalarType > density_;
@@ -22,27 +26,41 @@ struct ComputeDensityTimeDerivativeBDF2
     Grid4DDataScalar< ScalarType > density_prev_2_;
     ScalarType                     dt_;
     ScalarType                     dt_prev_;
+    int                            timestep_;
 
-    ComputeDensityTimeDerivativeBDF2(
+    ComputeDensityTimeDerivative(
         const Grid4DDataScalar< ScalarType >& time_derivative,
         const Grid4DDataScalar< ScalarType >& density,
         const Grid4DDataScalar< ScalarType >& density_prev,
         const Grid4DDataScalar< ScalarType >& density_prev_2,
         const ScalarType                      dt,
-        const ScalarType                      dt_prev )
+        const ScalarType                      dt_prev,
+        const int                             timestep )
     : time_derivative_( time_derivative )
     , density_( density )
     , density_prev_( density_prev )
     , density_prev_2_( density_prev_2 )
     , dt_( dt )
     , dt_prev_( dt_prev )
+    , timestep_( timestep )
     {}
 
     KOKKOS_INLINE_FUNCTION
     void operator()( const int id, const int x, const int y, const int r ) const
     {
-        const ScalarType rhoN   = density_( id, x, y, r );
-        const ScalarType rhoN1  = density_prev_( id, x, y, r );
+        if ( timestep_ == 0 )
+            return;
+
+        const ScalarType rhoN  = density_( id, x, y, r );
+        const ScalarType rhoN1 = density_prev_( id, x, y, r );
+
+        if ( timestep_ == 1 ) // backward difference
+        {
+            time_derivative_( id, x, y, r ) = ( rhoN - rhoN1 ) / dt_;
+            return;
+        }
+
+        // Else BDF2
         const ScalarType rhoN2  = density_prev_2_( id, x, y, r );
         const ScalarType dt_sum = dt_ + dt_prev_;
 
@@ -50,35 +68,6 @@ struct ComputeDensityTimeDerivativeBDF2
             ( ( ( ScalarType( 2 ) * dt_ + dt_prev_ ) * rhoN / ( dt_sum ) ) - ( dt_sum * rhoN1 / dt_prev_ ) +
               ( dt_ * dt_ * rhoN2 / ( dt_prev_ * dt_sum ) ) ) /
             dt_;
-    }
-};
-
-/// Time derivative of hydrostatic density via first-order backward difference, evaluated using rho^n, rho^{n-1}. Used at timestep == 1, where no rho^{n-2} history is available yet.
-struct ComputeDensityTimeDerivative
-{
-    Grid4DDataScalar< ScalarType > time_derivative_;
-    Grid4DDataScalar< ScalarType > density_;
-    Grid4DDataScalar< ScalarType > density_prev_;
-    ScalarType                     dt_;
-
-    ComputeDensityTimeDerivative(
-        const Grid4DDataScalar< ScalarType >& time_derivative,
-        const Grid4DDataScalar< ScalarType >& density,
-        const Grid4DDataScalar< ScalarType >& density_prev,
-        const ScalarType                      dt )
-    : time_derivative_( time_derivative )
-    , density_( density )
-    , density_prev_( density_prev )
-    , dt_( dt )
-    {}
-
-    KOKKOS_INLINE_FUNCTION
-    void operator()( const int id, const int x, const int y, const int r ) const
-    {
-        const ScalarType rhoN  = density_( id, x, y, r );
-        const ScalarType rhoN1 = density_prev_( id, x, y, r );
-
-        time_derivative_( id, x, y, r ) = ( rhoN - rhoN1 ) / dt_;
     }
 };
 
@@ -157,30 +146,19 @@ class PDAManager
         if ( timestep == 0 )
             return;
 
-        if ( timestep == 1 )
+        else
         {
-            // Compute first-order time derivative
             Kokkos::parallel_for(
                 "ComputeDensityTimeDerivative",
                 grid::shell::local_domain_md_range_policy_nodes( domain_ ),
                 ComputeDensityTimeDerivative{
-                    drho_dt_.grid_data(), density_.grid_data(), density_prev_.grid_data(), dt } );
-            Kokkos::fence();
-        }
-
-        else // timestep > 1
-        {
-            // Compute BDF2 time derivative
-            Kokkos::parallel_for(
-                "ComputeDensityTimeDerivativeBDF2",
-                grid::shell::local_domain_md_range_policy_nodes( domain_ ),
-                ComputeDensityTimeDerivativeBDF2{
                     drho_dt_.grid_data(),
                     density_.grid_data(),
                     density_prev_.grid_data(),
                     density_prev_2_.grid_data(),
                     dt,
-                    dt_prev } );
+                    dt_prev,
+                    timestep } );
             Kokkos::fence();
         }
     }
