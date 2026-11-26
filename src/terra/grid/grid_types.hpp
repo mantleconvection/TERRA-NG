@@ -110,20 +110,20 @@ struct Grid4DDataVec
 /// @brief Create a host mirror for Grid4DDataVec.
 template < typename ScalarType, int VecDim >
 typename Grid4DDataVec< ScalarType, VecDim >::host_mirror_type
-    create_mirror( Kokkos::HostSpace space, const Grid4DDataVec< ScalarType, VecDim >& src )
+    create_mirror( const Grid4DDataVec< ScalarType, VecDim >& src )
 {
     typename Grid4DDataVec< ScalarType, VecDim >::host_mirror_type result;
     for ( int d = 0; d < VecDim; ++d )
-        result.comp_[d] = Kokkos::create_mirror( space, src.comp_[d] );
+        result.comp_[d] = Kokkos::create_mirror( src.comp_[d] );
     return result;
 }
 
 /// @brief Create a host mirror for Grid4DDataScalar (delegates to Kokkos).
 template < typename ScalarType >
 typename Grid4DDataScalar< ScalarType >::host_mirror_type
-    create_mirror( Kokkos::HostSpace space, const Grid4DDataScalar< ScalarType >& src )
+    create_mirror( const Grid4DDataScalar< ScalarType >& src )
 {
-    return Kokkos::create_mirror( space, src );
+    return Kokkos::create_mirror( src );
 }
 
 /// @brief Deep copy from device Grid4DDataVec to host mirror.

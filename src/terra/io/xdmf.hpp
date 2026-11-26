@@ -598,10 +598,14 @@ class XDMFOutput
     {
         // Copy mesh to host.
         // We assume the mesh is only written once so we throw away the host copies after this method returns.
-        const typename grid::Grid3DDataVec< InputGridScalarType, 3 >::host_mirror_type coords_shell_host =
-            Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace{}, coords_shell_device_ );
-        const typename grid::Grid2DDataScalar< InputGridScalarType >::host_mirror_type coords_radii_host =
-            Kokkos::create_mirror_view_and_copy( Kokkos::HostSpace{}, coords_radii_device_ );
+        // Mirror into host_mirror_type's memory space (not HostSpace): on APUs this is the device space, so
+        // no allocation or copy happens and the device view itself is returned after a fence.
+        using CoordsShellHost = typename grid::Grid3DDataVec< InputGridScalarType, 3 >::host_mirror_type;
+        using CoordsRadiiHost = typename grid::Grid2DDataScalar< InputGridScalarType >::host_mirror_type;
+        const CoordsShellHost coords_shell_host = Kokkos::create_mirror_view_and_copy(
+            typename CoordsShellHost::memory_space{}, coords_shell_device_ );
+        const CoordsRadiiHost coords_radii_host = Kokkos::create_mirror_view_and_copy(
+            typename CoordsRadiiHost::memory_space{}, coords_radii_device_ );
 
         for ( int local_subdomain_id = 0; local_subdomain_id < coords_shell_host.extent( 0 ); local_subdomain_id++ )
         {
@@ -680,7 +684,7 @@ class XDMFOutput
         {
             if ( !host_data_mirror_scalar_double_.has_value() )
             {
-                host_data_mirror_scalar_double_ = Kokkos::create_mirror( Kokkos::HostSpace{}, device_data );
+                host_data_mirror_scalar_double_ = Kokkos::create_mirror( device_data );
             }
 
             Kokkos::deep_copy( host_data_mirror_scalar_double_.value(), device_data );
@@ -706,7 +710,7 @@ class XDMFOutput
         {
             if ( !host_data_mirror_scalar_float_.has_value() )
             {
-                host_data_mirror_scalar_float_ = Kokkos::create_mirror( Kokkos::HostSpace{}, device_data );
+                host_data_mirror_scalar_float_ = Kokkos::create_mirror( device_data );
             }
 
             Kokkos::deep_copy( host_data_mirror_scalar_float_.value(), device_data );
@@ -796,7 +800,7 @@ class XDMFOutput
         {
             if ( !host_data_mirror_vec_double_.has_value() )
             {
-                host_data_mirror_vec_double_ = grid::create_mirror( Kokkos::HostSpace{}, device_data );
+                host_data_mirror_vec_double_ = grid::create_mirror( device_data );
             }
 
             grid::deep_copy( host_data_mirror_vec_double_.value(), device_data );
@@ -826,7 +830,7 @@ class XDMFOutput
         {
             if ( !host_data_mirror_vec_float_.has_value() )
             {
-                host_data_mirror_vec_float_ = grid::create_mirror( Kokkos::HostSpace{}, device_data );
+                host_data_mirror_vec_float_ = grid::create_mirror( device_data );
             }
 
             grid::deep_copy( host_data_mirror_vec_float_.value(), device_data );
@@ -1430,7 +1434,7 @@ template < typename GridDataType >
 
     // Now write from buffer to grid.
 
-    typename GridDataType::host_mirror_type grid_data_host = grid::create_mirror( Kokkos::HostSpace{}, grid_data_device );
+    typename GridDataType::host_mirror_type grid_data_host = grid::create_mirror( grid_data_device );
 
     const auto checkpoint_is_float =
         requested_grid_data_file.value().scalar_data_type == 2 && requested_grid_data_file.value().scalar_bytes == 4;
