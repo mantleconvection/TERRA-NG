@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kernels/common/deterministic.hpp"
+
 namespace terra::fe::wedge {
 
 constexpr int num_wedges_per_hex_cell     = 2;
@@ -411,27 +413,36 @@ KOKKOS_INLINE_FUNCTION void atomically_add_local_wedge_scalar_coefficients(
     const int                          x_cell,
     const int                          y_cell,
     const int                          r_cell,
-    const dense::Vec< T, 6 > ( &local_coefficients )[2] )
+    const dense::Vec< T, 6 > ( &local_coefficients )[2],
+    const det::FixedPoint& fp = det::FixedPoint{} )
 {
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell, y_cell, r_cell ), local_coefficients[0]( 0 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell + 1, y_cell, r_cell ),
         local_coefficients[0]( 1 ) + local_coefficients[1]( 2 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell, y_cell + 1, r_cell ),
         local_coefficients[0]( 2 ) + local_coefficients[1]( 1 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell, y_cell, r_cell + 1 ), local_coefficients[0]( 3 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell + 1, y_cell, r_cell + 1 ),
         local_coefficients[0]( 4 ) + local_coefficients[1]( 5 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell, y_cell + 1, r_cell + 1 ),
         local_coefficients[0]( 5 ) + local_coefficients[1]( 4 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell + 1, y_cell + 1, r_cell ), local_coefficients[1]( 0 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell + 1, y_cell + 1, r_cell + 1 ), local_coefficients[1]( 3 ) );
 }
 
@@ -470,27 +481,36 @@ KOKKOS_INLINE_FUNCTION void atomically_add_local_wedge_vector_coefficients(
     const int                               y_cell,
     const int                               r_cell,
     const int                               d,
-    const dense::Vec< T, 6 >                local_coefficients[2] )
+    const dense::Vec< T, 6 >                local_coefficients[2],
+    const det::FixedPoint& fp = det::FixedPoint{} )
 {
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell, y_cell, r_cell, d ), local_coefficients[0]( 0 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell + 1, y_cell, r_cell, d ),
         local_coefficients[0]( 1 ) + local_coefficients[1]( 2 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell, y_cell + 1, r_cell, d ),
         local_coefficients[0]( 2 ) + local_coefficients[1]( 1 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell, y_cell, r_cell + 1, d ), local_coefficients[0]( 3 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell + 1, y_cell, r_cell + 1, d ),
         local_coefficients[0]( 4 ) + local_coefficients[1]( 5 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell, y_cell + 1, r_cell + 1, d ),
         local_coefficients[0]( 5 ) + local_coefficients[1]( 4 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell + 1, y_cell + 1, r_cell, d ), local_coefficients[1]( 0 ) );
-    Kokkos::atomic_add(
+    det::add(
+        fp,
         &global_coefficients( local_subdomain_id, x_cell + 1, y_cell + 1, r_cell + 1, d ), local_coefficients[1]( 3 ) );
 }
 

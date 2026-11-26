@@ -76,6 +76,7 @@ if (MPI_FOUND)
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${MPI_CXX_LINK_FLAGS}")
 endif ()
 
+
 set(EIGEN_DIR extern/eigen-3.4.0 CACHE PATH "eigen path")
 include_directories(SYSTEM ${EIGEN_DIR})
 link_directories(${EIGEN_DIR})

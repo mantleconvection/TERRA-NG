@@ -9,6 +9,7 @@
 #include "linalg/linear_form.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector_w1.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::fe::wedge::linearforms::shell {
 
@@ -107,6 +108,9 @@ class HeatingTerm
     , recv_buffers_( domain )
     {}
 
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( DstVectorType& dst )
     {
         if ( operator_apply_mode_ == linalg::OperatorApplyMode::Replace )
@@ -118,7 +122,10 @@ class HeatingTerm
         field_grid_ = field_.grid_data();
         vel_grid_   = velocity_.grid_data();
 
-        Kokkos::parallel_for( kernel_label(), grid::shell::local_domain_md_range_policy_cells( domain_ ), *this );
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, 1.0, det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+            Kokkos::parallel_for( kernel_label(), grid::shell::local_domain_md_range_policy_cells( domain_ ), *this );
+        } );
         Kokkos::fence();
 
         if ( operator_communication_mode_ == linalg::OperatorCommunicationMode::CommunicateAdditively )
@@ -273,7 +280,7 @@ class HeatingTerm
         }
 
         {
-            atomically_add_local_wedge_scalar_coefficients( dst_, local_subdomain_id, x_cell, y_cell, r_cell, dst );
+            atomically_add_local_wedge_scalar_coefficients( dst_, local_subdomain_id, x_cell, y_cell, r_cell, dst, fp_ );
         }
     }
 };

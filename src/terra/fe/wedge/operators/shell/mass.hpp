@@ -10,6 +10,7 @@
 #include "linalg/operator.hpp"
 #include "linalg/vector.hpp"
 #include "linalg/vector_w1.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -67,6 +68,9 @@ class Mass
     /// @brief S/Getter for lumped diagonal member
     void set_lumped_diagonal( bool v ) { lumped_diagonal_ = v; }
 
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
         if ( operator_apply_mode_ == linalg::OperatorApplyMode::Replace )
@@ -82,7 +86,10 @@ class Mass
         src_ = src.grid_data();
         dst_ = dst.grid_data();
 
-        Kokkos::parallel_for( "matvec", grid::shell::local_domain_md_range_policy_cells( domain_ ), *this );
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, det::max_abs( src_ ), det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+            Kokkos::parallel_for( "matvec", grid::shell::local_domain_md_range_policy_cells( domain_ ), *this );
+        } );
 
         Kokkos::fence();
 
@@ -175,7 +182,7 @@ class Mass
         dst[0] = A[0] * src[0];
         dst[1] = A[1] * src[1];
 
-        atomically_add_local_wedge_scalar_coefficients( dst_, local_subdomain_id, x_cell, y_cell, r_cell, dst );
+        atomically_add_local_wedge_scalar_coefficients( dst_, local_subdomain_id, x_cell, y_cell, r_cell, dst, fp_ );
     }
 };
 

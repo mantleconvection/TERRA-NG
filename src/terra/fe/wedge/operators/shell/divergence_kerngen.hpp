@@ -35,6 +35,7 @@
 #include "linalg/vector.hpp"
 #include "linalg/vector_w1.hpp"
 #include "util/timer.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::fe::wedge::operators::shell {
 
@@ -225,6 +226,9 @@ class DivergenceKerngen
     // -------------------------------------------------------------------------
     // Apply
     // -------------------------------------------------------------------------
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( const SrcVectorType& src, DstVectorType& dst )
     {
         util::Timer timer_apply( "divergence_apply" );
@@ -244,29 +248,32 @@ class DivergenceKerngen
             policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
         }
 
-        if ( kernel_path_ == KernelPath::Slow )
-        {
-            Kokkos::parallel_for(
-                "divergence_apply_kernel_slow", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                    this->run_team_slow( team );
-                } );
-        }
-        else if ( kernel_path_ == KernelPath::FastFreeslip )
-        {
-            Kokkos::parallel_for(
-                "divergence_apply_kernel_fast_fs", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                    this->template run_team_fast< /*Freeslip=*/true >( team );
-                } );
-        }
-        else
-        {
-            Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > dn_policy( blocks_, team_size_ );
-            dn_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
-            Kokkos::parallel_for(
-                "divergence_apply_kernel_fast_dn", dn_policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
-                    this->template run_team_fast< /*Freeslip=*/false >( team );
-                } );
-        }
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, det::max_abs( src_ ), det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+                if ( kernel_path_ == KernelPath::Slow )
+                {
+                    Kokkos::parallel_for(
+                        "divergence_apply_kernel_slow", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                            this->run_team_slow( team );
+                        } );
+                }
+                else if ( kernel_path_ == KernelPath::FastFreeslip )
+                {
+                    Kokkos::parallel_for(
+                        "divergence_apply_kernel_fast_fs", policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                            this->template run_team_fast< /*Freeslip=*/true >( team );
+                        } );
+                }
+                else
+                {
+                    Kokkos::TeamPolicy< Kokkos::LaunchBounds< 128, 5 > > dn_policy( blocks_, team_size_ );
+                    dn_policy.set_scratch_size( 0, Kokkos::PerTeam( team_shmem_size( team_size_ ) ) );
+                    Kokkos::parallel_for(
+                        "divergence_apply_kernel_fast_dn", dn_policy, KOKKOS_CLASS_LAMBDA( const Team& team ) {
+                            this->template run_team_fast< /*Freeslip=*/false >( team );
+                        } );
+                }
+        } );
 
         Kokkos::fence();
         timer_kernel.stop();
@@ -543,7 +550,7 @@ class DivergenceKerngen
         dst_loc[1] = A[1] * src_loc[1];
 
         atomically_add_local_wedge_scalar_coefficients(
-            dst_, s, x_cell / 2, y_cell / 2, r_cell / 2, dst_loc );
+            dst_, s, x_cell / 2, y_cell / 2, r_cell / 2, dst_loc, fp_ );
     }
 
     // -------------------------------------------------------------------------
@@ -812,7 +819,7 @@ class DivergenceKerngen
                     const int    ddx     = WEDGE_NODE_OFF[w][i][0];
                     const int    ddy     = WEDGE_NODE_OFF[w][i][1];
                     const int    ddr     = WEDGE_NODE_OFF[w][i][2];
-                    Kokkos::atomic_add( &dst_( local_subdomain_id, xc + ddx, yc + ddy, rc + ddr ),
+                    det::add( fp_, &dst_( local_subdomain_id, xc + ddx, yc + ddy, rc + ddr ),
                                          prefactor * shape_i );
                 }
             }

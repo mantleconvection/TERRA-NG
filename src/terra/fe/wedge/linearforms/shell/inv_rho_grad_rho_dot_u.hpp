@@ -11,6 +11,7 @@
 #include "linalg/linear_form.hpp"
 #include "linalg/operator.hpp"
 #include "linalg/vector_w1.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::fe::wedge::linearforms::shell::detail {
 
@@ -124,6 +125,9 @@ class InvRhoGradRhoDotU
     , recv_buffers_( domain )
     {}
 
+    det::Scatter    det_; ///< TERRA_DETERMINISTIC_SCATTER: fixed-point scatter state (see deterministic.hpp)
+    det::FixedPoint fp_;
+
     void apply_impl( DstVectorType& dst )
     {
         if ( operator_apply_mode_ == linalg::OperatorApplyMode::Replace )
@@ -140,8 +144,11 @@ class InvRhoGradRhoDotU
         else
             rho_grid_ = rho_;
 
-        Kokkos::parallel_for(
+        det_.run( operator_apply_mode_ == linalg::OperatorApplyMode::Add, 1.0, det::views( dst_ ), [&]( const det::FixedPoint& fp ) {
+            fp_ = fp;
+            Kokkos::parallel_for(
             "inv_rho_grad_rho_dot_u", grid::shell::local_domain_md_range_policy_cells( domain_fine_ ), *this );
+        } );
         Kokkos::fence();
 
         if ( operator_communication_mode_ == linalg::OperatorCommunicationMode::CommunicateAdditively )
@@ -295,7 +302,7 @@ class InvRhoGradRhoDotU
         }
 
         atomically_add_local_wedge_scalar_coefficients(
-            dst_, local_subdomain_id, x_cell / 2, y_cell / 2, r_cell / 2, contrib );
+            dst_, local_subdomain_id, x_cell / 2, y_cell / 2, r_cell / 2, contrib, fp_ );
     }
 };
 

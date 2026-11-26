@@ -96,8 +96,11 @@ enum class BenchmarkType : int
 };
 
 constexpr auto all_benchmark_types = {
-    // Reduced to the production `current` op only (for the tile-sweep profiling).
+    // Perf-regression hunt: current op vs the last history snapshots.
     BenchmarkType::EpsDivDivKerngenDouble,           // current / newest
+    BenchmarkType::EpsDivDivKerngenV08ScalarCoalesced,
+    BenchmarkType::EpsDivDivKerngenV09SeparateScatter,
+    BenchmarkType::EpsDivDivKerngenV10SeqRpasses,
 };
 
 const std::map< BenchmarkType, std::string > benchmark_description = {

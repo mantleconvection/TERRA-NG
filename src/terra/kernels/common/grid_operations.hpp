@@ -5,6 +5,7 @@
 #include "mpi/mpi.hpp"
 #include "terra/grid/bit_masks.hpp"
 #include "terra/util/bit_masking.hpp"
+#include "kernels/common/deterministic.hpp"
 
 namespace terra::kernels::common {
 
@@ -1044,15 +1045,18 @@ void rand( const grid::Grid4DDataScalar< ScalarTypeDst >& dst )
         std::is_same_v< ScalarTypeDst, double > || std::is_same_v< ScalarTypeDst, float >,
         "Random integers not implemented. But can be done easily below." );
 
-    Kokkos::Random_XorShift64_Pool<> random_pool( /*seed=*/12345 );
+    // A hash of the node index instead of a Kokkos random pool: the pool hands its generator states to
+    // threads in arrival order, so the field it fills differs from run to run (and with it the power
+    // iteration seeded from it). Every node gets the same value in every run.
+    const uint64_t e1 = dst.extent( 1 ), e2 = dst.extent( 2 ), e3 = dst.extent( 3 );
     Kokkos::parallel_for(
         "rand",
         Kokkos::MDRangePolicy< Kokkos::Rank< 4, Kokkos::Iterate::Right, Kokkos::Iterate::Right > >(
             { 0, 0, 0, 0 }, { dst.extent( 0 ), dst.extent( 1 ), dst.extent( 2 ), dst.extent( 3 ) } ),
         KOKKOS_LAMBDA( int local_subdomain, int i, int j, int k ) {
-            auto generator                  = random_pool.get_state();
-            dst( local_subdomain, i, j, k ) = static_cast< ScalarTypeDst >( generator.drand() );
-            random_pool.free_state( generator );
+            const uint64_t idx = ( ( uint64_t( local_subdomain ) * e1 + uint64_t( i ) ) * e2 + uint64_t( j ) ) * e3 +
+                                 uint64_t( k );
+            dst( local_subdomain, i, j, k ) = static_cast< ScalarTypeDst >( det::hash_to_unit( 12345u, idx ) );
         } );
 
     Kokkos::fence();
