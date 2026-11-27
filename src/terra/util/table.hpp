@@ -153,13 +153,10 @@ class Table
 
         rows_.emplace_back( row );
     }
-    
+
     /// @brief Set specific column ordering by key.
     /// @param order List of key elements in order of choice.
-    void set_column_order( const std::vector< std::string >& order )
-    {
-        column_order_ = order;
-    }
+    void set_column_order( const std::vector< std::string >& order ) { column_order_ = order; }
 
     /// @brief Select a subset of columns from the table.
     /// @param selected_columns Columns to select.
@@ -484,8 +481,8 @@ class Table
     }
 
   private:
-    std::vector< Row >      rows_;    ///< Rows of the table.
-    std::set< std::string > columns_; ///< Set of column names.
+    std::vector< Row >                          rows_;         ///< Rows of the table.
+    std::set< std::string >                     columns_;      ///< Set of column names.
     std::optional< std::vector< std::string > > column_order_; ///< Order of column names.
 
     inline static int global_id_counter = 0; ///< Global row id counter.
@@ -494,8 +491,8 @@ class Table
     const std::vector< std::string > ordered_columns() const
     {
         if ( column_order_.has_value() )
-	    return column_order_.value();
-	return std::vector< std::string >( columns_.begin(), columns_.end() );
+            return column_order_.value();
+        return std::vector< std::string >( columns_.begin(), columns_.end() );
     }
 
     /// @brief Print the table header.
@@ -532,7 +529,7 @@ class Table
 
 /// @brief Attempts to read a csv file and converts that into a \ref Table instance.
 ///
-/// Recognizes commas as a separator.
+/// Recognizes commas as a separator. Treats entries with value None as not existing.
 ///
 /// @param filename CSV file path
 /// @return Result object either containing a \ref Table on success or an error string.
@@ -587,25 +584,46 @@ class Table
     };
 
     auto infer_value = []( const std::string& s ) -> Table::Value {
+        // detect booleans
         if ( s == "true" || s == "TRUE" )
             return true;
         if ( s == "false" || s == "FALSE" )
             return false;
 
-        char* end = nullptr;
+        if ( s == "None" )
+            return std::monostate{};
+
+        const char* s_begin = s.data();
+        const char* s_end   = s.data() + s.size();
+
+        // try int32
+        {
+            int32_t int_val;
+            auto [ptr, ec] = std::from_chars( s_begin, s_end, int_val );
+            if ( ec == std::errc{} && ptr == s_end )
+            {
+                return int_val;
+            }
+        }
 
         // try int64
-        long long iv = std::strtoll( s.c_str(), &end, 10 );
-        if ( end && *end == '\0' )
         {
-            return static_cast< int64_t >( iv );
+            int64_t int_val;
+            auto [ptr, ec] = std::from_chars( s_begin, s_end, int_val );
+            if ( ec == std::errc{} && ptr == s_end )
+            {
+                return int_val;
+            }
         }
 
         // try double
-        double dv = std::strtod( s.c_str(), &end );
-        if ( end && *end == '\0' )
         {
-            return dv;
+            double d_val;
+            auto [ptr, ec] = std::from_chars( s_begin, s_end, d_val );
+            if ( ec == std::errc{} && ptr == s_end )
+            {
+                return d_val;
+            }
         }
 
         // fallback to string
@@ -618,7 +636,11 @@ class Table
         Table::Row row;
         for ( size_t i = 0; i < headers.size() && i < fields.size(); ++i )
         {
-            row[headers[i]] = infer_value( fields[i] );
+            Table::Value value = infer_value( fields[i] );
+            if ( !std::holds_alternative< std::monostate >( value ) )
+            {
+                row[headers[i]] = value;
+            }
         }
         return row;
     };
