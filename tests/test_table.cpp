@@ -92,7 +92,7 @@ int main( int argc, char** argv )
     table.print_jsonl();
     std::cout << "\nCSV:\n";
     table.print_csv();
-    std::cout << "\n\n";
+    std::cout << "\n";
 
     // Check JSONL output
     std::stringstream jsonl_ss;
@@ -133,6 +133,42 @@ int main( int argc, char** argv )
     {
         std::cerr << "FAIL: CSV output missing expected population value:\n" << csv << std::endl;
         failures++;
+    }
+
+    // Export table to a CSV file
+    std::string   out_table_name{ "test_table.csv" };
+    std::ofstream out_table( out_table_name );
+    if ( !out_table.is_open() )
+    {
+        std::cerr << "Error: Could not open 'out_table_name'\n";
+        std::abort();
+    }
+    table.print_csv( out_table );
+    out_table.close();
+
+    // Import table from a CSV file
+    std::cout << "TESTING TABLE IMPORT via terra::util::read_table_from_csv()" << std::endl;
+    auto import_result = terra::util::read_table_from_csv( out_table_name );
+    if ( import_result.is_err() )
+    {
+        std::cerr << import_result.error() << std::endl;
+        std::abort();
+    }
+    std::cout << "-> import successful, here is the table:\n";
+    auto imported_table = import_result.unwrap();
+    imported_table.print_pretty( std::cout );
+
+    // Compare imported to internal table
+    //
+    // Note: this will/might fail, if we have floats in the original table
+    if ( table.rows() == imported_table.rows() )
+    {
+        std::cout << "-> imported table matches internal one\n";
+    }
+    else
+    {
+        std::cerr << "-> detected mismatch between imported and internal table!\n";
+        std::abort();
     }
 
     // Clear the table
