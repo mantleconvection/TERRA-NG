@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cmath>
 #include <numeric>
+#include <string>
 
 #include "kokkos/kokkos_wrapper.hpp"
 #include "linalg/vector_w1.hpp"
@@ -380,16 +382,59 @@ grid::Grid2DDataScalar< ProfileOutDataType > interpolate_radial_profile_into_sub
     const ProfileOutDataType                      radii_scale  = 1.0,
     const ProfileOutDataType                      values_scale = 1.0 )
 {
+    const auto fail = [&]( const std::string& msg ) {
+        util::logroot << "Error reading radial profile from file '" << filename << "':\n" << msg << std::endl;
+        Kokkos::abort( ( "Error reading radial profile from file '" + filename + "': " + msg ).c_str() );
+    };
+
+    // The file extension is not checked: any file whose content is valid comma-separated data
+    // (e.g. .csv, .txt, .dat) is accepted. The content checks below catch wrong formats (e.g. JSON).
     auto profile_table_result = util::read_table_from_csv( filename );
     if ( profile_table_result.is_err() )
     {
-        util::logroot << profile_table_result.error() << std::endl;
-        Kokkos::abort( "Error reading csv file into table." );
+        fail( profile_table_result.error() );
     }
     const auto& profile_table = profile_table_result.unwrap();
 
+    const auto num_rows = profile_table.rows().size();
+    if ( num_rows == 0 )
+    {
+        fail( "File contains no data rows (only a header line or empty)." );
+    }
+
+    for ( const auto& key : { key_radii, key_values } )
+    {
+        if ( !profile_table.columns().contains( key ) )
+        {
+            std::string available;
+            for ( const auto& c : profile_table.columns() )
+                available += "'" + c + "' ";
+            fail( "Required column '" + key + "' not found. Available columns: " + available );
+        }
+    }
+
     auto profile_radii  = profile_table.column_as_vector< double >( key_radii );
     auto profile_values = profile_table.column_as_vector< double >( key_values );
+
+    if ( profile_radii.size() != num_rows )
+    {
+        fail(
+            "Column '" + key_radii + "' contains non-numeric or missing values (" +
+            std::to_string( profile_radii.size() ) + " numeric of " + std::to_string( num_rows ) + " rows)." );
+    }
+    if ( profile_values.size() != num_rows )
+    {
+        fail(
+            "Column '" + key_values + "' contains non-numeric or missing values (" +
+            std::to_string( profile_values.size() ) + " numeric of " + std::to_string( num_rows ) + " rows)." );
+    }
+    for ( size_t i = 0; i < num_rows; ++i )
+    {
+        if ( !std::isfinite( profile_radii[i] ) || !std::isfinite( profile_values[i] ) )
+        {
+            fail( "Non-finite value (NaN/Inf) in data row " + std::to_string( i + 1 ) + "." );
+        }
+    }
 
     // Scale radii and values from file
     for ( auto& r : profile_radii )
